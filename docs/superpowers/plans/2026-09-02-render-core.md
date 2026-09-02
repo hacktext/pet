@@ -1806,7 +1806,7 @@ git commit -m "feat(alpha_video): Flutter Windows 插件骨架，打通到 pet_m
 **Interfaces:**
 - Consumes: `pcmat::Reader`（Task 2）、`pet_matte_prepare`（Task 7）、`AlphaVideo`（Task 8）
 - Produces:
-  - C++：`class FrameSource`，`bool Load(const std::string& aipmatPath)`、`const uint8_t* FrameRgba(uint32_t i)`、`uint32_t width()/height()/frameCount()`、`uint64_t frameDurationTicks(uint32_t i) const`
+  - C++：`class FrameSource`，`bool Load(const std::wstring& aipmatPath)`、`const uint8_t* FrameRgba(uint32_t i)`、`uint32_t width()/height()/frameCount()`、`uint64_t frameDurationTicks(uint32_t i) const`
   - Dart：`AlphaVideoController.open(String aipmatPath) -> Future<AlphaVideoController>`，字段 `textureId`、`width`、`height`、`frameCount`；`Future<void> dispose()`
   - 方法通道新增 `open`（参数 `path`，返回 `{textureId,width,height,frameCount}`）、`dispose`（参数 `textureId`）
 
@@ -1873,7 +1873,8 @@ Expected: FAIL —— `AlphaVideo.prepare` / `AlphaVideoController` 未定义。
 
 class FrameSource {
  public:
-  bool Load(const std::string& path);
+  // 宽字符路径：pcmat::Reader 在 Task 7 已改为 UTF-16 + _wfopen。
+  bool Load(const std::wstring& path);
   uint32_t width() const { return reader_ ? reader_->header().width : 0; }
   uint32_t height() const { return reader_ ? reader_->header().height : 0; }
   uint32_t frameCount() const { return reader_ ? reader_->header().frameCount : 0; }
@@ -1900,7 +1901,7 @@ class FrameSource {
 #include <algorithm>
 #include <cstring>
 
-bool FrameSource::Load(const std::string& path) {
+bool FrameSource::Load(const std::wstring& path) {
   reader_ = pcmat::Reader::Open(path);
   if (!reader_) return false;
   canvas_.assign(static_cast<size_t>(width()) * height() * 4, 0);
@@ -1934,13 +1935,31 @@ const uint8_t* FrameSource::FrameRgba(uint32_t i) {
 `packages/alpha_video/windows/alpha_video_plugin.cpp` 关键片段：
 
 ```cpp
+#include <windows.h>
 #include <flutter/texture_registrar.h>
 #include <map>
 #include <memory>
+#include <string>
 #include "frame_source.h"
 #include "pet_matte/pet_matte.h"
 
 namespace {
+
+// Dart 的字符串到达时是 UTF-8；Windows 路径原生是 UTF-16。
+// 失败或输入非法时返回空串（调用方需区分「输入本来就是空」的情况）。
+std::wstring Utf8ToWide(const std::string& s) {
+  if (s.empty()) return std::wstring();
+  const int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                                    s.data(), static_cast<int>(s.size()), nullptr, 0);
+  if (n <= 0) return std::wstring();
+  std::wstring w(static_cast<size_t>(n), L' ');
+  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                          s.data(), static_cast<int>(s.size()), w.data(), n) != n) {
+    return std::wstring();
+  }
+  return w;
+}
+
 
 struct Clip {
   std::unique_ptr<FrameSource> source;
@@ -1959,10 +1978,15 @@ void AlphaVideoPlugin::HandleOpen(
     const flutter::EncodableMap& args,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
   const auto path = std::get<std::string>(args.at(flutter::EncodableValue("path")));
+  const std::wstring wpath = Utf8ToWide(path);
+  if (wpath.empty() && !path.empty()) {
+    result->Error("bad_path", "path is not valid UTF-8");
+    return;
+  }
 
   auto clip = std::make_unique<Clip>();
   clip->source = std::make_unique<FrameSource>();
-  if (!clip->source->Load(path)) {
+  if (!clip->source->Load(wpath)) {
     result->Error("open_failed", "cannot read aipmat: " + path);
     return;
   }
@@ -2020,8 +2044,15 @@ if (call.method_name() == "prepare") {
   const auto src = std::get<std::string>(args.at(flutter::EncodableValue("source")));
   const auto dst = std::get<std::string>(args.at(flutter::EncodableValue("destination")));
   const auto edge = std::get<int32_t>(args.at(flutter::EncodableValue("targetEdge")));
-  const std::wstring wsrc(src.begin(), src.end());
-  const std::wstring wdst(dst.begin(), dst.end());
+  // Dart 通过 MethodChannel 送来的是 UTF-8。绝不能用 wstring(s.begin(), s.end())
+  // 逐字节拓宽——那会把每个 UTF-8 字节当成一个 wchar_t，非 ASCII 路径直接损坏。
+  // 这正是 Task 7 修掉的那类缺陷，必须走真正的编码转换。
+  const std::wstring wsrc = Utf8ToWide(src);
+  const std::wstring wdst = Utf8ToWide(dst);
+  if (wsrc.empty() != src.empty() || wdst.empty() != dst.empty()) {
+    result->Error("bad_path", "path is not valid UTF-8");
+    return;
+  }
   result->Success(flutter::EncodableValue(
       pet_matte_prepare(wsrc.c_str(), wdst.c_str(), static_cast<uint32_t>(edge))));
   return;
