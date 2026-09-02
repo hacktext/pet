@@ -95,8 +95,8 @@ alpha 采样使用一张 CPU 侧的降采样 alpha 掩码（每帧 1/8 尺寸，
   → alpha 边缘 1px 收缩 + 羽化
   → 预乘 alpha（BGRA8 premultiplied, sRGB）
   → 逐帧包围盒裁剪（去掉全透明边缘）
-  → 逐帧压缩 → 写入 .pcmat
-输出：.pcmat 文件 + JSON 清单
+  → 逐帧压缩 → 写入 .aipmat
+输出：.aipmat 文件 + JSON 清单
 进度：通过 EventChannel 上报（解码/抠像/写入三阶段）
 ```
 
@@ -111,7 +111,7 @@ const char* pet_matte_last_error(void);
 **`alpha_video`** — 播放
 
 ```
-读 .pcmat（内存映射）→ 解压帧 → 上传 D3D11 纹理环（3 帧环形缓冲，避免 GPU 停顿）
+读 .aipmat（内存映射）→ 解压帧 → 上传 D3D11 纹理环（3 帧环形缓冲，避免 GPU 停顿）
 → FlutterDesktopTextureRegistrarRegisterExternalTexture 注册外部纹理
 → MarkTextureFrameAvailable 驱动 Flutter 重绘
 ```
@@ -124,9 +124,9 @@ const char* pet_matte_last_error(void);
 
 Dart 侧封装为本地包 `packages/alpha_video`，暴露 `AlphaVideoController` + `AlphaVideoView`。
 
-### 4.3 `.pcmat` 容器格式
+### 4.3 `.aipmat` 容器格式
 
-自研格式，结构参考竞品但独立实现：
+自研格式 `.aipmat`（magic `AIPMAT1`），结构参考竞品 `.pcmat` 但独立实现：
 
 ```
 [ header 128B ]
@@ -157,7 +157,7 @@ Dart 侧封装为本地包 `packages/alpha_video`，暴露 `AlphaVideoController
 %APPDATA%/com.aipet/aipet/
   sources/v1/<ab>/<sha256>.mp4        原始绿幕视频
   matte-cache/v1/<ab>/<cd>/<cacheKey>/
-      asset.pcmat
+      asset.aipmat
       manifest.json
       last_accessed
   matte-cache/v1/.staging/            写入中的临时文件
@@ -243,7 +243,7 @@ leveling  growthPoints        成长值
 ### 4.8 测试策略
 
 - **原生层**：`pet_matte` 用固定输入 mp4 + 黄金输出帧做回归；
-  `.pcmat` 读写做往返测试（写入 → 读出 → 逐帧比对）。
+  `.aipmat` 读写做往返测试（写入 → 读出 → 逐帧比对）。
 - **Dart 领域层**：数值衰减、等级解锁、动作状态机全部纯函数化，单元测试覆盖。
   尤其是跨天/跨时区的今日互动计数重置，和长时间离线后的数值补算。
 - **窗口层**：多窗位置同步、多显示器夹取、DPI 变化——手动验证清单，不做自动化。
