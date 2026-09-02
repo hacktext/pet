@@ -24,7 +24,7 @@ struct Header {
   uint64_t indexSize;
   uint64_t manifestOffset;
   uint64_t manifestSize;
-  uint8_t  reserved[60];
+  uint8_t  reserved[60];  // 写入时始终清零；读取时忽略
 };
 
 struct FrameIndex {
@@ -34,7 +34,7 @@ struct FrameIndex {
   uint32_t byteSize;   // 压缩后
   uint32_t rawSize;    // 解压后
   uint16_t cropX, cropY, cropW, cropH;
-  uint8_t  reserved[8];
+  uint8_t  reserved[8];   // 写入时始终清零；读取时忽略
 };
 #pragma pack(pop)
 
