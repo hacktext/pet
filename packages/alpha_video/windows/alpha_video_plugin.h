@@ -12,7 +12,11 @@ class AlphaVideoPlugin : public flutter::Plugin {
  public:
   static void RegisterWithRegistrar(flutter::PluginRegistrarWindows *registrar);
 
-  AlphaVideoPlugin();
+  // |registrar| is owned by the Flutter engine and outlives this plugin
+  // (the plugin is itself owned by the registrar via AddPlugin). Kept so
+  // HandleMethodCall can reach registrar_->texture_registrar() for "open"
+  // and "dispose".
+  explicit AlphaVideoPlugin(flutter::PluginRegistrarWindows *registrar);
 
   virtual ~AlphaVideoPlugin();
 
@@ -24,6 +28,9 @@ class AlphaVideoPlugin : public flutter::Plugin {
   void HandleMethodCall(
       const flutter::MethodCall<flutter::EncodableValue> &method_call,
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
+
+ private:
+  flutter::PluginRegistrarWindows *registrar_;
 };
 
 }  // namespace alpha_video

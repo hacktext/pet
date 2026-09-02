@@ -20,6 +20,8 @@ set(PLUGIN_NAME "alpha_video_plugin")
 list(APPEND PLUGIN_SOURCES
   "alpha_video_plugin.cpp"
   "alpha_video_plugin.h"
+  "frame_source.cpp"
+  "frame_source.h"
 )
 
 # Define the plugin library target. Its name must not be changed (see comment
