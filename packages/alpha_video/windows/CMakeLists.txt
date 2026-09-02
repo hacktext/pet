@@ -17,11 +17,13 @@ cmake_policy(VERSION 3.14...3.25)
 set(PLUGIN_NAME "alpha_video_plugin")
 
 # Any new source files that you add to the plugin should be added here.
+# FrameSource lives in native/frame_source/ (not here) so it can be unit-
+# tested with the native ctest suite instead of only through the Flutter
+# integration test; it's pulled in below via target_link_libraries against
+# the frame_source target that native_build's add_subdirectory() provides.
 list(APPEND PLUGIN_SOURCES
   "alpha_video_plugin.cpp"
   "alpha_video_plugin.h"
-  "frame_source.cpp"
-  "frame_source.h"
 )
 
 # Define the plugin library target. Its name must not be changed (see comment
@@ -42,8 +44,9 @@ apply_standard_settings(${PLUGIN_NAME})
 # Chinese comments pulled in via pet_matte headers) under the system codepage.
 target_compile_options(${PLUGIN_NAME} PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
-# Pull in the native rendering core (pcmat / matte_core / mf_decode / pet_matte)
-# and link the pet_matte C ABI that this plugin bridges to Dart.
+# Pull in the native rendering core (pcmat / matte_core / mf_decode / pet_matte
+# / frame_source) and link the pet_matte C ABI plus the frame_source library
+# that this plugin bridges to Dart.
 #
 # Flutter builds plugins through a symlink at
 # .../ephemeral/.plugin_symlinks/<plugin>, so CMAKE_CURRENT_SOURCE_DIR points
@@ -67,17 +70,18 @@ get_filename_component(AIPET_NATIVE_DIR "${AIPET_REPO_WINDOWS_DIR}/../../../nati
 # fetched for this Flutter-embedded build).
 set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 
-# EXCLUDE_FROM_ALL: native/'s four test executables (pcmat_tests,
-# matte_core_tests, mf_decode_tests, pet_matte_tests) and GoogleTest's own
-# targets are added via plain add_executable with no guard of their own, so
-# without this they would join the parent project's default ALL target and
-# get compiled on every ordinary flutter build/run/test -d windows. This only
-# excludes native_build's own default-build targets; ${PLUGIN_NAME} still
-# links pet_matte below, so CMake still builds pet_matte (and its
-# dependencies matte_core, mf_decode, pcmat, lz4_static) on demand, as
-# dependencies of a target that IS in ALL.
+# EXCLUDE_FROM_ALL: native/'s five test executables (pcmat_tests,
+# matte_core_tests, mf_decode_tests, pet_matte_tests, frame_source_tests)
+# and GoogleTest's own targets are added via plain add_executable with no
+# guard of their own, so without this they would join the parent project's
+# default ALL target and get compiled on every ordinary flutter
+# build/run/test -d windows. This only excludes native_build's own
+# default-build targets; ${PLUGIN_NAME} still links pet_matte and
+# frame_source below, so CMake still builds those (and their dependencies
+# matte_core, mf_decode, pcmat, lz4_static) on demand, as dependencies of a
+# target that IS in ALL.
 add_subdirectory("${AIPET_NATIVE_DIR}" native_build EXCLUDE_FROM_ALL)
-target_link_libraries(${PLUGIN_NAME} PRIVATE pet_matte)
+target_link_libraries(${PLUGIN_NAME} PRIVATE pet_matte frame_source)
 
 # Symbols are hidden by default to reduce the chance of accidental conflicts
 # between plugins. This should not be removed; any symbols that should be
@@ -103,6 +107,8 @@ set(alpha_video_bundled_libraries
 # No plugin-local native unit tests: the generated template's test block
 # pinned GoogleTest to a version too old for this environment's CMake, and it
 # would collide with the v1.15.2 already fetched by native/. The C ABI this
-# plugin calls (pet_matte_abi_version) is already covered by the native ctest
-# suite (pet_matte_tests); coverage of the plugin's own glue code lives in the
-# Flutter integration test instead.
+# plugin calls (pet_matte_abi_version) and the crop-expansion/BGRA->RGBA
+# logic (FrameSource) are already covered by the native ctest suite
+# (pet_matte_tests, frame_source_tests); coverage of the plugin's own glue
+# code (method-channel wiring, texture registration) lives in the Flutter
+# integration test instead.

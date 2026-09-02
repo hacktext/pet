@@ -3,7 +3,7 @@
 // This must be included before many other Windows headers.
 #include <windows.h>
 
-#include "frame_source.h"
+#include "frame_source/frame_source.h"
 #include "pet_matte/pet_matte.h"
 
 #include <flutter/method_channel.h>
@@ -35,7 +35,7 @@ std::wstring Utf8ToWide(const std::string& s) {
 }
 
 struct Clip {
-  std::unique_ptr<FrameSource> source;
+  std::unique_ptr<frame_source::FrameSource> source;
   std::unique_ptr<flutter::TextureVariant> texture;
   FlutterDesktopPixelBuffer buffer{};
   uint32_t currentFrame = 0;
@@ -93,7 +93,7 @@ void AlphaVideoPlugin::HandleMethodCall(
     }
 
     auto clip = std::make_unique<Clip>();
-    clip->source = std::make_unique<FrameSource>();
+    clip->source = std::make_unique<frame_source::FrameSource>();
     if (!clip->source->Load(wpath)) {
       result->Error("open_failed", "cannot read aipmat: " + path);
       return;
