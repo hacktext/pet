@@ -20,6 +20,7 @@
 - 缓存分辨率默认 `720×720`（常量 `kDefaultCacheEdge`），不是源片分辨率。
 - 第三方依赖只经 CMake `FetchContent` 引入：GoogleTest `v1.15.2`、LZ4 `v1.10.0`。不 vendoring 源码。
 - 所有测试用 `ctest` 跑，测试可执行文件不依赖网络、不依赖竞品文件。
+- 所有原生目标编译时带 MSVC `/utf-8`。源文件含非 ASCII 字符时，缺这个标志会让 MSVC 按代码页 936 错解并破坏结构体布局（Task 1 实测踩过）。
 - **与 spec 的一处有意偏离**：spec 4.2 写的是 D3D11 纹理环 + GpuSurfaceTexture。本计划先用 `flutter::PixelBufferTexture`（CPU 像素缓冲）打通端到端；720×720@24fps 约 50 MB/s 拷贝，实测足够。D3D11 GpuSurface 升级作为 Plan A 之后的独立优化项，不在本计划内。
 
 ---
@@ -127,6 +128,9 @@ project(aipet_native CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# MSVC 无 BOM 时按系统代码页(936)解析源文件，会静默错解中文注释并破坏结构体布局。
+add_compile_options($<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 include(FetchContent)
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
@@ -601,7 +605,7 @@ TEST(ChromaKey, SkinToneStaysFullyOpaque) {
 }
 
 TEST(ChromaKey, NearGreenEdgeIsPartiallyTransparent) {
-  const uint8_t a = AlphaOf(Px(60, 200, 60));
+  const uint8_t a = AlphaOf(Px(130, 205, 130));
   EXPECT_GT(a, 0);
   EXPECT_LT(a, 255);
 }
@@ -660,8 +664,8 @@ namespace matte {
 struct KeyParams {
   float keyCb = -0.331f;  // 纯绿 (0,255,0) 的 Cb
   float keyCr = -0.419f;  // 纯绿 (0,255,0) 的 Cr
-  float innerT = 0.10f;   // 距离 <= innerT → alpha 0
-  float outerT = 0.25f;   // 距离 >= outerT → alpha 255
+  float innerT = 0.28f;   // 距离 <= innerT → alpha 0
+  float outerT = 0.45f;   // 距离 >= outerT → alpha 255
 };
 
 void ApplyChromaKey(BgraImage img, const KeyParams& p);
@@ -725,7 +729,7 @@ ctest --test-dir native/build -C Debug --output-on-failure -R ChromaKey
 ```
 Expected: 7 个 ChromaKey 测试全 PASS。
 
-若 `StudioGreenBecomesFullyTransparent` 失败，说明 `innerT` 太小——0x00B140 的色度与纯绿有偏移。把 `innerT` 调到刚好覆盖它，但必须保持 `SkinToneStaysFullyOpaque` 仍然通过；两者都过才算对。
+阈值已由控制器预先用数值验证过，实测色度距离（到纯绿）：纯绿 0.0000、studio 0x00B140 0.2511、(130,205,130) 0.3769、白/黑 0.5339、肤色 0.5622。配合 `innerT=0.28 / outerT=0.45`，七个断言全部有 ≥0.029 的余量。**如果测试失败，先怀疑实现而不是阈值**——不要动 `KeyParams` 的默认值，改了会破坏其他断言。
 
 - [ ] **Step 5: 提交**
 
@@ -1080,11 +1084,16 @@ git commit -m "feat(matte): alpha 包围盒计算与区域拷贝"
 `native/testdata/make_fixtures.ps1`:
 
 ```powershell
-# 合成一个确定性的绿幕测试片：320x320，24fps，1 秒，一个白方块横向移动。
+# 合成一个确定性的绿幕测试片：320x320，24fps，1 秒 24 帧，
+# 纯绿底 + 一个 100x100 白方块每帧右移 6px。
+# 背景用纯绿 0x00FF00：实测真实宠物素材背景就是 (8,239,8)/(2,251,3)，基本纯绿。
+# 必须用 overlay 而不是 drawbox：ffmpeg 8.1 的 drawbox 坐标表达式不支持逐帧变量
+# (n/t)，写了会报 "Undefined constant"，方块根本画不出来。overlay 的 x/y 支持 n。
 $ErrorActionPreference = "Stop"
 $out = Join-Path $PSScriptRoot "green_box.mp4"
-ffmpeg -y -f lavfi -i "color=c=0x00B140:s=320x320:d=1:r=24" `
-  -vf "drawbox=x='40+t*160':y=110:w=100:h=100:color=white@1:t=fill" `
+ffmpeg -y -f lavfi -i "color=c=0x00FF00:s=320x320:d=1:r=24" `
+  -f lavfi -i "color=c=white:s=100x100:d=1:r=24" `
+  -filter_complex "[0:v][1:v]overlay=x='40+n*6':y=110:shortest=1" `
   -c:v libx264 -pix_fmt yuv420p -an $out
 Write-Host "wrote $out"
 ```
@@ -1128,16 +1137,16 @@ TEST(Decoder, DecodesTwentyFourFrames) {
   EXPECT_EQ(n, 24);
 }
 
-TEST(Decoder, FirstFrameCornerIsStudioGreen) {
+TEST(Decoder, FirstFrameCornerIsPureGreen) {
   auto d = mfd::Decoder::Open(FixturePath());
   ASSERT_TRUE(d.has_value());
   std::vector<uint8_t> bgra;
   uint64_t pts = 0, dur = 0;
   ASSERT_TRUE(d->NextFrame(bgra, pts, dur));
-  // 左上角是背景绿 0x00B140 (B=0x40 G=0xB1 R=0x00)，容忍 yuv420p 往返误差
-  EXPECT_NEAR(bgra[0], 0x40, 12);
-  EXPECT_NEAR(bgra[1], 0xB1, 12);
-  EXPECT_NEAR(bgra[2], 0x00, 12);
+  // 左上角是背景纯绿。yuv420p 往返后实测为 (B,G,R) = (0,254,0)，给 10 的容差。
+  EXPECT_NEAR(bgra[0], 0, 10);
+  EXPECT_NEAR(bgra[1], 255, 10);
+  EXPECT_NEAR(bgra[2], 0, 10);
   EXPECT_EQ(bgra[3], 255);
 }
 
@@ -1379,7 +1388,7 @@ ctest --test-dir native/build -C Debug --output-on-failure -R Decoder
 ```
 Expected: 5 个 Decoder 测试全 PASS。
 
-若 `DecodesTwentyFourFrames` 得到 25 帧，是 ffmpeg 多输出了一帧——把断言改成实际值并在 `make_fixtures.ps1` 注释里记下来；帧数是夹具属性，不是被测行为。
+夹具已由控制器实测：`ffprobe` 报 `nb_frames=24`、320×320，第 0/12/23 帧的白块均为 100×100 且每帧右移 6px。若 `DecodesTwentyFourFrames` 得到别的数字，先确认 `make_fixtures.ps1` 跑的是本计划里这一版（overlay 版，不是 drawbox 版）。
 
 - [ ] **Step 5: 提交**
 
@@ -1517,6 +1526,8 @@ const char* pet_matte_last_error(void);
 ```cpp
 #include "pet_matte/pet_matte.h"
 
+#include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -1792,7 +1803,7 @@ git commit -m "feat(alpha_video): Flutter Windows 插件骨架，打通到 pet_m
 **Interfaces:**
 - Consumes: `pcmat::Reader`（Task 2）、`pet_matte_prepare`（Task 7）、`AlphaVideo`（Task 8）
 - Produces:
-  - C++：`class FrameSource`，`bool Load(const std::string& aipmatPath)`、`const uint8_t* FrameRgba(uint32_t i)`、`uint32_t width()/height()/frameCount()`
+  - C++：`class FrameSource`，`bool Load(const std::string& aipmatPath)`、`const uint8_t* FrameRgba(uint32_t i)`、`uint32_t width()/height()/frameCount()`、`uint64_t frameDurationTicks(uint32_t i) const`
   - Dart：`AlphaVideoController.open(String aipmatPath) -> Future<AlphaVideoController>`，字段 `textureId`、`width`、`height`、`frameCount`；`Future<void> dispose()`
   - 方法通道新增 `open`（参数 `path`，返回 `{textureId,width,height,frameCount}`）、`dispose`（参数 `textureId`）
 
@@ -1867,6 +1878,11 @@ class FrameSource {
   // 把第 i 帧展开成整幅 RGBA 画布；返回内部缓冲，下次调用即失效。
   const uint8_t* FrameRgba(uint32_t i);
 
+  // 第 i 帧索引项记录的时长（100ns 单位）；越界或无记录返回 0。
+  uint64_t frameDurationTicks(uint32_t i) const {
+    return (reader_ && i < frameCount()) ? reader_->index(i).durationTicks : 0;
+  }
+
  private:
   std::optional<pcmat::Reader> reader_;
   std::vector<uint8_t> packed_;
@@ -1878,6 +1894,7 @@ class FrameSource {
 
 ```cpp
 #include "frame_source.h"
+#include <algorithm>
 #include <cstring>
 
 bool FrameSource::Load(const std::string& path) {
@@ -2038,7 +2055,7 @@ class AlphaVideoController {
 }
 ```
 
-`packages/alpha_video/lib/alpha_video.dart` 追加：
+`packages/alpha_video/lib/alpha_video.dart` —— **整体替换**（不是追加：下面这段包含完整的 `class AlphaVideo`，追加会与 Task 8 的声明重复）：
 
 ```dart
 export 'src/alpha_video_controller.dart';
@@ -2089,13 +2106,15 @@ git commit -m "feat(alpha_video): 帧源与 PixelBufferTexture 外部纹理注�
 - Test: `packages/alpha_video/example/integration_test/playback_test.dart`
 
 **Interfaces:**
-- Consumes: `AlphaVideoController`（Task 9）
+- Consumes: `AlphaVideoController`（Task 9）、`FrameSource::frameDurationTicks`（Task 9，用于帧定时）
 - Produces:
   - 方法通道新增 `play`（参数 `textureId`、`loop`）、`pause`（参数 `textureId`）、`currentFrame`（参数 `textureId`，返回 int）
   - Dart：`controller.play({bool loop = true})`、`controller.pause()`、`controller.currentFrame()`
   - Widget：`AlphaVideoView(controller: c)` — 内部就是 `Texture(textureId: c.textureId)`
 
 **说明：** 推帧用 Win32 多媒体定时器不可靠，改用一个独立 `std::thread` + `condition_variable`，按索引里的 `durationTicks` 睡到下一帧，然后 `MarkTextureFrameAvailable`。停止时通过 flag + notify 唤醒退出。
+
+**定时口径**：睡眠时长取**下一帧索引项的 `durationTicks`**（100ns 单位，除以 10 得微秒）；该值为 0 时回退到 41666µs（24fps）。源素材被标记为可变帧率，固定常量会相对记录的时间轴漂移。
 
 - [ ] **Step 1: 写失败的测试**
 
@@ -2189,11 +2208,13 @@ void StartTicker(Clip* c) {
       c->currentFrame = atEnd ? 0 : next;
       const int64_t id = c->textureId;
       auto* reg = c->registrar;
-      // 帧时长固定按 24fps 折算；索引里的 durationTicks 为 0 时兜底
+      // 按该帧索引项记录的时长推进；为 0 时回退到 24fps
+      const uint64_t ticks = c->source->frameDurationTicks(c->currentFrame);
+      const int64_t us = ticks ? static_cast<int64_t>(ticks / 10) : 41666;
       lk.unlock();
 
       reg->MarkTextureFrameAvailable(id);
-      std::this_thread::sleep_for(std::chrono::microseconds(41666));
+      std::this_thread::sleep_for(std::chrono::microseconds(us));
     }
   });
 }
@@ -2330,15 +2351,11 @@ flutter create --platforms=windows --org com.aipet --project-name pet_shell apps
   window_class.hbrBackground = nullptr;  // 原本是 (HBRUSH)(COLOR_WINDOW + 1)
 ```
 
-并在 `Win32Window::Create` 创建窗口后加分层窗口属性：
+**不要用 `SetLayeredWindowAttributes(..., LWA_COLORKEY)`。** 色键只让某一个确切 RGB 全透明：宠物身上凡是命中该色的像素会被打成洞，而且边缘是硬二值的，正好毁掉逐像素抠像。竞品用的就是 window_manager 那条路，已知在本平台可用。
 
-```cpp
-  SetWindowLong(window, GWL_EXSTYLE,
-                GetWindowLong(window, GWL_EXSTYLE) | WS_EX_LAYERED);
-  SetLayeredWindowAttributes(window, RGB(0, 0, 0), 255, LWA_COLORKEY);
-```
+先只靠 `hbrBackground = nullptr` 加 Dart 侧 `window_manager` 的透明背景（见 Step 3 的 `WindowOptions.backgroundColor: Colors.transparent`），不加任何分层窗口属性。
 
-> 若发现色键法造成边缘黑边，改用 `DwmEnableBlurBehindWindow` + `WS_EX_NOREDIRECTIONBITMAP` 路线。这一步的成败判据是 Step 4 的肉眼验证。
+> 若窗口仍然画出不透明底色，升级方案是 `WS_EX_NOREDIRECTIONBITMAP` + DirectComposition，**不是**色键。这一步的成败判据是 Step 4 的肉眼验证。
 
 - [ ] **Step 3: 写 main.dart**
 
