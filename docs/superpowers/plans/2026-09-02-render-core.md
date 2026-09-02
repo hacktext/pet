@@ -1051,7 +1051,7 @@ cmake -S native -B native/build
 cmake --build native/build --config Debug
 ctest --test-dir native/build -C Debug --output-on-failure
 ```
-Expected: 全部测试 PASS（Task 1-5 累计 17 个）。
+Expected: 全部测试 PASS。累计 23 个：3 Format + 3 Roundtrip + 7 ChromaKey + 5 Despill/Premultiply + 5 Crop。
 
 - [ ] **Step 5: 提交**
 
@@ -1650,7 +1650,7 @@ cmake -S native -B native/build
 cmake --build native/build --config Debug
 ctest --test-dir native/build -C Debug --output-on-failure
 ```
-Expected: 全部测试 PASS（累计 27 个）。
+Expected: 全部测试 PASS。累计 33 个：23（Task 1-5）+ 5 Decoder + 5 Pipeline。
 
 - [ ] **Step 5: 用真实素材做一次人工验证**
 
