@@ -92,11 +92,18 @@ struct Clip {
 constexpr int64_t kFallbackFrameMicros = 41666;  // 24fps，仅在 durationTicks 为 0 时使用
 
 // 独立于 Flutter 引擎线程的推帧线程：按 FrameSource 索引里记录的每帧时长
-// (durationTicks，100ns 单位) 睡眠，然后调用 MarkTextureFrameAvailable，
+// (durationTicks，100ns 单位) 等待，然后调用 MarkTextureFrameAvailable，
 // 让引擎在下次合成时回调 PixelBufferTexture 去取新帧。这个线程只推进
 // currentFrame 索引，绝不调用 FrameRgba —— FrameRgba 会改写 FrameSource
 // 内部的 packed_/canvas_ 缓冲区，必须只在渲染线程的 PixelBufferTexture
 // 回调里调用。
+//
+// 帧间等待用的是带谓词的 cv.wait_for，而不是 sleep_for：sleep_for 不可
+// 被 notify_all() 打断，如果这里用它，dispose()/~Clip() 设置 stopping 后
+// 仍要睡完当前这一帧剩下的全部时长，ticker.join() 才会返回——而源素材是
+// 可变帧率，一帧的记录时长可以远大于 24fps 的约 42ms，届时会在 dispose
+// 期间冻结分发方法调用的 Flutter 平台线程整段时间。wait_for 一收到
+// notify 就会重新检查谓词并立刻醒来，把这段阻塞收窄到接近于零。
 //
 // 这里捕获裸指针 c 而不是 shared_ptr：这个线程完全由 Clip 自己拥有和
 // join（dispose 里先 stop+join 再解注册纹理，~Clip 兜底），一旦 join()
@@ -107,8 +114,8 @@ constexpr int64_t kFallbackFrameMicros = 41666;  // 24fps，仅在 durationTicks
 // 完全由我们自己的 join() 调用同步控制，不依赖引擎的任何异步回调。
 void StartTicker(Clip* c) {
   c->ticker = std::thread([c]() {
+    std::unique_lock<std::mutex> lk(c->mtx);
     while (true) {
-      std::unique_lock<std::mutex> lk(c->mtx);
       c->cv.wait(lk, [c] { return c->playing || c->stopping; });
       if (c->stopping) return;
 
@@ -121,7 +128,7 @@ void StartTicker(Clip* c) {
       c->currentFrame = atEnd ? 0 : next;
       const int64_t id = c->textureId;
       auto* reg = c->registrar;
-      // 按刚推进到的这一帧索引项记录的时长睡眠；为 0（无记录/越界）时
+      // 按刚推进到的这一帧索引项记录的时长等待；为 0（无记录/越界）时
       // 回退到 24fps。源素材标记为可变帧率，固定常量会相对记录的时间
       // 轴漂移。
       const uint64_t ticks = c->source->frameDurationTicks(c->currentFrame);
@@ -129,7 +136,13 @@ void StartTicker(Clip* c) {
       lk.unlock();
 
       reg->MarkTextureFrameAvailable(id);
-      std::this_thread::sleep_for(std::chrono::microseconds(us));
+
+      // 重新加锁后再等待：MarkTextureFrameAvailable 必须在锁外调用（保持
+      // 不变量不变），但 wait_for 需要持锁进入。stopping 变 true 后
+      // notify_all() 会让这里立刻醒来重新检查谓词并返回，而不必等满
+      // us 微秒。
+      lk.lock();
+      c->cv.wait_for(lk, std::chrono::microseconds(us), [c] { return c->stopping; });
     }
   });
 }
