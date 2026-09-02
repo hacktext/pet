@@ -8,7 +8,7 @@ namespace pcmat {
 
 class Writer {
  public:
-  Writer(const std::string& path, uint32_t width, uint32_t height, uint32_t timeBaseDen);
+  Writer(const std::wstring& path, uint32_t width, uint32_t height, uint32_t timeBaseDen);
   ~Writer();
   Writer(const Writer&) = delete;
   Writer& operator=(const Writer&) = delete;

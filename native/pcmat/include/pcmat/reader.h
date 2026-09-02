@@ -8,7 +8,7 @@ namespace pcmat {
 
 class Reader {
  public:
-  static std::optional<Reader> Open(const std::string& path);
+  static std::optional<Reader> Open(const std::wstring& path);
 
   const Header& header() const { return header_; }
   const FrameIndex& index(uint32_t i) const { return index_[i]; }

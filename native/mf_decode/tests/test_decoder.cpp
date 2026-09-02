@@ -86,3 +86,22 @@ TEST(Decoder, PtsIncreasesMonotonically) {
 TEST(Decoder, OpenFailsOnMissingFile) {
   EXPECT_FALSE(mfd::Decoder::Open(L"C:\\definitely\\not\\here.mp4").has_value());
 }
+
+TEST(Decoder, HadErrorStaysFalseAfterCleanFullDecode) {
+  // 钉住干净路径的契约：NextFrame 对干净的流结束和中途解码失败都返回
+  // false，hadError() 是调用方区分二者的唯一手段。一次完整、无故障的
+  // 解码结束后 hadError() 必须仍是 false——否则调用方会把每一次正常
+  // 结束都误判成失败。在这套夹具上真实模拟一次中途解码失败不现实，
+  // 所以这里只钉住反面：干净路径不应该误置位。
+  auto d = mfd::Decoder::Open(FixturePath());
+  ASSERT_TRUE(d.has_value());
+  EXPECT_FALSE(d->hadError());
+
+  std::vector<uint8_t> bgra;
+  uint64_t pts = 0, dur = 0;
+  int n = 0;
+  while (d->NextFrame(bgra, pts, dur)) ++n;
+
+  EXPECT_EQ(n, 24);
+  EXPECT_FALSE(d->hadError());
+}

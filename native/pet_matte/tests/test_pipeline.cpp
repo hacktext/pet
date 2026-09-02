@@ -21,7 +21,7 @@ TEST(Pipeline, ProducesReadableAipmatWithAllFrames) {
   ASSERT_EQ(pet_matte_prepare(Fixture().c_str(), out.c_str(), 320), 0)
       << pet_matte_last_error();
 
-  auto r = pcmat::Reader::Open(std::filesystem::path(out).string());
+  auto r = pcmat::Reader::Open(out);
   ASSERT_TRUE(r.has_value());
   EXPECT_EQ(r->header().frameCount, 24u);
   EXPECT_EQ(r->header().width, 320u);
@@ -32,7 +32,7 @@ TEST(Pipeline, ProducesReadableAipmatWithAllFrames) {
 TEST(Pipeline, BackgroundIsKeyedOutAndBoxSurvives) {
   const auto out = OutPath();
   ASSERT_EQ(pet_matte_prepare(Fixture().c_str(), out.c_str(), 320), 0);
-  auto r = pcmat::Reader::Open(std::filesystem::path(out).string());
+  auto r = pcmat::Reader::Open(out);
   ASSERT_TRUE(r.has_value());
 
   // 白方块 100x100，绿背景应被完全键掉 → 包围盒应接近 100x100
@@ -55,7 +55,7 @@ TEST(Pipeline, BackgroundIsKeyedOutAndBoxSurvives) {
 TEST(Pipeline, DownscalesToTargetEdge) {
   const auto out = OutPath();
   ASSERT_EQ(pet_matte_prepare(Fixture().c_str(), out.c_str(), 160), 0);
-  auto r = pcmat::Reader::Open(std::filesystem::path(out).string());
+  auto r = pcmat::Reader::Open(out);
   ASSERT_TRUE(r.has_value());
   EXPECT_EQ(r->header().width, 160u);
   EXPECT_EQ(r->header().height, 160u);

@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cstring>
-#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -53,8 +52,7 @@ int32_t pet_matte_prepare(const wchar_t* srcMp4, const wchar_t* dstAipmat, uint3
   const int dw = targetEdge ? static_cast<int>(targetEdge) : sw;
   const int dh = targetEdge ? static_cast<int>(targetEdge) : sh;
 
-  pcmat::Writer writer(std::filesystem::path(dstAipmat).string(),
-                       static_cast<uint32_t>(dw), static_cast<uint32_t>(dh), 10000000);
+  pcmat::Writer writer(dstAipmat, static_cast<uint32_t>(dw), static_cast<uint32_t>(dh), 10000000);
   if (!writer.ok()) { g_lastError = "cannot open destination"; return -3; }
 
   std::vector<uint8_t> src, work, packed;
@@ -85,6 +83,11 @@ int32_t pet_matte_prepare(const wchar_t* srcMp4, const wchar_t* dstAipmat, uint3
     ++frames;
   }
 
+  // NextFrame() 返回 false 对干净的流结束和中途解码失败一视同仁；hadError()
+  // 区分二者。中途失败绝不能被当成"提前结束但成功"，否则会写出一个帧数不全
+  // 却报告成功的 .aipmat，且再也不会重试。必须在 Finish() 之前判定，
+  // 这样失败时不会落地一个看似完整的部分文件。
+  if (dec->hadError()) { g_lastError = "decode failed before end of stream"; return -2; }
   if (frames == 0) { g_lastError = "no frames decoded"; return -2; }
 
   const std::string manifest =

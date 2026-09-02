@@ -65,12 +65,14 @@ std::optional<Decoder> Decoder::Open(const std::wstring& path) {
 }
 
 Decoder::Decoder(Decoder&& o) noexcept
-    : reader_(o.reader_), info_(o.info_), lastPts_(o.lastPts_) { o.reader_ = nullptr; }
+    : reader_(o.reader_), info_(o.info_), lastPts_(o.lastPts_), hadError_(o.hadError_) {
+  o.reader_ = nullptr;
+}
 
 Decoder& Decoder::operator=(Decoder&& o) noexcept {
   if (this != &o) {
     if (reader_) reader_->Release();
-    reader_ = o.reader_; info_ = o.info_; lastPts_ = o.lastPts_;
+    reader_ = o.reader_; info_ = o.info_; lastPts_ = o.lastPts_; hadError_ = o.hadError_;
     o.reader_ = nullptr;
   }
   return *this;
@@ -85,9 +87,9 @@ bool Decoder::NextFrame(std::vector<uint8_t>& bgra, uint64_t& ptsTicks, uint64_t
   IMFSample* sample = nullptr;
   HRESULT hr = reader_->ReadSample(MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0,
                                    nullptr, &flags, &ts, &sample);
-  if (FAILED(hr)) return false;
+  if (FAILED(hr)) { hadError_ = true; return false; }
   if (flags & MF_SOURCE_READERF_ENDOFSTREAM) { if (sample) sample->Release(); return false; }
-  if (!sample) return false;
+  if (!sample) { hadError_ = true; return false; }
 
   IMFMediaBuffer* buf = nullptr;
   if (FAILED(sample->ConvertToContiguousBuffer(&buf))) { sample->Release(); return false; }

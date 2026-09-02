@@ -4,8 +4,10 @@
 
 namespace pcmat {
 
-Writer::Writer(const std::string& path, uint32_t width, uint32_t height, uint32_t timeBaseDen) {
-  file_ = fopen(path.c_str(), "wb");
+Writer::Writer(const std::wstring& path, uint32_t width, uint32_t height, uint32_t timeBaseDen) {
+  // Windows 路径原生是 UTF-16；用 _wfopen 保持宽字符，避免经 ANSI 代码页
+  // 转换丢失路径中的非 ASCII 字符（例如用户名含中文的 %APPDATA% 路径）。
+  file_ = _wfopen(path.c_str(), L"wb");
   if (!file_) return;
   std::memset(&header_, 0, sizeof(header_));
   std::memcpy(header_.magic, kMagic, 8);
