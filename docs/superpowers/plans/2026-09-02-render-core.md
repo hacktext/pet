@@ -1086,6 +1086,9 @@ git commit -m "feat(matte): alpha 包围盒计算与区域拷贝"
 ```powershell
 # 合成一个确定性的绿幕测试片：320x320，24fps，1 秒 24 帧，
 # 纯绿底 + 一个 100x100 白方块每帧右移 6px。
+# 方块放在 y=40 而不是垂直居中：居中时上下翻转前后位置几乎不变，
+# 任何测试都发现不了解码出来的画面是倒的。实测白块恒定占第 40-139 行，
+# 若解码颠倒则会落在 180-279 行，据此可判定正立。
 # 背景用纯绿 0x00FF00：实测真实宠物素材背景就是 (8,239,8)/(2,251,3)，基本纯绿。
 # 必须用 overlay 而不是 drawbox：ffmpeg 8.1 的 drawbox 坐标表达式不支持逐帧变量
 # (n/t)，写了会报 "Undefined constant"，方块根本画不出来。overlay 的 x/y 支持 n。
@@ -1093,7 +1096,7 @@ $ErrorActionPreference = "Stop"
 $out = Join-Path $PSScriptRoot "green_box.mp4"
 ffmpeg -y -f lavfi -i "color=c=0x00FF00:s=320x320:d=1:r=24" `
   -f lavfi -i "color=c=white:s=100x100:d=1:r=24" `
-  -filter_complex "[0:v][1:v]overlay=x='40+n*6':y=110:shortest=1" `
+  -filter_complex "[0:v][1:v]overlay=x='40+n*6':y=40:shortest=1" `
   -c:v libx264 -pix_fmt yuv420p -an $out
 Write-Host "wrote $out"
 ```
@@ -1330,20 +1333,20 @@ bool Decoder::NextFrame(std::vector<uint8_t>& bgra, uint64_t& ptsTicks, uint64_t
 
   const size_t rowBytes = static_cast<size_t>(info_.width) * 4;
   bgra.resize(rowBytes * info_.height);
-  // MF 的 RGB32 可能是 bottom-up（stride 为负），按符号决定行序
-  if (stride < 0) {
-    const size_t absStride = static_cast<size_t>(-stride);
-    const BYTE* first = data + absStride * (info_.height - 1);
-    for (uint32_t y = 0; y < info_.height; ++y)
-      std::memcpy(bgra.data() + y * rowBytes, first - absStride * y, rowBytes);
-  } else {
-    for (uint32_t y = 0; y < info_.height; ++y)
-      std::memcpy(bgra.data() + y * rowBytes, data + static_cast<size_t>(stride) * y, rowBytes);
-  }
+  // MF 的 RGB32 可能是 bottom-up（stride 为负）。Lock2D 返回的是「视觉上的第一行」，
+  // stride 为负时后续行在内存里向低地址走，所以有效地址恒为 data + stride*y。
+  // 用带符号 stride 直接寻址，两种朝向都正确，不要按符号分支——分支版本会把
+  // 负 stride 的情形算到缓冲区之外去。
+  for (uint32_t y = 0; y < info_.height; ++y)
+    std::memcpy(bgra.data() + y * rowBytes,
+                data + static_cast<ptrdiff_t>(stride) * y, rowBytes);
   // RGB32 的第 4 字节未必是 255，统一置为不透明
   for (size_t i = 3; i < bgra.size(); i += 4) bgra[i] = 255;
 
-  if (buf2d) { buf2d->Unlock2D(); buf2d->Release(); } else { buf->Unlock(); }
+  // 解锁必须依据「哪个锁真的成功了」，不能依据「是否拿到了 IMF2DBuffer 接口」：
+  // QueryInterface 成功但 Lock2D 失败、随后普通 Lock 成功时，后者会解错对象并泄漏锁。
+  if (lockedWith2D) buf2d->Unlock2D(); else buf->Unlock();
+  if (buf2d) buf2d->Release();
   buf->Release();
 
   LONGLONG dur = 0;
