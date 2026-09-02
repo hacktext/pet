@@ -22,3 +22,4 @@ enable_testing()
 include(GoogleTest)
 
 add_subdirectory(pcmat)
+add_subdirectory(matte_core)
