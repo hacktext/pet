@@ -1,0 +1,134 @@
+#include "mf_decode/decoder.h"
+
+#include <windows.h>
+#include <mfapi.h>
+#include <mfidl.h>
+#include <mfreadwrite.h>
+#include <mferror.h>
+#include <cstring>
+
+namespace mfd {
+namespace {
+
+struct MfRuntime {
+  MfRuntime()  { MFStartup(MF_VERSION); }
+  ~MfRuntime() { MFShutdown(); }
+};
+// 进程内只初始化一次
+void EnsureMfStarted() { static MfRuntime rt; }
+
+}  // namespace
+
+std::optional<Decoder> Decoder::Open(const std::wstring& path) {
+  EnsureMfStarted();
+
+  IMFAttributes* attrs = nullptr;
+  if (FAILED(MFCreateAttributes(&attrs, 1))) return std::nullopt;
+  attrs->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
+
+  IMFSourceReader* reader = nullptr;
+  HRESULT hr = MFCreateSourceReaderFromURL(path.c_str(), attrs, &reader);
+  attrs->Release();
+  if (FAILED(hr) || !reader) return std::nullopt;
+
+  // 输出协商为 BGRA32
+  IMFMediaType* outType = nullptr;
+  if (FAILED(MFCreateMediaType(&outType))) { reader->Release(); return std::nullopt; }
+  outType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+  outType->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
+  hr = reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM, nullptr, outType);
+  outType->Release();
+  if (FAILED(hr)) { reader->Release(); return std::nullopt; }
+
+  IMFMediaType* cur = nullptr;
+  if (FAILED(reader->GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM, &cur))) {
+    reader->Release(); return std::nullopt;
+  }
+  Decoder d;
+  d.reader_ = reader;
+  UINT32 w = 0, h = 0;
+  MFGetAttributeSize(cur, MF_MT_FRAME_SIZE, &w, &h);
+  cur->Release();
+  d.info_.width = w;
+  d.info_.height = h;
+
+  PROPVARIANT var;
+  if (SUCCEEDED(reader->GetPresentationAttribute(
+          MF_SOURCE_READER_MEDIASOURCE, MF_PD_DURATION, &var))) {
+    d.info_.durationTicks = var.uhVal.QuadPart;
+    PropVariantClear(&var);
+  }
+  return d;
+}
+
+Decoder::Decoder(Decoder&& o) noexcept
+    : reader_(o.reader_), info_(o.info_), lastPts_(o.lastPts_) { o.reader_ = nullptr; }
+
+Decoder& Decoder::operator=(Decoder&& o) noexcept {
+  if (this != &o) {
+    if (reader_) reader_->Release();
+    reader_ = o.reader_; info_ = o.info_; lastPts_ = o.lastPts_;
+    o.reader_ = nullptr;
+  }
+  return *this;
+}
+
+Decoder::~Decoder() { if (reader_) reader_->Release(); }
+
+bool Decoder::NextFrame(std::vector<uint8_t>& bgra, uint64_t& ptsTicks, uint64_t& durTicks) {
+  if (!reader_) return false;
+  DWORD flags = 0;
+  LONGLONG ts = 0;
+  IMFSample* sample = nullptr;
+  HRESULT hr = reader_->ReadSample(MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0,
+                                   nullptr, &flags, &ts, &sample);
+  if (FAILED(hr)) return false;
+  if (flags & MF_SOURCE_READERF_ENDOFSTREAM) { if (sample) sample->Release(); return false; }
+  if (!sample) return false;
+
+  IMFMediaBuffer* buf = nullptr;
+  if (FAILED(sample->ConvertToContiguousBuffer(&buf))) { sample->Release(); return false; }
+
+  BYTE* data = nullptr;
+  DWORD maxLen = 0, curLen = 0;
+  LONG stride = static_cast<LONG>(info_.width) * 4;
+  bool locked = false;
+
+  IMF2DBuffer* buf2d = nullptr;
+  if (SUCCEEDED(buf->QueryInterface(IID_PPV_ARGS(&buf2d)))) {
+    if (SUCCEEDED(buf2d->Lock2D(&data, &stride))) locked = true;
+  }
+  if (!locked && FAILED(buf->Lock(&data, &maxLen, &curLen))) {
+    if (buf2d) buf2d->Release();
+    buf->Release(); sample->Release(); return false;
+  }
+
+  const size_t rowBytes = static_cast<size_t>(info_.width) * 4;
+  bgra.resize(rowBytes * info_.height);
+  // MF 的 RGB32 可能是 bottom-up（stride 为负），按符号决定行序
+  if (stride < 0) {
+    const size_t absStride = static_cast<size_t>(-stride);
+    const BYTE* first = data + absStride * (info_.height - 1);
+    for (uint32_t y = 0; y < info_.height; ++y)
+      std::memcpy(bgra.data() + y * rowBytes, first - absStride * y, rowBytes);
+  } else {
+    for (uint32_t y = 0; y < info_.height; ++y)
+      std::memcpy(bgra.data() + y * rowBytes, data + static_cast<size_t>(stride) * y, rowBytes);
+  }
+  // RGB32 的第 4 字节未必是 255，统一置为不透明
+  for (size_t i = 3; i < bgra.size(); i += 4) bgra[i] = 255;
+
+  if (buf2d) { buf2d->Unlock2D(); buf2d->Release(); } else { buf->Unlock(); }
+  buf->Release();
+
+  LONGLONG dur = 0;
+  if (FAILED(sample->GetSampleDuration(&dur))) dur = 0;
+  sample->Release();
+
+  ptsTicks = static_cast<uint64_t>(ts);
+  durTicks = static_cast<uint64_t>(dur);
+  lastPts_ = ptsTicks;
+  return true;
+}
+
+}  // namespace mfd

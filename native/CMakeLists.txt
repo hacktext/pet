@@ -23,3 +23,4 @@ include(GoogleTest)
 
 add_subdirectory(pcmat)
 add_subdirectory(matte_core)
+add_subdirectory(mf_decode)
