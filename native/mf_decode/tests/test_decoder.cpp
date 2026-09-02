@@ -41,6 +41,36 @@ TEST(Decoder, FirstFrameCornerIsPureGreen) {
   EXPECT_EQ(bgra[3], 255);
 }
 
+TEST(Decoder, DecodesFrameRightSideUp) {
+  auto d = mfd::Decoder::Open(FixturePath());
+  ASSERT_TRUE(d.has_value());
+  std::vector<uint8_t> bgra;
+  uint64_t pts = 0, dur = 0;
+  ASSERT_TRUE(d->NextFrame(bgra, pts, dur));
+
+  const uint32_t width = d->info().width;
+  const uint32_t height = d->info().height;
+  int minRow = -1, maxRow = -1;
+  for (uint32_t y = 0; y < height; ++y) {
+    for (uint32_t x = 0; x < width; ++x) {
+      const size_t i = (static_cast<size_t>(y) * width + x) * 4;
+      // 近白：B/G/R 都足够高
+      if (bgra[i] > 200 && bgra[i + 1] > 200 && bgra[i + 2] > 200) {
+        if (minRow < 0) minRow = static_cast<int>(y);
+        maxRow = static_cast<int>(y);
+      }
+    }
+  }
+  ASSERT_GE(minRow, 0) << "第 0 帧里没找到白色方块";
+  // 夹具里白块固定在第 40~139 行（第 0 帧只有 x 会变化），给 6 的容差
+  // 兼顾 yuv420p 往返造成的边缘混色。
+  EXPECT_NEAR(minRow, 40, 6);
+  EXPECT_NEAR(maxRow, 139, 6);
+  // 若解码结果上下颠倒，方块会落在第 180~279 行；显式断言排除这个区间，
+  // 这样颠倒时测试会明确失败，而不是恰好碰运气通过。
+  EXPECT_LT(maxRow, 180);
+}
+
 TEST(Decoder, PtsIncreasesMonotonically) {
   auto d = mfd::Decoder::Open(FixturePath());
   ASSERT_TRUE(d.has_value());

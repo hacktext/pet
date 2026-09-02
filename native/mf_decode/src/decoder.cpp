@@ -47,7 +47,10 @@ std::optional<Decoder> Decoder::Open(const std::wstring& path) {
   Decoder d;
   d.reader_ = reader;
   UINT32 w = 0, h = 0;
-  MFGetAttributeSize(cur, MF_MT_FRAME_SIZE, &w, &h);
+  if (FAILED(MFGetAttributeSize(cur, MF_MT_FRAME_SIZE, &w, &h))) {
+    cur->Release();
+    return std::nullopt;  // d 析构时会释放 reader_
+  }
   cur->Release();
   d.info_.width = w;
   d.info_.height = h;
@@ -89,36 +92,47 @@ bool Decoder::NextFrame(std::vector<uint8_t>& bgra, uint64_t& ptsTicks, uint64_t
   IMFMediaBuffer* buf = nullptr;
   if (FAILED(sample->ConvertToContiguousBuffer(&buf))) { sample->Release(); return false; }
 
+  const size_t rowBytes = static_cast<size_t>(info_.width) * 4;
+
   BYTE* data = nullptr;
   DWORD maxLen = 0, curLen = 0;
   LONG stride = static_cast<LONG>(info_.width) * 4;
-  bool locked = false;
+  bool lockedWith2D = false;
+  bool lockedPlain = false;
 
   IMF2DBuffer* buf2d = nullptr;
   if (SUCCEEDED(buf->QueryInterface(IID_PPV_ARGS(&buf2d)))) {
-    if (SUCCEEDED(buf2d->Lock2D(&data, &stride))) locked = true;
+    if (SUCCEEDED(buf2d->Lock2D(&data, &stride))) lockedWith2D = true;
   }
-  if (!locked && FAILED(buf->Lock(&data, &maxLen, &curLen))) {
-    if (buf2d) buf2d->Release();
-    buf->Release(); sample->Release(); return false;
+  if (!lockedWith2D) {
+    if (FAILED(buf->Lock(&data, &maxLen, &curLen))) {
+      if (buf2d) buf2d->Release();
+      buf->Release(); sample->Release(); return false;
+    }
+    lockedPlain = true;
+    // 平铺路径假定 stride == width*4；用 curLen 校验缓冲区确实够大，
+    // 否则按假定 stride 拷贝会读到锁定范围之外。
+    if (static_cast<size_t>(curLen) < rowBytes * info_.height) {
+      buf->Unlock();
+      if (buf2d) buf2d->Release();
+      buf->Release(); sample->Release(); return false;
+    }
   }
 
-  const size_t rowBytes = static_cast<size_t>(info_.width) * 4;
   bgra.resize(rowBytes * info_.height);
-  // MF 的 RGB32 可能是 bottom-up（stride 为负），按符号决定行序
-  if (stride < 0) {
-    const size_t absStride = static_cast<size_t>(-stride);
-    const BYTE* first = data + absStride * (info_.height - 1);
-    for (uint32_t y = 0; y < info_.height; ++y)
-      std::memcpy(bgra.data() + y * rowBytes, first - absStride * y, rowBytes);
-  } else {
-    for (uint32_t y = 0; y < info_.height; ++y)
-      std::memcpy(bgra.data() + y * rowBytes, data + static_cast<size_t>(stride) * y, rowBytes);
-  }
+  // ppbScanline0(data) 始终指向可视上排；stride 的正负号已经编码了行走向
+  // （正数向下、负数向上），直接用有符号步长逐行定位即可，无需再手动按
+  // 符号分支反向遍历。
+  for (uint32_t y = 0; y < info_.height; ++y)
+    std::memcpy(bgra.data() + y * rowBytes,
+                data + static_cast<ptrdiff_t>(stride) * y, rowBytes);
   // RGB32 的第 4 字节未必是 255，统一置为不透明
   for (size_t i = 3; i < bgra.size(); i += 4) bgra[i] = 255;
 
-  if (buf2d) { buf2d->Unlock2D(); buf2d->Release(); } else { buf->Unlock(); }
+  // 清理只解锁实际锁定的那条路径；buf2d 的释放与是否锁定无关。
+  if (lockedWith2D) buf2d->Unlock2D();
+  else if (lockedPlain) buf->Unlock();
+  if (buf2d) buf2d->Release();
   buf->Release();
 
   LONGLONG dur = 0;
