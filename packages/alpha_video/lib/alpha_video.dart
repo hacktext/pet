@@ -1,6 +1,7 @@
 import 'package:flutter/services.dart';
 
 export 'src/alpha_video_controller.dart';
+export 'src/alpha_video_view.dart';
 
 class AlphaVideo {
   static const MethodChannel _channel = MethodChannel('aipet.alpha_video/methods');

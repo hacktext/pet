@@ -18,4 +18,12 @@ class AlphaVideoController {
   }
 
   Future<void> dispose() => channel.invokeMethod('dispose', {'textureId': textureId});
+
+  Future<void> play({bool loop = true}) =>
+      channel.invokeMethod('play', {'textureId': textureId, 'loop': loop});
+
+  Future<void> pause() => channel.invokeMethod('pause', {'textureId': textureId});
+
+  Future<int> currentFrame() async =>
+      await channel.invokeMethod<int>('currentFrame', {'textureId': textureId}) ?? 0;
 }
