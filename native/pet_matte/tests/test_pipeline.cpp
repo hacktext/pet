@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
+#include <cstdint>
 #include <filesystem>
+#include <vector>
 #include "pet_matte/pet_matte.h"
 #include "pcmat/reader.h"
 
@@ -89,5 +91,47 @@ TEST(Pipeline, ZeroTargetEdgeUsesDefaultCacheEdge) {
   ASSERT_TRUE(r.has_value());
   EXPECT_EQ(r->header().width, kDefaultCacheEdge);
   EXPECT_EQ(r->header().height, kDefaultCacheEdge);
+  std::filesystem::remove(out);
+}
+
+TEST(Pipeline, FringePixelsArePremultiplied) {
+  // BackgroundIsKeyedOutAndBoxSurvives only samples the crop *centre*, where
+  // alpha is 255 and premultiplication is the identity (a == 255 means
+  // colour * alpha/255 == colour) -- it would pass identically whether or
+  // not PremultiplyAlpha ever ran. Premultiplied BGRA8 is the actual
+  // contract that decides whether the pet composites with a dark halo, and
+  // that contract only shows up where 0 < alpha < 255: the box's edge
+  // pixels, softened into a green/white gradient by the fixture's gblur
+  // (see native/testdata/make_fixtures.ps1 -- plain overlay compositing
+  // between two already-yuv420p sources turned out to produce a perfectly
+  // binary 0/255 alpha canvas with no edge blending at all, so the blur was
+  // added there specifically so this contract has something to test against).
+  const auto out = OutPath();
+  ASSERT_EQ(pet_matte_prepare(Fixture().c_str(), out.c_str(), 320), 0)
+      << pet_matte_last_error();
+  auto r = pcmat::Reader::Open(out);
+  ASSERT_TRUE(r.has_value());
+
+  std::vector<uint8_t> frame;
+  ASSERT_TRUE(r->ReadFrame(0, frame));
+
+  bool foundFringe = false;
+  for (size_t i = 0; i + 3 < frame.size(); i += 4) {
+    const uint8_t b = frame[i + 0], g = frame[i + 1], red = frame[i + 2], a = frame[i + 3];
+    if (a == 0 || a == 255) continue;  // 只关心部分透明的过渡像素
+    foundFringe = true;
+    // 预乘 alpha 的定义性质：任何颜色分量都不能超过 alpha（颜色已经按
+    // alpha/255 缩放过）。这也顺带能抓到"重复预乘"这种事故——重复预乘后
+    // 分量会比这更小，但如果管线里漏掉了预乘这一步，分量会保持接近未预乘
+    // 的原色（这里是白 (255,255,255) 与绿 (0,255,0) 的混合），大概率超过
+    // 一个远小于 255 的 alpha，从而让下面的断言失败。
+    EXPECT_LE(red, a) << "at byte offset " << i;
+    EXPECT_LE(g, a) << "at byte offset " << i;
+    EXPECT_LE(b, a) << "at byte offset " << i;
+  }
+  ASSERT_TRUE(foundFringe)
+      << "expected at least one partially-transparent fringe pixel in frame 0's "
+         "crop (the fixture's gblur should soften the box's hard edge against "
+         "the green background)";
   std::filesystem::remove(out);
 }
