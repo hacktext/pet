@@ -1,6 +1,6 @@
-import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:window_manager/window_manager.dart';
 import 'package:alpha_video/alpha_video.dart';
 
@@ -62,43 +62,16 @@ class _PetShellAppState extends State<PetShellApp> with WindowListener {
   // own TextureRegistrar shutdown. Stopping the clip here, before we ever
   // call windowManager.destroy() (which posts WM_QUIT and ends the message
   // loop), keeps that from happening.
-  //
-  // The marker file is deliberately part of the shipped close path (not a
-  // scratch hack): it is the only way to confirm, after the process has
-  // already exited, that this handler actually ran end-to-end rather than
-  // being skipped or racing app shutdown.
   @override
   void onWindowClose() async {
-    final marker =
-        File('${Directory.systemTemp.path}\\pet_shell_dispose_marker.txt');
-    await marker.writeAsString(
-      'onWindowClose fired at ${DateTime.now().toIso8601String()}\n',
-      mode: FileMode.append,
-      flush: true,
-    );
     final c = _controller;
     if (c != null) {
       await c.dispose();
-      await marker.writeAsString(
-        'controller.dispose() completed at ${DateTime.now().toIso8601String()}\n',
-        mode: FileMode.append,
-        flush: true,
-      );
     }
     await windowManager.destroy();
   }
 
-  // Boot-timing log: measures the brief's "launch to first visible frame"
-  // wall clock. Compared against the OS process-creation time (read back
-  // separately via `Get-Process`), the "first frame painted" line below
-  // gives the actual end-to-end latency instead of an eyeballed estimate.
-  Future<void> _log(String msg) => File(
-          '${Directory.systemTemp.path}\\pet_shell_boot_marker.txt')
-      .writeAsString('$msg at ${DateTime.now().toIso8601String()}\n',
-          mode: FileMode.append, flush: true);
-
   Future<void> _boot() async {
-    await _log('_boot() entered');
     // 开发期素材：环境变量 AIPET_DEV_CLIP 指向一个绿幕 mp4
     final src = Platform.environment['AIPET_DEV_CLIP'];
     if (src == null || !File(src).existsSync()) {
@@ -106,22 +79,36 @@ class _PetShellAppState extends State<PetShellApp> with WindowListener {
       return;
     }
     final dst = '${Directory.systemTemp.path}\\pet_shell_dev.aipmat';
-    await _log('prepare() started');
     final code =
         await AlphaVideo.prepare(source: src, destination: dst, targetEdge: 720);
-    await _log('prepare() finished code=$code');
     if (code != 0) {
       setState(() => _error = '抠像失败，错误码 $code');
       return;
     }
-    final c = await AlphaVideoController.open(dst);
-    await _log('open() finished');
-    await c.play(loop: true);
-    await _log('play() called');
+
+    final AlphaVideoController c;
+    try {
+      c = await AlphaVideoController.open(dst);
+    } on PlatformException catch (e) {
+      setState(() => _error = '打开 .aipmat 失败：${e.code} ${e.message}');
+      return;
+    }
+
+    // Assign the controller as soon as open() succeeds -- before calling
+    // play() -- rather than after. open() is what creates the native Clip,
+    // starts its ticker thread, and registers its texture; if play() were to
+    // throw before _controller got assigned, nothing would hold a reference
+    // to `c` any more and onWindowClose's `final c = _controller;` would see
+    // null and skip disposal, leaking the ticker thread and the registered
+    // texture for the rest of the process's life. Assigning here means
+    // teardown can always find and dispose the clip, even if play() fails.
     setState(() => _controller = c);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(_log('first frame with controller painted'));
-    });
+
+    try {
+      await c.play(loop: true);
+    } on PlatformException catch (e) {
+      setState(() => _error = '播放失败：${e.code} ${e.message}');
+    }
   }
 
   @override
