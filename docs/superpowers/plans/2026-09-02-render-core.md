@@ -20,6 +20,7 @@
 - 缓存分辨率默认 `720×720`（常量 `kDefaultCacheEdge`），不是源片分辨率。
 - 第三方依赖只经 CMake `FetchContent` 引入：GoogleTest `v1.15.2`、LZ4 `v1.10.0`。不 vendoring 源码。
 - 所有测试用 `ctest` 跑，测试可执行文件不依赖网络、不依赖竞品文件。
+- 所有原生目标编译时带 MSVC `/utf-8`。源文件含非 ASCII 字符时，缺这个标志会让 MSVC 按代码页 936 错解并破坏结构体布局（Task 1 实测踩过）。
 - **与 spec 的一处有意偏离**：spec 4.2 写的是 D3D11 纹理环 + GpuSurfaceTexture。本计划先用 `flutter::PixelBufferTexture`（CPU 像素缓冲）打通端到端；720×720@24fps 约 50 MB/s 拷贝，实测足够。D3D11 GpuSurface 升级作为 Plan A 之后的独立优化项，不在本计划内。
 
 ---
@@ -127,6 +128,9 @@ project(aipet_native CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# MSVC 无 BOM 时按系统代码页(936)解析源文件，会静默错解中文注释并破坏结构体布局。
+add_compile_options($<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 include(FetchContent)
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
@@ -601,7 +605,7 @@ TEST(ChromaKey, SkinToneStaysFullyOpaque) {
 }
 
 TEST(ChromaKey, NearGreenEdgeIsPartiallyTransparent) {
-  const uint8_t a = AlphaOf(Px(60, 200, 60));
+  const uint8_t a = AlphaOf(Px(130, 205, 130));
   EXPECT_GT(a, 0);
   EXPECT_LT(a, 255);
 }
@@ -660,8 +664,8 @@ namespace matte {
 struct KeyParams {
   float keyCb = -0.331f;  // 纯绿 (0,255,0) 的 Cb
   float keyCr = -0.419f;  // 纯绿 (0,255,0) 的 Cr
-  float innerT = 0.10f;   // 距离 <= innerT → alpha 0
-  float outerT = 0.25f;   // 距离 >= outerT → alpha 255
+  float innerT = 0.28f;   // 距离 <= innerT → alpha 0
+  float outerT = 0.45f;   // 距离 >= outerT → alpha 255
 };
 
 void ApplyChromaKey(BgraImage img, const KeyParams& p);
@@ -725,7 +729,7 @@ ctest --test-dir native/build -C Debug --output-on-failure -R ChromaKey
 ```
 Expected: 7 个 ChromaKey 测试全 PASS。
 
-若 `StudioGreenBecomesFullyTransparent` 失败，说明 `innerT` 太小——0x00B140 的色度与纯绿有偏移。把 `innerT` 调到刚好覆盖它，但必须保持 `SkinToneStaysFullyOpaque` 仍然通过；两者都过才算对。
+阈值已由控制器预先用数值验证过，实测色度距离（到纯绿）：纯绿 0.0000、studio 0x00B140 0.2511、(130,205,130) 0.3769、白/黑 0.5339、肤色 0.5622。配合 `innerT=0.28 / outerT=0.45`，七个断言全部有 ≥0.029 的余量。**如果测试失败，先怀疑实现而不是阈值**——不要动 `KeyParams` 的默认值，改了会破坏其他断言。
 
 - [ ] **Step 5: 提交**
 
@@ -1047,7 +1051,7 @@ cmake -S native -B native/build
 cmake --build native/build --config Debug
 ctest --test-dir native/build -C Debug --output-on-failure
 ```
-Expected: 全部测试 PASS（Task 1-5 累计 17 个）。
+Expected: 全部测试 PASS。累计 23 个：3 Format + 3 Roundtrip + 7 ChromaKey + 5 Despill/Premultiply + 5 Crop。
 
 - [ ] **Step 5: 提交**
 
@@ -1080,11 +1084,19 @@ git commit -m "feat(matte): alpha 包围盒计算与区域拷贝"
 `native/testdata/make_fixtures.ps1`:
 
 ```powershell
-# 合成一个确定性的绿幕测试片：320x320，24fps，1 秒，一个白方块横向移动。
+# 合成一个确定性的绿幕测试片：320x320，24fps，1 秒 24 帧，
+# 纯绿底 + 一个 100x100 白方块每帧右移 6px。
+# 方块放在 y=40 而不是垂直居中：居中时上下翻转前后位置几乎不变，
+# 任何测试都发现不了解码出来的画面是倒的。实测白块恒定占第 40-139 行，
+# 若解码颠倒则会落在 180-279 行，据此可判定正立。
+# 背景用纯绿 0x00FF00：实测真实宠物素材背景就是 (8,239,8)/(2,251,3)，基本纯绿。
+# 必须用 overlay 而不是 drawbox：ffmpeg 8.1 的 drawbox 坐标表达式不支持逐帧变量
+# (n/t)，写了会报 "Undefined constant"，方块根本画不出来。overlay 的 x/y 支持 n。
 $ErrorActionPreference = "Stop"
 $out = Join-Path $PSScriptRoot "green_box.mp4"
-ffmpeg -y -f lavfi -i "color=c=0x00B140:s=320x320:d=1:r=24" `
-  -vf "drawbox=x='40+t*160':y=110:w=100:h=100:color=white@1:t=fill" `
+ffmpeg -y -f lavfi -i "color=c=0x00FF00:s=320x320:d=1:r=24" `
+  -f lavfi -i "color=c=white:s=100x100:d=1:r=24" `
+  -filter_complex "[0:v][1:v]overlay=x='40+n*6':y=40:shortest=1" `
   -c:v libx264 -pix_fmt yuv420p -an $out
 Write-Host "wrote $out"
 ```
@@ -1128,16 +1140,16 @@ TEST(Decoder, DecodesTwentyFourFrames) {
   EXPECT_EQ(n, 24);
 }
 
-TEST(Decoder, FirstFrameCornerIsStudioGreen) {
+TEST(Decoder, FirstFrameCornerIsPureGreen) {
   auto d = mfd::Decoder::Open(FixturePath());
   ASSERT_TRUE(d.has_value());
   std::vector<uint8_t> bgra;
   uint64_t pts = 0, dur = 0;
   ASSERT_TRUE(d->NextFrame(bgra, pts, dur));
-  // 左上角是背景绿 0x00B140 (B=0x40 G=0xB1 R=0x00)，容忍 yuv420p 往返误差
-  EXPECT_NEAR(bgra[0], 0x40, 12);
-  EXPECT_NEAR(bgra[1], 0xB1, 12);
-  EXPECT_NEAR(bgra[2], 0x00, 12);
+  // 左上角是背景纯绿。yuv420p 往返后实测为 (B,G,R) = (0,254,0)，给 10 的容差。
+  EXPECT_NEAR(bgra[0], 0, 10);
+  EXPECT_NEAR(bgra[1], 255, 10);
+  EXPECT_NEAR(bgra[2], 0, 10);
   EXPECT_EQ(bgra[3], 255);
 }
 
@@ -1321,20 +1333,20 @@ bool Decoder::NextFrame(std::vector<uint8_t>& bgra, uint64_t& ptsTicks, uint64_t
 
   const size_t rowBytes = static_cast<size_t>(info_.width) * 4;
   bgra.resize(rowBytes * info_.height);
-  // MF 的 RGB32 可能是 bottom-up（stride 为负），按符号决定行序
-  if (stride < 0) {
-    const size_t absStride = static_cast<size_t>(-stride);
-    const BYTE* first = data + absStride * (info_.height - 1);
-    for (uint32_t y = 0; y < info_.height; ++y)
-      std::memcpy(bgra.data() + y * rowBytes, first - absStride * y, rowBytes);
-  } else {
-    for (uint32_t y = 0; y < info_.height; ++y)
-      std::memcpy(bgra.data() + y * rowBytes, data + static_cast<size_t>(stride) * y, rowBytes);
-  }
+  // MF 的 RGB32 可能是 bottom-up（stride 为负）。Lock2D 返回的是「视觉上的第一行」，
+  // stride 为负时后续行在内存里向低地址走，所以有效地址恒为 data + stride*y。
+  // 用带符号 stride 直接寻址，两种朝向都正确，不要按符号分支——分支版本会把
+  // 负 stride 的情形算到缓冲区之外去。
+  for (uint32_t y = 0; y < info_.height; ++y)
+    std::memcpy(bgra.data() + y * rowBytes,
+                data + static_cast<ptrdiff_t>(stride) * y, rowBytes);
   // RGB32 的第 4 字节未必是 255，统一置为不透明
   for (size_t i = 3; i < bgra.size(); i += 4) bgra[i] = 255;
 
-  if (buf2d) { buf2d->Unlock2D(); buf2d->Release(); } else { buf->Unlock(); }
+  // 解锁必须依据「哪个锁真的成功了」，不能依据「是否拿到了 IMF2DBuffer 接口」：
+  // QueryInterface 成功但 Lock2D 失败、随后普通 Lock 成功时，后者会解错对象并泄漏锁。
+  if (lockedWith2D) buf2d->Unlock2D(); else buf->Unlock();
+  if (buf2d) buf2d->Release();
   buf->Release();
 
   LONGLONG dur = 0;
@@ -1379,7 +1391,7 @@ ctest --test-dir native/build -C Debug --output-on-failure -R Decoder
 ```
 Expected: 5 个 Decoder 测试全 PASS。
 
-若 `DecodesTwentyFourFrames` 得到 25 帧，是 ffmpeg 多输出了一帧——把断言改成实际值并在 `make_fixtures.ps1` 注释里记下来；帧数是夹具属性，不是被测行为。
+夹具已由控制器实测：`ffprobe` 报 `nb_frames=24`、320×320，第 0/12/23 帧的白块均为 100×100 且每帧右移 6px。若 `DecodesTwentyFourFrames` 得到别的数字，先确认 `make_fixtures.ps1` 跑的是本计划里这一版（overlay 版，不是 drawbox 版）。
 
 - [ ] **Step 5: 提交**
 
@@ -1517,6 +1529,8 @@ const char* pet_matte_last_error(void);
 ```cpp
 #include "pet_matte/pet_matte.h"
 
+#include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -1639,7 +1653,7 @@ cmake -S native -B native/build
 cmake --build native/build --config Debug
 ctest --test-dir native/build -C Debug --output-on-failure
 ```
-Expected: 全部测试 PASS（累计 27 个）。
+Expected: 全部测试 PASS。累计 33 个：23（Task 1-5）+ 5 Decoder + 5 Pipeline。
 
 - [ ] **Step 5: 用真实素材做一次人工验证**
 
@@ -1792,7 +1806,7 @@ git commit -m "feat(alpha_video): Flutter Windows 插件骨架，打通到 pet_m
 **Interfaces:**
 - Consumes: `pcmat::Reader`（Task 2）、`pet_matte_prepare`（Task 7）、`AlphaVideo`（Task 8）
 - Produces:
-  - C++：`class FrameSource`，`bool Load(const std::string& aipmatPath)`、`const uint8_t* FrameRgba(uint32_t i)`、`uint32_t width()/height()/frameCount()`
+  - C++：`class FrameSource`，`bool Load(const std::wstring& aipmatPath)`、`const uint8_t* FrameRgba(uint32_t i)`、`uint32_t width()/height()/frameCount()`、`uint64_t frameDurationTicks(uint32_t i) const`
   - Dart：`AlphaVideoController.open(String aipmatPath) -> Future<AlphaVideoController>`，字段 `textureId`、`width`、`height`、`frameCount`；`Future<void> dispose()`
   - 方法通道新增 `open`（参数 `path`，返回 `{textureId,width,height,frameCount}`）、`dispose`（参数 `textureId`）
 
@@ -1859,13 +1873,19 @@ Expected: FAIL —— `AlphaVideo.prepare` / `AlphaVideoController` 未定义。
 
 class FrameSource {
  public:
-  bool Load(const std::string& path);
+  // 宽字符路径：pcmat::Reader 在 Task 7 已改为 UTF-16 + _wfopen。
+  bool Load(const std::wstring& path);
   uint32_t width() const { return reader_ ? reader_->header().width : 0; }
   uint32_t height() const { return reader_ ? reader_->header().height : 0; }
   uint32_t frameCount() const { return reader_ ? reader_->header().frameCount : 0; }
 
   // 把第 i 帧展开成整幅 RGBA 画布；返回内部缓冲，下次调用即失效。
   const uint8_t* FrameRgba(uint32_t i);
+
+  // 第 i 帧索引项记录的时长（100ns 单位）；越界或无记录返回 0。
+  uint64_t frameDurationTicks(uint32_t i) const {
+    return (reader_ && i < frameCount()) ? reader_->index(i).durationTicks : 0;
+  }
 
  private:
   std::optional<pcmat::Reader> reader_;
@@ -1878,9 +1898,10 @@ class FrameSource {
 
 ```cpp
 #include "frame_source.h"
+#include <algorithm>
 #include <cstring>
 
-bool FrameSource::Load(const std::string& path) {
+bool FrameSource::Load(const std::wstring& path) {
   reader_ = pcmat::Reader::Open(path);
   if (!reader_) return false;
   canvas_.assign(static_cast<size_t>(width()) * height() * 4, 0);
@@ -1914,13 +1935,31 @@ const uint8_t* FrameSource::FrameRgba(uint32_t i) {
 `packages/alpha_video/windows/alpha_video_plugin.cpp` 关键片段：
 
 ```cpp
+#include <windows.h>
 #include <flutter/texture_registrar.h>
 #include <map>
 #include <memory>
+#include <string>
 #include "frame_source.h"
 #include "pet_matte/pet_matte.h"
 
 namespace {
+
+// Dart 的字符串到达时是 UTF-8；Windows 路径原生是 UTF-16。
+// 失败或输入非法时返回空串（调用方需区分「输入本来就是空」的情况）。
+std::wstring Utf8ToWide(const std::string& s) {
+  if (s.empty()) return std::wstring();
+  const int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                                    s.data(), static_cast<int>(s.size()), nullptr, 0);
+  if (n <= 0) return std::wstring();
+  std::wstring w(static_cast<size_t>(n), L' ');
+  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                          s.data(), static_cast<int>(s.size()), w.data(), n) != n) {
+    return std::wstring();
+  }
+  return w;
+}
+
 
 struct Clip {
   std::unique_ptr<FrameSource> source;
@@ -1939,10 +1978,15 @@ void AlphaVideoPlugin::HandleOpen(
     const flutter::EncodableMap& args,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
   const auto path = std::get<std::string>(args.at(flutter::EncodableValue("path")));
+  const std::wstring wpath = Utf8ToWide(path);
+  if (wpath.empty() && !path.empty()) {
+    result->Error("bad_path", "path is not valid UTF-8");
+    return;
+  }
 
   auto clip = std::make_unique<Clip>();
   clip->source = std::make_unique<FrameSource>();
-  if (!clip->source->Load(path)) {
+  if (!clip->source->Load(wpath)) {
     result->Error("open_failed", "cannot read aipmat: " + path);
     return;
   }
@@ -2000,8 +2044,15 @@ if (call.method_name() == "prepare") {
   const auto src = std::get<std::string>(args.at(flutter::EncodableValue("source")));
   const auto dst = std::get<std::string>(args.at(flutter::EncodableValue("destination")));
   const auto edge = std::get<int32_t>(args.at(flutter::EncodableValue("targetEdge")));
-  const std::wstring wsrc(src.begin(), src.end());
-  const std::wstring wdst(dst.begin(), dst.end());
+  // Dart 通过 MethodChannel 送来的是 UTF-8。绝不能用 wstring(s.begin(), s.end())
+  // 逐字节拓宽——那会把每个 UTF-8 字节当成一个 wchar_t，非 ASCII 路径直接损坏。
+  // 这正是 Task 7 修掉的那类缺陷，必须走真正的编码转换。
+  const std::wstring wsrc = Utf8ToWide(src);
+  const std::wstring wdst = Utf8ToWide(dst);
+  if (wsrc.empty() != src.empty() || wdst.empty() != dst.empty()) {
+    result->Error("bad_path", "path is not valid UTF-8");
+    return;
+  }
   result->Success(flutter::EncodableValue(
       pet_matte_prepare(wsrc.c_str(), wdst.c_str(), static_cast<uint32_t>(edge))));
   return;
@@ -2038,7 +2089,7 @@ class AlphaVideoController {
 }
 ```
 
-`packages/alpha_video/lib/alpha_video.dart` 追加：
+`packages/alpha_video/lib/alpha_video.dart` —— **整体替换**（不是追加：下面这段包含完整的 `class AlphaVideo`，追加会与 Task 8 的声明重复）：
 
 ```dart
 export 'src/alpha_video_controller.dart';
@@ -2089,13 +2140,15 @@ git commit -m "feat(alpha_video): 帧源与 PixelBufferTexture 外部纹理注�
 - Test: `packages/alpha_video/example/integration_test/playback_test.dart`
 
 **Interfaces:**
-- Consumes: `AlphaVideoController`（Task 9）
+- Consumes: `AlphaVideoController`（Task 9）、`FrameSource::frameDurationTicks`（Task 9，用于帧定时）
 - Produces:
   - 方法通道新增 `play`（参数 `textureId`、`loop`）、`pause`（参数 `textureId`）、`currentFrame`（参数 `textureId`，返回 int）
   - Dart：`controller.play({bool loop = true})`、`controller.pause()`、`controller.currentFrame()`
   - Widget：`AlphaVideoView(controller: c)` — 内部就是 `Texture(textureId: c.textureId)`
 
 **说明：** 推帧用 Win32 多媒体定时器不可靠，改用一个独立 `std::thread` + `condition_variable`，按索引里的 `durationTicks` 睡到下一帧，然后 `MarkTextureFrameAvailable`。停止时通过 flag + notify 唤醒退出。
+
+**定时口径**：睡眠时长取**下一帧索引项的 `durationTicks`**（100ns 单位，除以 10 得微秒）；该值为 0 时回退到 41666µs（24fps）。源素材被标记为可变帧率，固定常量会相对记录的时间轴漂移。
 
 - [ ] **Step 1: 写失败的测试**
 
@@ -2189,11 +2242,13 @@ void StartTicker(Clip* c) {
       c->currentFrame = atEnd ? 0 : next;
       const int64_t id = c->textureId;
       auto* reg = c->registrar;
-      // 帧时长固定按 24fps 折算；索引里的 durationTicks 为 0 时兜底
+      // 按该帧索引项记录的时长推进；为 0 时回退到 24fps
+      const uint64_t ticks = c->source->frameDurationTicks(c->currentFrame);
+      const int64_t us = ticks ? static_cast<int64_t>(ticks / 10) : 41666;
       lk.unlock();
 
       reg->MarkTextureFrameAvailable(id);
-      std::this_thread::sleep_for(std::chrono::microseconds(41666));
+      std::this_thread::sleep_for(std::chrono::microseconds(us));
     }
   });
 }
@@ -2330,15 +2385,11 @@ flutter create --platforms=windows --org com.aipet --project-name pet_shell apps
   window_class.hbrBackground = nullptr;  // 原本是 (HBRUSH)(COLOR_WINDOW + 1)
 ```
 
-并在 `Win32Window::Create` 创建窗口后加分层窗口属性：
+**不要用 `SetLayeredWindowAttributes(..., LWA_COLORKEY)`。** 色键只让某一个确切 RGB 全透明：宠物身上凡是命中该色的像素会被打成洞，而且边缘是硬二值的，正好毁掉逐像素抠像。竞品用的就是 window_manager 那条路，已知在本平台可用。
 
-```cpp
-  SetWindowLong(window, GWL_EXSTYLE,
-                GetWindowLong(window, GWL_EXSTYLE) | WS_EX_LAYERED);
-  SetLayeredWindowAttributes(window, RGB(0, 0, 0), 255, LWA_COLORKEY);
-```
+先只靠 `hbrBackground = nullptr` 加 Dart 侧 `window_manager` 的透明背景（见 Step 3 的 `WindowOptions.backgroundColor: Colors.transparent`），不加任何分层窗口属性。
 
-> 若发现色键法造成边缘黑边，改用 `DwmEnableBlurBehindWindow` + `WS_EX_NOREDIRECTIONBITMAP` 路线。这一步的成败判据是 Step 4 的肉眼验证。
+> 若窗口仍然画出不透明底色，升级方案是 `WS_EX_NOREDIRECTIONBITMAP` + DirectComposition，**不是**色键。这一步的成败判据是 Step 4 的肉眼验证。
 
 - [ ] **Step 3: 写 main.dart**
 
