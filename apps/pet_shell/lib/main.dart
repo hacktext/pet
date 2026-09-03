@@ -62,13 +62,22 @@ class _PetShellAppState extends State<PetShellApp> with WindowListener {
   // own TextureRegistrar shutdown. Stopping the clip here, before we ever
   // call windowManager.destroy() (which posts WM_QUIT and ends the message
   // loop), keeps that from happening.
+  //
+  // setPreventClose(true) also means destroy() is the ONLY thing that lets
+  // the X button (or Alt+F4) actually close this frameless, title-bar-less,
+  // always-on-top window -- so destroy() must run even if dispose() throws
+  // (e.g. a MissingPluginException after a hot restart, or a
+  // PlatformException from the native side). Without the try/finally, an
+  // async void handler that throws mid-await just stops, destroy() never
+  // runs, and the window becomes closable only via Task Manager.
   @override
   void onWindowClose() async {
     final c = _controller;
-    if (c != null) {
-      await c.dispose();
+    try {
+      await c?.dispose();
+    } finally {
+      await windowManager.destroy();
     }
-    await windowManager.destroy();
   }
 
   Future<void> _boot() async {
