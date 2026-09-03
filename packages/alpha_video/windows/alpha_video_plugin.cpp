@@ -14,6 +14,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <exception>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -39,6 +40,11 @@ std::wstring Utf8ToWide(const std::string& s) {
   return w;
 }
 
+}  // namespace
+
+// Defined here (not in the anonymous namespace above) because
+// alpha_video_plugin.h forward-declares it as a member type of
+// AlphaVideoPlugin::clips_.
 struct Clip {
   std::unique_ptr<frame_source::FrameSource> source;
   std::unique_ptr<flutter::TextureVariant> texture;
@@ -67,15 +73,21 @@ struct Clip {
   bool stopping = false;
   flutter::TextureRegistrar* registrar = nullptr;
 
-  // Safety net for process/plugin teardown while a clip is still open: if
-  // "dispose" was never called (app killed, engine torn down without the
-  // Dart side cleaning up), g_clips's own static destruction would destroy
-  // this Clip -- and with it a still-joinable std::thread, which makes
-  // std::thread's destructor call std::terminate(). "dispose" already
-  // does the correct stop-then-join-then-unregister sequence itself (see
-  // below), so in that path this destructor finds the thread already
-  // joined and does nothing; it only does real work on the teardown path
-  // dispose() does not cover.
+  // Belt-and-braces guard, NOT the teardown path. Every Clip is now owned
+  // by AlphaVideoPlugin::clips_, and both the "dispose" handler and
+  // ~AlphaVideoPlugin() (see alpha_video_plugin.cpp's TeardownClip) already
+  // stop and join the ticker before the last shared_ptr<Clip> is dropped --
+  // on the platform thread, with the registrar still valid. So in the
+  // normal path this destructor finds the thread already joined and does
+  // nothing. It exists only so that no future code path that drops a
+  // Clip without going through TeardownClip can leave a still-joinable
+  // std::thread here, which would make std::thread's own destructor call
+  // std::terminate(). It is deliberately not relied on for real teardown:
+  // a namespace/DLL-scope static's destructor runs during
+  // DLL_PROCESS_DETACH, after ExitProcess has already torn down every
+  // other thread, so a join() there can deadlock on a mutex the ticker
+  // died holding -- which is precisely why clips_ was moved onto the
+  // plugin instead (C-2 in the final review).
   ~Clip() {
     if (ticker.joinable()) {
       {
@@ -88,6 +100,8 @@ struct Clip {
     }
   }
 };
+
+namespace {
 
 constexpr int64_t kFallbackFrameMicros = 41666;  // 24fps，仅在 durationTicks 为 0 时使用
 
@@ -147,14 +161,6 @@ void StartTicker(Clip* c) {
   });
 }
 
-// Keyed by texture id. Each Clip's PixelBufferTexture callback captures a
-// raw `Clip*` (see "open" below); that pointer is only safe to dereference
-// while the Clip is still alive. shared_ptr (not unique_ptr) so "dispose"
-// can hand a copy to the engine's unregister-completion callback below and
-// keep the Clip alive until the engine confirms it will not invoke the
-// pixel-buffer callback again.
-std::map<int64_t, std::shared_ptr<Clip>> g_clips;
-
 }  // namespace
 
 // static
@@ -178,7 +184,51 @@ void AlphaVideoPlugin::RegisterWithRegistrar(
 AlphaVideoPlugin::AlphaVideoPlugin(flutter::PluginRegistrarWindows *registrar)
     : registrar_(registrar) {}
 
-AlphaVideoPlugin::~AlphaVideoPlugin() {}
+AlphaVideoPlugin::~AlphaVideoPlugin() {
+  // Tear down anything the Dart side never disposed. Safe to do here and
+  // nowhere else: this runs on the platform thread (engine destruction is
+  // synchronous from the caller that drops the FlutterViewController), with
+  // registrar_ and every clip's ticker thread still alive -- unlike a
+  // namespace-scope static's destructor, which would run during
+  // DLL_PROCESS_DETACH after ExitProcess has already killed those threads.
+  while (!clips_.empty()) {
+    auto it = clips_.begin();
+    const int64_t id = it->first;
+    std::shared_ptr<Clip> clip = std::move(it->second);
+    clips_.erase(it);
+    TeardownClip(id, std::move(clip));
+  }
+}
+
+void AlphaVideoPlugin::TeardownClip(int64_t id, std::shared_ptr<Clip> clip) {
+  // Stop and join the ticker thread FIRST, before anything else below. Once
+  // join() returns, the ticker will never call MarkTextureFrameAvailable(id)
+  // again, so it's now safe to unregister that texture id. Doing this in
+  // the other order would let the ticker race UnregisterTexture: it could
+  // mark a texture id "available" that the engine is mid-unregistration
+  // for, or that has already been handed to a brand-new Clip from a
+  // subsequent "open" reusing the id.
+  {
+    std::lock_guard<std::mutex> lk(clip->mtx);
+    clip->stopping = true;
+    clip->playing = false;
+  }
+  clip->cv.notify_all();
+  if (clip->ticker.joinable()) clip->ticker.join();
+
+  // UnregisterTexture(id) alone (no callback) is fire-and-forget: the
+  // engine's docs call it "asynchronous", meaning the render thread may
+  // still be inside the PixelBufferTexture callback -- which holds a raw
+  // Clip* -- when this call returns. The caller already removed clip from
+  // clips_ before calling here (so a future "open" can't collide with this
+  // id while teardown is pending); keep it alive via shared_ptr until the
+  // engine's completion callback confirms it will not call back again.
+  registrar_->texture_registrar()->UnregisterTexture(
+      id, [clip]() {
+        // Intentionally empty: destroying the last reference to `clip`
+        // here (as this lambda itself is destroyed) is the whole point.
+      });
+}
 
 void AlphaVideoPlugin::HandleMethodCall(
     const flutter::MethodCall<flutter::EncodableValue>& call,
@@ -188,164 +238,166 @@ void AlphaVideoPlugin::HandleMethodCall(
     return;
   }
 
-  if (call.method_name() == "open") {
-    const auto& args = std::get<flutter::EncodableMap>(*call.arguments());
-    const auto path = std::get<std::string>(args.at(flutter::EncodableValue("path")));
-    const std::wstring wpath = Utf8ToWide(path);
-    if (wpath.empty() && !path.empty()) {
-      result->Error("bad_path", "path is not valid UTF-8");
-      return;
-    }
-
-    auto clip = std::make_unique<Clip>();
-    clip->source = std::make_unique<frame_source::FrameSource>();
-    if (!clip->source->Load(wpath)) {
-      result->Error("open_failed", "cannot read aipmat: " + path);
-      return;
-    }
-
-    Clip* raw = clip.get();
-    clip->texture = std::make_unique<flutter::TextureVariant>(
-        flutter::PixelBufferTexture(
-            [raw](size_t, size_t) -> const FlutterDesktopPixelBuffer* {
-              const uint8_t* px = raw->source->FrameRgba(raw->currentFrame);
-              if (!px) return nullptr;
-              raw->buffer.buffer = px;
-              raw->buffer.width = raw->source->width();
-              raw->buffer.height = raw->source->height();
-              return &raw->buffer;
-            }));
-
-    const int64_t id = registrar_->texture_registrar()->RegisterTexture(clip->texture.get());
-    clip->textureId = id;
-    clip->registrar = registrar_->texture_registrar();
-
-    flutter::EncodableMap out{
-        {flutter::EncodableValue("textureId"), flutter::EncodableValue(id)},
-        {flutter::EncodableValue("width"), flutter::EncodableValue(
-            static_cast<int32_t>(clip->source->width()))},
-        {flutter::EncodableValue("height"), flutter::EncodableValue(
-            static_cast<int32_t>(clip->source->height()))},
-        {flutter::EncodableValue("frameCount"), flutter::EncodableValue(
-            static_cast<int32_t>(clip->source->frameCount()))},
-    };
-    StartTicker(raw);
-    g_clips[id] = std::move(clip);
-    result->Success(flutter::EncodableValue(out));
+  // Every other method takes an EncodableMap of arguments. call.arguments()
+  // is a raw pointer that is null when Dart invokes the method with no
+  // argument at all (e.g. channel.invokeMethod('play')) -- std::get on
+  // *call.arguments() in that case is a null dereference, not a throw.
+  if (!call.arguments()) {
+    result->Error("bad_args", "missing arguments");
     return;
   }
 
-  if (call.method_name() == "play") {
-    const auto& args = std::get<flutter::EncodableMap>(*call.arguments());
-    const int64_t id = std::get<int64_t>(args.at(flutter::EncodableValue("textureId")));
-    const bool loop = std::get<bool>(args.at(flutter::EncodableValue("loop")));
-    auto it = g_clips.find(id);
-    if (it == g_clips.end()) {
-      result->Error("no_clip", "unknown textureId");
-      return;
-    }
-    {
-      std::lock_guard<std::mutex> lk(it->second->mtx);
-      it->second->loop = loop;
-      it->second->playing = true;
-    }
-    it->second->cv.notify_all();
-    result->Success();
-    return;
-  }
-
-  if (call.method_name() == "pause") {
-    const auto& args = std::get<flutter::EncodableMap>(*call.arguments());
-    const int64_t id = std::get<int64_t>(args.at(flutter::EncodableValue("textureId")));
-    auto it = g_clips.find(id);
-    if (it == g_clips.end()) {
-      result->Error("no_clip", "unknown textureId");
-      return;
-    }
-    {
-      std::lock_guard<std::mutex> lk(it->second->mtx);
-      it->second->playing = false;
-    }
-    result->Success();
-    return;
-  }
-
-  if (call.method_name() == "currentFrame") {
-    const auto& args = std::get<flutter::EncodableMap>(*call.arguments());
-    const int64_t id = std::get<int64_t>(args.at(flutter::EncodableValue("textureId")));
-    auto it = g_clips.find(id);
-    if (it == g_clips.end()) {
-      result->Error("no_clip", "unknown textureId");
-      return;
-    }
-    // Atomic load; no mtx needed (see the comment on Clip::currentFrame).
-    result->Success(flutter::EncodableValue(
-        static_cast<int32_t>(it->second->currentFrame.load())));
-    return;
-  }
-
-  if (call.method_name() == "dispose") {
-    const auto& args = std::get<flutter::EncodableMap>(*call.arguments());
-    const int64_t id = std::get<int64_t>(args.at(flutter::EncodableValue("textureId")));
-    auto it = g_clips.find(id);
-    if (it != g_clips.end()) {
-      std::shared_ptr<Clip> clip = it->second;
-
-      // Stop and join the ticker thread FIRST, before anything else below.
-      // Once join() returns, the ticker will never call
-      // MarkTextureFrameAvailable(id) again, so it's now safe to unregister
-      // that texture id. Doing this in the other order would let the
-      // ticker race UnregisterTexture: it could mark a texture id "available"
-      // that the engine is mid-unregistration for, or that has already been
-      // handed to a brand-new Clip from a subsequent "open" reusing the id.
-      {
-        std::lock_guard<std::mutex> lk(clip->mtx);
-        clip->stopping = true;
-        clip->playing = false;
+  // std::get throws bad_variant_access on a type mismatch, args.at() throws
+  // out_of_range on a missing key, and Load()/Reader::Open() can throw
+  // bad_alloc. Any of those unwinding out of HandleMethodCall would cross
+  // the engine's C callback boundary and terminate the process silently, so
+  // every branch below runs under one catch-all guard.
+  try {
+    if (call.method_name() == "open") {
+      const auto& args = std::get<flutter::EncodableMap>(*call.arguments());
+      const auto path = std::get<std::string>(args.at(flutter::EncodableValue("path")));
+      const std::wstring wpath = Utf8ToWide(path);
+      if (wpath.empty() && !path.empty()) {
+        result->Error("bad_path", "path is not valid UTF-8");
+        return;
       }
-      clip->cv.notify_all();
-      if (clip->ticker.joinable()) clip->ticker.join();
 
-      // UnregisterTexture(id) alone (no callback) is fire-and-forget: the
-      // engine's docs call it "asynchronous", meaning the render thread may
-      // still be inside the PixelBufferTexture callback -- which holds a raw
-      // Clip* -- when this call returns. Erasing g_clips[id] synchronously
-      // right after would risk freeing the Clip out from under that
-      // in-flight callback. Instead: take the Clip out of the map now (so a
-      // future "open" can't collide with this id while teardown is
-      // pending), but keep it alive via shared_ptr until the engine's
-      // completion callback confirms it will not call back again.
-      g_clips.erase(it);
-      registrar_->texture_registrar()->UnregisterTexture(
-          id, [clip]() {
-            // Intentionally empty: destroying the last reference to `clip`
-            // here (as this lambda itself is destroyed) is the whole point.
-          });
-    }
-    result->Success();
-    return;
-  }
+      auto clip = std::make_unique<Clip>();
+      clip->source = std::make_unique<frame_source::FrameSource>();
+      if (!clip->source->Load(wpath)) {
+        result->Error("open_failed", "cannot read aipmat: " + path);
+        return;
+      }
 
-  if (call.method_name() == "prepare") {
-    const auto& args = std::get<flutter::EncodableMap>(*call.arguments());
-    const auto src = std::get<std::string>(args.at(flutter::EncodableValue("source")));
-    const auto dst = std::get<std::string>(args.at(flutter::EncodableValue("destination")));
-    const auto edge = std::get<int32_t>(args.at(flutter::EncodableValue("targetEdge")));
-    // Dart 通过 MethodChannel 送来的是 UTF-8。绝不能用 wstring(s.begin(), s.end())
-    // 逐字节拓宽——那会把每个 UTF-8 字节当成一个 wchar_t，非 ASCII 路径直接损坏。
-    // 这正是 Task 7 修掉的那类缺陷，必须走真正的编码转换。
-    const std::wstring wsrc = Utf8ToWide(src);
-    const std::wstring wdst = Utf8ToWide(dst);
-    if (wsrc.empty() != src.empty() || wdst.empty() != dst.empty()) {
-      result->Error("bad_path", "path is not valid UTF-8");
+      Clip* raw = clip.get();
+      clip->texture = std::make_unique<flutter::TextureVariant>(
+          flutter::PixelBufferTexture(
+              [raw](size_t, size_t) -> const FlutterDesktopPixelBuffer* {
+                const uint8_t* px = raw->source->FrameRgba(raw->currentFrame);
+                if (!px) return nullptr;
+                raw->buffer.buffer = px;
+                raw->buffer.width = raw->source->width();
+                raw->buffer.height = raw->source->height();
+                return &raw->buffer;
+              }));
+
+      const int64_t id = registrar_->texture_registrar()->RegisterTexture(clip->texture.get());
+      clip->textureId = id;
+      clip->registrar = registrar_->texture_registrar();
+
+      flutter::EncodableMap out{
+          {flutter::EncodableValue("textureId"), flutter::EncodableValue(id)},
+          {flutter::EncodableValue("width"), flutter::EncodableValue(
+              static_cast<int32_t>(clip->source->width()))},
+          {flutter::EncodableValue("height"), flutter::EncodableValue(
+              static_cast<int32_t>(clip->source->height()))},
+          {flutter::EncodableValue("frameCount"), flutter::EncodableValue(
+              static_cast<int32_t>(clip->source->frameCount()))},
+      };
+      StartTicker(raw);
+      clips_[id] = std::move(clip);
+      result->Success(flutter::EncodableValue(out));
       return;
     }
-    result->Success(flutter::EncodableValue(
-        pet_matte_prepare(wsrc.c_str(), wdst.c_str(), static_cast<uint32_t>(edge))));
-    return;
-  }
 
-  result->NotImplemented();
+    if (call.method_name() == "play") {
+      const auto& args = std::get<flutter::EncodableMap>(*call.arguments());
+      const int64_t id = std::get<int64_t>(args.at(flutter::EncodableValue("textureId")));
+      const bool loop = std::get<bool>(args.at(flutter::EncodableValue("loop")));
+      auto it = clips_.find(id);
+      if (it == clips_.end()) {
+        result->Error("no_clip", "unknown textureId");
+        return;
+      }
+      {
+        std::lock_guard<std::mutex> lk(it->second->mtx);
+        it->second->loop = loop;
+        it->second->playing = true;
+      }
+      it->second->cv.notify_all();
+      result->Success();
+      return;
+    }
+
+    if (call.method_name() == "pause") {
+      const auto& args = std::get<flutter::EncodableMap>(*call.arguments());
+      const int64_t id = std::get<int64_t>(args.at(flutter::EncodableValue("textureId")));
+      auto it = clips_.find(id);
+      if (it == clips_.end()) {
+        result->Error("no_clip", "unknown textureId");
+        return;
+      }
+      {
+        std::lock_guard<std::mutex> lk(it->second->mtx);
+        it->second->playing = false;
+      }
+      result->Success();
+      return;
+    }
+
+    if (call.method_name() == "currentFrame") {
+      const auto& args = std::get<flutter::EncodableMap>(*call.arguments());
+      const int64_t id = std::get<int64_t>(args.at(flutter::EncodableValue("textureId")));
+      auto it = clips_.find(id);
+      if (it == clips_.end()) {
+        result->Error("no_clip", "unknown textureId");
+        return;
+      }
+      // Atomic load; no mtx needed (see the comment on Clip::currentFrame).
+      result->Success(flutter::EncodableValue(
+          static_cast<int32_t>(it->second->currentFrame.load())));
+      return;
+    }
+
+    if (call.method_name() == "dispose") {
+      const auto& args = std::get<flutter::EncodableMap>(*call.arguments());
+      const int64_t id = std::get<int64_t>(args.at(flutter::EncodableValue("textureId")));
+      auto it = clips_.find(id);
+      if (it != clips_.end()) {
+        std::shared_ptr<Clip> clip = std::move(it->second);
+        // Take the Clip out of the map now (so a future "open" can't
+        // collide with this id while teardown is pending); TeardownClip
+        // keeps it alive via shared_ptr for as long as the engine needs.
+        clips_.erase(it);
+        TeardownClip(id, std::move(clip));
+      }
+      result->Success();
+      return;
+    }
+
+    if (call.method_name() == "prepare") {
+      const auto& args = std::get<flutter::EncodableMap>(*call.arguments());
+      const auto src = std::get<std::string>(args.at(flutter::EncodableValue("source")));
+      const auto dst = std::get<std::string>(args.at(flutter::EncodableValue("destination")));
+      const auto edge = std::get<int32_t>(args.at(flutter::EncodableValue("targetEdge")));
+      // Dart 通过 MethodChannel 送来的是 UTF-8。绝不能用 wstring(s.begin(), s.end())
+      // 逐字节拓宽——那会把每个 UTF-8 字节当成一个 wchar_t，非 ASCII 路径直接损坏。
+      // 这正是 Task 7 修掉的那类缺陷，必须走真正的编码转换。
+      const std::wstring wsrc = Utf8ToWide(src);
+      const std::wstring wdst = Utf8ToWide(dst);
+      if (wsrc.empty() != src.empty() || wdst.empty() != dst.empty()) {
+        result->Error("bad_path", "path is not valid UTF-8");
+        return;
+      }
+      // pet_matte_prepare 的负返回码携带的错误详情（pet_matte_last_error）
+      // 之前被丢弃了：调用方只看到一个裸 int，且是通过 Success 送达的，
+      // 忘记检查返回值的调用方会把失败当成成功。改成 Error 携带详情，和
+      // "open"/"play" 对原生失败的处理方式一致。
+      const int32_t code = pet_matte_prepare(wsrc.c_str(), wdst.c_str(),
+                                              static_cast<uint32_t>(edge));
+      if (code != 0) {
+        result->Error("prepare_failed", pet_matte_last_error(),
+                      flutter::EncodableValue(code));
+        return;
+      }
+      result->Success(flutter::EncodableValue(code));
+      return;
+    }
+
+    result->NotImplemented();
+  } catch (const std::exception& e) {
+    result->Error("bad_args", e.what());
+  }
 }
 
 }  // namespace alpha_video
