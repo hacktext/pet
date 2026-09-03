@@ -19,7 +19,13 @@ class Writer {
   bool Finish(const std::string& manifestJson);
 
  private:
+  // 关闭（如果还开着）当前文件句柄并删除 path_ 指向的文件，然后返回 false。
+  // Finish() 的每一条失败路径都要走这里：写到一半失败的 .aipmat 不能留在
+  // 磁盘上冒充一个完整文件。
+  bool FailFinish();
+
   FILE* file_ = nullptr;
+  std::wstring path_;
   Header header_{};
   std::vector<FrameIndex> index_;
   uint64_t cursor_ = 0;
