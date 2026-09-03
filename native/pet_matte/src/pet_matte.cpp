@@ -13,6 +13,10 @@
 
 namespace {
 
+static_assert(kMaxCacheEdge > kDefaultCacheEdge,
+              "kMaxCacheEdge must exceed kDefaultCacheEdge -- the ceiling has to leave room "
+              "above the default it's meant to bound");
+
 std::string g_lastError;
 
 // 最近邻缩放，BGRA 紧密打包。抠像前做，降低后续所有逐像素运算的成本。
@@ -42,6 +46,18 @@ const char* pet_matte_last_error(void) { return g_lastError.c_str(); }
 int32_t pet_matte_prepare(const wchar_t* srcMp4, const wchar_t* dstAipmat, uint32_t targetEdge) {
   g_lastError.clear();
 
+  // 校验放在最前面，早于打开/解码源视频：这是纯粹的入参校验，不依赖源
+  // 视频的任何状态，失败不该先付出打开解码器的代价。越界值（比如 Dart 侧
+  // 把负数塞进 uint32_t 后回绕出的 42 亿）如果不在这里挡住，会一路经
+  // static_cast<int> 变成负的 dw/dh，让所有逐像素循环全部空转、AlphaBounds
+  // 返回空、落地一个 1x1 占位帧，写盘的 header 却记录着那个天文数字宽高，
+  // Reader::Open 读到后据此分配画布直接 bad_alloc 崩溃。
+  if (targetEdge > kMaxCacheEdge) {
+    g_lastError = "targetEdge out of range [0, " + std::to_string(kMaxCacheEdge) + "]";
+    return -2;
+  }
+  const uint32_t edge = targetEdge ? targetEdge : kDefaultCacheEdge;
+
   auto dec = mfd::Decoder::Open(srcMp4);
   if (!dec.has_value()) { g_lastError = "cannot open source video"; return -1; }
 
@@ -49,8 +65,8 @@ int32_t pet_matte_prepare(const wchar_t* srcMp4, const wchar_t* dstAipmat, uint3
   const int sh = static_cast<int>(dec->info().height);
   if (sw <= 0 || sh <= 0) { g_lastError = "invalid source dimensions"; return -2; }
 
-  const int dw = targetEdge ? static_cast<int>(targetEdge) : sw;
-  const int dh = targetEdge ? static_cast<int>(targetEdge) : sh;
+  const int dw = static_cast<int>(edge);
+  const int dh = static_cast<int>(edge);
 
   pcmat::Writer writer(dstAipmat, static_cast<uint32_t>(dw), static_cast<uint32_t>(dh), 10000000);
   if (!writer.ok()) { g_lastError = "cannot open destination"; return -3; }

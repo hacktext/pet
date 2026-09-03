@@ -66,3 +66,28 @@ TEST(Pipeline, FailsOnMissingSource) {
   EXPECT_LT(pet_matte_prepare(L"C:\\nope.mp4", OutPath().c_str(), 320), 0);
   EXPECT_STRNE(pet_matte_last_error(), "");
 }
+
+TEST(Pipeline, RejectsTargetEdgeAboveCeiling) {
+  // 平常的越界值：比 kMaxCacheEdge 大但仍是一个合理的 uint32_t。
+  EXPECT_EQ(pet_matte_prepare(Fixture().c_str(), OutPath().c_str(), kMaxCacheEdge + 1), -2);
+  EXPECT_STRNE(pet_matte_last_error(), "");
+}
+
+TEST(Pipeline, RejectsTargetEdgeWrappedFromNegativeInt) {
+  // I-3 复现链路里的具体触发值：Dart 侧传 targetEdge: -1，插件把它
+  // static_cast<uint32_t> 后就是 UINT32_MAX，绝不能被当成一个"很大但合法"
+  // 的边长悄悄接受。
+  EXPECT_EQ(pet_matte_prepare(Fixture().c_str(), OutPath().c_str(), UINT32_MAX), -2);
+  EXPECT_STRNE(pet_matte_last_error(), "");
+}
+
+TEST(Pipeline, ZeroTargetEdgeUsesDefaultCacheEdge) {
+  const auto out = OutPath();
+  ASSERT_EQ(pet_matte_prepare(Fixture().c_str(), out.c_str(), 0), 0)
+      << pet_matte_last_error();
+  auto r = pcmat::Reader::Open(out);
+  ASSERT_TRUE(r.has_value());
+  EXPECT_EQ(r->header().width, kDefaultCacheEdge);
+  EXPECT_EQ(r->header().height, kDefaultCacheEdge);
+  std::filesystem::remove(out);
+}

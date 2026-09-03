@@ -108,6 +108,56 @@ TEST(Roundtrip, OpenRejectsCorruptIndexOffsetWithoutCrashing) {
   std::filesystem::remove(path);
 }
 
+namespace {
+// 构造一个 header 字段合法（除了 width/height）的最小文件：magic、
+// schemaVersion、headerSize、frameCount=0、index/manifest 都指向空区间，
+// 这样如果 width/height 校验被漏掉，唯一会失败的就是我们真正想测的那一项。
+void WriteHeaderOnlyFile(const std::filesystem::path& path, uint32_t width, uint32_t height) {
+  pcmat::Header h{};
+  std::memcpy(h.magic, pcmat::kMagic, 8);
+  h.schemaVersion = pcmat::kSchemaVersion;
+  h.headerSize = pcmat::kHeaderSize;
+  h.flags = pcmat::kFlagLz4;
+  h.width = width;
+  h.height = height;
+  h.timeBaseDen = 10000000;
+  h.frameCount = 0;
+  h.indexOffset = pcmat::kHeaderSize;
+  h.indexSize = 0;
+  h.manifestOffset = pcmat::kHeaderSize;
+  h.manifestSize = 0;
+
+  std::vector<uint8_t> buf(pcmat::kHeaderSize, 0);
+  std::memcpy(buf.data(), &h, sizeof(h));
+  FILE* f = fopen(path.string().c_str(), "wb");
+  fwrite(buf.data(), 1, buf.size(), f);
+  fclose(f);
+}
+}  // namespace
+
+TEST(Roundtrip, OpenRejectsZeroWidthOrHeight) {
+  // Ruling: 一个 width/height 为 0 的画布没有任何意义——没有像素可分配，
+  // 却仍然是磁盘上完全合法的一个 uint32_t 字段，不会被 InBounds 之类的
+  // 边界检查挡住。
+  auto path = std::filesystem::temp_directory_path() / "zero_dim.aipmat";
+  WriteHeaderOnlyFile(path, 0, 64);
+  EXPECT_FALSE(pcmat::Reader::Open(path.wstring()).has_value());
+  WriteHeaderOnlyFile(path, 64, 0);
+  EXPECT_FALSE(pcmat::Reader::Open(path.wstring()).has_value());
+  std::filesystem::remove(path);
+}
+
+TEST(Roundtrip, OpenRejectsAbsurdlyLargeDimensionsWithoutCrashing) {
+  // I-3 复现链路的落点：targetEdge 校验如果被绕过（或者文件本身就是手工
+  // 构造/损坏的），width=height=4294967295 会一路写进 header。frame_source
+  // 会据此做 width*height*4 的画布分配，未捕获的 bad_alloc 直接崩溃。
+  // Reader::Open 必须在这里就拒绝，画布分配这步永远不会被走到。
+  auto path = std::filesystem::temp_directory_path() / "huge_dim.aipmat";
+  WriteHeaderOnlyFile(path, UINT32_MAX, UINT32_MAX);
+  EXPECT_FALSE(pcmat::Reader::Open(path.wstring()).has_value());
+  std::filesystem::remove(path);
+}
+
 TEST(Roundtrip, SurvivesNonAsciiPath) {
   // Task 7 修复的回归测试：Writer 曾经把宽字符路径经 std::string 转换后交给
   // 窄字符 fopen，在 MSVC 下会走进程 ANSI 代码页而不是 UTF-8，路径中代码页

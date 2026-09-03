@@ -14,6 +14,16 @@ namespace {
 bool InBounds(uint64_t offset, uint64_t size, uint64_t total) {
   return offset <= total && size <= total - offset;
 }
+
+// width/height 也是磁盘上的不可信字段：0 没有意义（没有画布可分配），而一个
+// 损坏或构造出来的巨大值（例如 4294967295）会让下游 frame_source 按
+// width*height*4 分配画布时以未捕获的 bad_alloc 崩溃，或至少吃光内存。
+// 8192 是主流 GPU 纹理边长上限的量级，比这套系统实际会写出的任何画布都
+// 宽裕得多。
+constexpr uint32_t kMaxDimension = 8192;
+bool DimensionsAreSane(uint32_t width, uint32_t height) {
+  return width > 0 && height > 0 && width <= kMaxDimension && height <= kMaxDimension;
+}
 }  // namespace
 
 std::optional<Reader> Reader::Open(const std::wstring& path) {
@@ -37,6 +47,7 @@ std::optional<Reader> Reader::Open(const std::wstring& path) {
   std::memcpy(&r.header_, r.blob_.data(), kHeaderSize);
   if (std::memcmp(r.header_.magic, kMagic, 8) != 0) return std::nullopt;
   if (r.header_.headerSize != kHeaderSize) return std::nullopt;
+  if (!DimensionsAreSane(r.header_.width, r.header_.height)) return std::nullopt;
   if (!InBounds(r.header_.indexOffset, r.header_.indexSize, r.blob_.size())) return std::nullopt;
   if (r.header_.indexSize != static_cast<uint64_t>(r.header_.frameCount) * kIndexEntrySize)
     return std::nullopt;
