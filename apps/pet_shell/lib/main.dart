@@ -79,10 +79,10 @@ class _PetShellAppState extends State<PetShellApp> with WindowListener {
       return;
     }
     final dst = '${Directory.systemTemp.path}\\pet_shell_dev.aipmat';
-    final code =
-        await AlphaVideo.prepare(source: src, destination: dst, targetEdge: 720);
-    if (code != 0) {
-      setState(() => _error = '抠像失败，错误码 $code');
+    try {
+      await AlphaVideo.prepare(source: src, destination: dst, targetEdge: 720);
+    } on PlatformException catch (e) {
+      setState(() => _error = '抠像失败：${e.code} ${e.message}');
       return;
     }
 
