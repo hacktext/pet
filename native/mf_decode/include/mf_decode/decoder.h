@@ -29,8 +29,12 @@ class Decoder {
   bool NextFrame(std::vector<uint8_t>& bgra, uint64_t& ptsTicks, uint64_t& durTicks);
 
   // NextFrame 对干净的流结束和中途解码失败都返回 false；调用方需要靠这个
-  // 区分二者。干净结束不会置位；ReadSample 失败或拿到不带
-  // MF_SOURCE_READERF_ENDOFSTREAM 标志的空样本时置位。
+  // 区分二者。不变量：除了带 MF_SOURCE_READERF_ENDOFSTREAM 标志的干净结束，
+  // NextFrame 的任何其他 false 返回路径都必须先置位 hadError_ 再返回——
+  // 无论失败发生在 ReadSample、样本本身、还是样本解出来之后的缓冲区处理
+  // 阶段。新增一条退出路径时，先问它是不是干净结束；不是的话就必须置位，
+  // 不要在这里为具体机制列举白名单（历史上枚举过两种机制，结果后来新增的
+  // 三条退出路径全部被漏掉，见最终评审 C-1）。
   bool hadError() const { return hadError_; }
 
  private:

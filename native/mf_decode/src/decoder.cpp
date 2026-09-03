@@ -92,7 +92,9 @@ bool Decoder::NextFrame(std::vector<uint8_t>& bgra, uint64_t& ptsTicks, uint64_t
   if (!sample) { hadError_ = true; return false; }
 
   IMFMediaBuffer* buf = nullptr;
-  if (FAILED(sample->ConvertToContiguousBuffer(&buf))) { sample->Release(); return false; }
+  if (FAILED(sample->ConvertToContiguousBuffer(&buf))) {
+    hadError_ = true; sample->Release(); return false;
+  }
 
   const size_t rowBytes = static_cast<size_t>(info_.width) * 4;
 
@@ -108,6 +110,7 @@ bool Decoder::NextFrame(std::vector<uint8_t>& bgra, uint64_t& ptsTicks, uint64_t
   }
   if (!lockedWith2D) {
     if (FAILED(buf->Lock(&data, &maxLen, &curLen))) {
+      hadError_ = true;
       if (buf2d) buf2d->Release();
       buf->Release(); sample->Release(); return false;
     }
@@ -115,6 +118,7 @@ bool Decoder::NextFrame(std::vector<uint8_t>& bgra, uint64_t& ptsTicks, uint64_t
     // 平铺路径假定 stride == width*4；用 curLen 校验缓冲区确实够大，
     // 否则按假定 stride 拷贝会读到锁定范围之外。
     if (static_cast<size_t>(curLen) < rowBytes * info_.height) {
+      hadError_ = true;
       buf->Unlock();
       if (buf2d) buf2d->Release();
       buf->Release(); sample->Release(); return false;
