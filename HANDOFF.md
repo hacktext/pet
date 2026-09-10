@@ -16,8 +16,9 @@
 55 个测试全绿（49 原生 GoogleTest + 6 Flutter 集成测试）。
 
 ```
-用户照片  ──✗──►  绿幕/纯底动作视频  ──✅──►  桌面上会动的狗
-          还没做                      Plan A 已跑通
+用户照片  ──◐──►  绿幕/纯底动作视频  ──✅──►  桌面上会动的狗
+          spike 已用真实调用跑通       Plan A 已跑通
+          产品代码还没写
 ```
 
 已实现的分层：
@@ -124,9 +125,9 @@ $cmake = "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\Common7\I
 | Base URL | `https://api-beijing.klingai.com`。新加坡区 `api-singapore` 返回 `api key not found`，密钥绑区 |
 | 鉴权 | `Authorization: Bearer <KLING_API_KEY>`，**不需要自己签 JWT** |
 | 已验证 | `GET /v1/videos/image2video`、`GET /account/costs` 都返回 `code:0 SUCCEED` |
-| 账户余额 | 已充值「试用-视频生成-100-5并发-1个月」：100 单位，2026-10-10 到期。**只含视频、不含图片生成**，`/v1/images/generations` 仍返回 1102 |
+| 账户余额 | 两个试用包，都是 2026-10-10 到期：「视频生成-100-5并发」和「图像生成-1000-9并发」。视频包不含图片生成（没有图片包时 `/v1/images/generations` 返回 1102） |
 
-**当前卡点：第一步（头部特写 → 全身绿底参考图）还没有可用方案。** 见下面「spike 结果」。
+**当前状态：三步管线都已用真实调用验证可行（见下面三节 spike 结果），但产品代码一行没写。**下一步是为 M2 写 spec 和计划。
 注意 1102 在参数校验之前返回，余额不足时连请求格式都验证不了。
 
 ### 已修正的路线（原方案有一步是错的）
@@ -138,17 +139,23 @@ $cmake = "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\Common7\I
 竞品实测：源照片是头部特写，10 个动作的输出**全是全身狗**，其中 9 个首帧姿态几乎一致
 （只有 walk 是另一张）。所以他们先**生成一张全身纯绿底参考图**，再拿它去图生视频。
 
-正确管线：
+正确管线（2026-09-10 实测跑通）：
 
 ```
-用户照片 ──► /v1/images/generations           ──► 全身纯绿底参考图
-              (image + image_reference:subject)        │
-                                                       ▼
-                            /v1/videos/image2video (image = image_tail = 参考图)
-                                                       │
-                                                       ▼
-                                     绿幕动作视频 ──► 已跑通的 pet_matte 管线
+用户照片 ──► /v1/images/generations              ──► 全身狗，浅灰底，16:9
+              (kling-v3 + image_reference:subject)       │
+                                                         ▼
+                              本地分割 BiRefNet-lite + alpha matting
+                              合成到精确 #00FF00，居中到 1024 方图
+                                                         │
+                                                         ▼
+                  /v1/videos/image2video (kling-v3 std, image = image_tail = 参考图)
+                                                         │
+                                                         ▼
+                                       绿幕动作视频 ──► 已跑通的 pet_matte 管线
 ```
+
+注意：参考图**不能**让模型直接画绿底，见「第一步 spike 结果」。
 
 ### 素材实测（拿竞品自己的产物量出来的，没花钱）
 
@@ -192,14 +199,60 @@ $cmake = "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\Common7\I
 结论：
 
 - **第二步（参考图 → 循环动作视频）已验证可行。** `kling-v3` std 支持 `image_tail`，接缝结构上无缝，3 单位 / 5s。
-- **第一步（头部特写 → 全身绿底参考图）没解决。** `kling-video-o1` 的主体参考既守不住纯绿，也守不住毛色。
-  候选：买可灵图片包走 `/v1/images/generations` + `image_reference: subject`（原计划，未验证，图片便宜）；
-  试 `kling-v3-omni`；或 Vidu（`secrets/vidu.env` 已有密钥）。
+- **第一步（头部特写 → 全身绿底参考图）**：视频包里的 `kling-video-o1` 主体参考失败（生成了绿布影棚背景，毛色也不对）。
+  买了图片包后已找到可行做法，见下面「第一步 spike 结果」。
 - A 的待机动作偏「静」，后 3 秒几乎定格，stand 可能要调提示词或改 10s。
 - A **已过 pet_matte 实跑**（pet_shell release，`AIPET_DEV_CLIP` 指向 A）：桌面截图里狗周围 239,200 像素，
   偏绿像素 0 个（阈值 G>R+40 且 G>B+40 为 0，放宽到 +15 也是 0）；尾巴长毛边缘半透明过渡干净，无绿色光晕；
   进程内存 186 MB。注意 `pet_matte_tests` 写死了自带夹具 `green_box.mp4`，不能直接喂外部片子，实跑只能走 pet_shell。
 - spike 脚本在会话临时目录，**不在仓库**，属一次性代码。
+
+### 第一步 spike 结果（2026-09-10 晚，买了图片包之后）
+
+`kling-v3` 图片生成接受 `image_reference: subject`，每张 **8 单位**、约 15–20 秒。
+
+| 版本 | 做法 | 像不像源照片 | 抠像：漂浮半透明像素（竞品参考帧 911） | 问题 |
+|---|---|---|---|---|
+| G | 直接生成绿底（1:1） | 好，奶白斑纹保住 | **27,472** | 绿幕把毛映绿 + 身下接触阴影，肚子和腿会被抠成半透明 |
+| W1 | 浅灰底生成 + 本地抠图合成 #00FF00 | 中，斑纹变淡 | 157 | 模型把尾巴画到图片边缘，尾巴尖被切平 |
+| W2 | W1 + 提示词写明面部斑纹 | **最好** | 145 | 狗被画大，尾巴被画框截断 |
+| W3 | W2 + **16:9 宽画幅** | 好 | lite 197 / **lite + matting 387** / 完整版 700 | lite 丢了尾巴末端的飘毛、后腿饰毛有绿缝；matting 修好 |
+
+结论：
+
+- **参考图不要让模型直接画绿底。** 狗站在绿布前，毛被映绿是物理上的必然，提示词压不住。
+  改为浅灰底生成 → 本地分割 → 合成到精确的 `#00FF00`。背景是我们自己画的，没有阴影和反光。
+- **提示词里写明这只狗最有辨识度的特征**（W2 起加了「额头到口鼻一道奶白色的毛」），像不像明显提升。
+  M2 可以考虑先让多模态模型把源照片的特征描述出来，再自动填进提示词。
+- **侧身的长条狗要用 16:9 生成**，否则尾巴会碰画框。流程里加了自动碰边检查：原图四条边出现任何前景像素就判失败。
+- **长毛狗的抠图，alpha matting 比换大模型更管用。** BiRefNet-lite（224 MB）+ pymatting
+  胜过完整版 BiRefNet（973 MB）不加 matting。两个模型都是 MIT 许可。
+- 抠像打分是把 pet_matte 的键控公式逐像素复刻（`matte_core/src/chroma_key.cpp` 的 KeyParams 默认值），
+  指标为「附近 2 像素内没有不透明像素的半透明像素数」，能直接抓出阴影和反光团块。竞品参考帧是 911。
+- 本地环境：系统 Python 3.14.2 能直接装 `rembg[cpu]`（onnxruntime 1.29.0 有 cp314 安装包），不需要 uv 或另装 Python。
+
+### 全链路 spike 结果（我们自己的参考图 → 循环视频 → 桌面）
+
+| 项 | 结果 |
+|---|---|
+| 输入 | W3 + lite + matting 合成的参考图，`kling-v3` std，`image = image_tail`，3 单位 |
+| 格式 | 960×960 / 24fps / 121 帧 / 5.04s |
+| 背景 | (6,245,3) → (5,245,0)，全片几乎不漂 |
+| 同一只狗 | 首、中、末帧的姿态、位置、大小一致；视频帧打分 507 / 477（竞品 911），视频模型没把反光和阴影加回来 |
+| 循环 | 接缝 47.4 dB，高于片内最大相邻跳变 39.1 dB，看不出来 |
+| 动作 | 眨眼、半眯眼、头部微动，分布在第 30–80 帧。提示词要求「整个五秒持续有细微动作」起了作用（A 是前 2 秒动、后 3 秒定格） |
+| pet_matte 实跑 | pet_shell 桌面截图，狗所在的 124,800 像素里偏绿像素 0（+40 和 +15 两个阈值都是 0）；尾巴飘毛过渡干净，无绿边 |
+
+结论：**头部特写 → 全身参考图 → 循环绿幕视频 → 桌面透明窗口，整条链路在真实调用下跑通了。**
+每个动作的边际成本 3 视频单位（std 5s）；参考图每只宠物生成一次，8 图片单位，不达标就重试。
+
+还没验证的：
+
+- **只做了 stand 一个动作。** 第四项验收「两个动作是不是同一只狗」还没测；walk、run 这类需要位移的动作
+  用首尾同帧能不能自然循环，也没测。
+- 提示词和特征描述只在这一只狗上试过。
+
+本轮花费：视频 9 / 100 单位（A、B、C 各 3），图片 32 / 1000 单位（G、W1、W2、W3 各 8）。
 
 四项验收：绿幕/纯底干不干净、两个动作是不是同一只狗、动作对不对、能不能循环。
 
@@ -240,6 +293,9 @@ $cmake = "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\Common7\I
    修法：把 `clips_` 插入挪到 `RegisterTexture` 之后、`StartTicker` 之前。
 8. `pet_shell` 的 `AIPET_DEV_CLIP` 是**开发钩子**，不是产品行为。
    真实应用从 `%APPDATA%\com.aipet\` 读宠物数据。
+9. `pet_shell` 收到 WM_CLOSE（PowerShell `CloseMainWindow()`）后 5 秒内没有退出，只能强制结束。
+   等待期间，它以自己为父进程先后创建了两个 `pet_shell.exe` 子进程（随后退出，0 线程）。
+   只观察到一次，未排查；可能和 `setPreventClose` + `onWindowClose` 的 dispose 路径有关。
 
 ---
 
