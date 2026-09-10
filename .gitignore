@@ -2,3 +2,11 @@ build/
 .dart_tool/
 *.log
 .superpowers/
+
+# 本地密钥，永不提交
+.env
+.env.*
+!.env.example
+secrets/*
+!secrets/*.example
+*.key
