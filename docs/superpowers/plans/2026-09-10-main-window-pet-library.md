@@ -454,7 +454,7 @@ Get-Process aipet -ErrorAction SilentlyContinue | Select-Object Id, @{n='WS_MB';
 | C8 | 宠物窗隐藏时通道 | `C8 pet->main: pong-from-main` |
 | C9 | 退出 | `C9 quitting` 之后 `Get-Process aipet` 为空 |
 
-**判定规则**：C1、C3、C4、C5 任一不过 → **停止执行本计划**，把日志和结果文件交给用户，重新讨论方案（spec 3.4 的候选：主窗口做成宠物窗引擎里的第二个原生窗口）。C6、C7 的结论决定 Task 13、15 走哪个分支，必须写清楚。
+**判定规则**：C1、C3、C4、C5 任一不过 → **停止执行本计划**，把日志和结果文件交给用户，重新讨论方案（spec 3.4 的候选：主窗口做成宠物窗引擎里的第二个原生窗口）。C6、C7 的结论决定 Task 15 走哪个分支，必须写清楚。
 
 - [ ] **Step 7: 提交**
 
