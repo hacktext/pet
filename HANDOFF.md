@@ -173,7 +173,7 @@ $cmake = "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\Common7\I
 ### 接口要点（已查文档确认）
 
 - `POST /v1/images/generations`：`model_name`（最新到 `kling-v3`）、
-  `image` + `image_reference: subject|face`、`aspect_ratio`（要 `1:1`）、
+  `image` + `image_reference: subject|face`、`aspect_ratio`（参考图用 `16:9`，侧身长条狗用 `1:1` 尾巴会碰画框）、
   `resolution: 1k|2k`、`n: 1..9`。
   **图生图场景不支持 `negative_prompt`**，负面要写成正面提示里的否定句。
 - `POST /v1/videos/image2video`：`image`、`image_tail`、`prompt`、`duration`、
