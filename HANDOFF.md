@@ -196,8 +196,9 @@ $cmake = "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\Common7\I
   候选：买可灵图片包走 `/v1/images/generations` + `image_reference: subject`（原计划，未验证，图片便宜）；
   试 `kling-v3-omni`；或 Vidu（`secrets/vidu.env` 已有密钥）。
 - A 的待机动作偏「静」，后 3 秒几乎定格，stand 可能要调提示词或改 10s。
-- A **还没过 pet_matte 实跑**。按数值（背景比竞品素材更纯，竞品素材已是 0 像素残留）应该没问题。
-  `pet_matte_tests` 写死了自带夹具 `green_box.mp4`，不能直接喂外部片子；实跑用 pet_shell 的 `AIPET_DEV_CLIP`。
+- A **已过 pet_matte 实跑**（pet_shell release，`AIPET_DEV_CLIP` 指向 A）：桌面截图里狗周围 239,200 像素，
+  偏绿像素 0 个（阈值 G>R+40 且 G>B+40 为 0，放宽到 +15 也是 0）；尾巴长毛边缘半透明过渡干净，无绿色光晕；
+  进程内存 186 MB。注意 `pet_matte_tests` 写死了自带夹具 `green_box.mp4`，不能直接喂外部片子，实跑只能走 pet_shell。
 - spike 脚本在会话临时目录，**不在仓库**，属一次性代码。
 
 四项验收：绿幕/纯底干不干净、两个动作是不是同一只狗、动作对不对、能不能循环。
