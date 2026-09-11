@@ -49,4 +49,18 @@ void main() {
     store.file.writeAsStringSync('{"schema":1,"currentPetId":"a","adoptedPetIds":["b"]}');
     expect(store.load(), const LibraryState(currentPetId: 'a', adoptedPetIds: ['b', 'a']));
   });
+
+  test('an older .bad is replaced by the newer corrupt file', () {
+    File('${store.file.path}.bad').writeAsStringSync('old');
+    store.file.writeAsStringSync('{nope');
+    expect(store.load(), LibraryState.empty);
+    expect(store.file.existsSync(), isFalse);
+    expect(File('${store.file.path}.bad').readAsStringSync(), '{nope');
+  });
+
+  test('load never throws even when quarantine fails', () {
+    Directory('${store.file.path}.bad').createSync();
+    store.file.writeAsStringSync('{nope');
+    expect(store.load(), LibraryState.empty);
+  });
 }

@@ -29,9 +29,13 @@ class SettingsStore {
       return LibraryState(currentPetId: current as String?, adoptedPetIds: ids);
     } catch (e) {
       developer.log('settings.json unreadable ($e); quarantined as .bad', name: 'aipet.settings');
-      final bad = File('${file.path}.bad');
-      if (bad.existsSync()) bad.deleteSync();
-      file.renameSync(bad.path);
+      try {
+        final bad = File('${file.path}.bad');
+        if (bad.existsSync()) bad.deleteSync();
+        file.renameSync(bad.path);
+      } catch (quarantineError) {
+        developer.log('quarantine failed ($quarantineError)', name: 'aipet.settings');
+      }
       return LibraryState.empty;
     }
   }
