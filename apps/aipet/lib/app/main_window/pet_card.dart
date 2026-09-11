@@ -38,7 +38,7 @@ class PetCard extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 8),
-            Text(pet.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.text)),
+            Text(pet.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.text)),
             Text(pet.blurb,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,

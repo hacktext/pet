@@ -18,14 +18,25 @@ final _pet = Pet(
   actions: const ['stand'],
 );
 
+final _longNamePet = Pet(
+  id: 'builtin-long',
+  name: '很长的名字很长的名字很长的名字很长的名字很长的名字很长的名字很长的名字很长的名字',
+  species: Species.dog,
+  origin: PetOrigin.builtin,
+  blurb: '温柔的大暖男，走到哪跟到哪',
+  dir: Directory('C:\\nowhere'),
+  cover: 'cover.png',
+  actions: const ['stand'],
+);
+
 void main() {
-  Future<List<int>> pump(WidgetTester tester, CardStatus status) async {
+  Future<List<int>> pump(WidgetTester tester, CardStatus status, {Pet? pet, double width = 200, double height = 300}) async {
     final taps = <int>[];
     await tester.pumpWidget(MaterialApp(
       theme: buildAppTheme(),
       home: Scaffold(
         body: Center(
-          child: SizedBox(width: 200, height: 300, child: PetCard(pet: _pet, status: status, onAdopt: () => taps.add(1))),
+          child: SizedBox(width: width, height: height, child: PetCard(pet: pet ?? _pet, status: status, onAdopt: () => taps.add(1))),
         ),
       ),
     ));
@@ -66,5 +77,21 @@ void main() {
     expect(AppColors.text, const Color(0xFF3D2B1F));
     expect(AppColors.textMuted, const Color(0xFF8A6E5A));
     expect(buildAppTheme().scaffoldBackgroundColor, AppColors.page);
+  });
+
+  testWidgets('a long name stays on one line and leaves room for the cover', (tester) async {
+    await pump(tester, CardStatus.adoptable, pet: _longNamePet, width: 182, height: 268);
+    expect(tester.getSize(find.byType(Opacity)).height, greaterThan(120));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('missing dims the cover, other states do not', (tester) async {
+    // Test missing state
+    await pump(tester, CardStatus.missing);
+    expect(tester.widget<Opacity>(find.byType(Opacity)).opacity, 0.35);
+
+    // Test adoptable state
+    await pump(tester, CardStatus.adoptable);
+    expect(tester.widget<Opacity>(find.byType(Opacity)).opacity, 1.0);
   });
 }
