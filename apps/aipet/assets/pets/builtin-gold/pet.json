@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "id": "builtin-gold",
+  "name": "金毛",
+  "species": "dog",
+  "origin": "builtin",
+  "blurb": "温柔的大暖男，走到哪跟到哪",
+  "cover": "cover.png",
+  "actions": [
+    "stand",
+    "walk",
+    "sleep",
+    "lick_paw",
+    "act_cute"
+  ]
+}

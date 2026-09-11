@@ -117,3 +117,131 @@ C1、C3、C4、C5 全部通过 → **不触发"停止执行本计划，重新讨
 - C9 的残余 pid 现象已如上归因为测试手法（`Start-Process` + `AttachConsole` 组合）产生的假象，
   不建议作为"退出流程有 bug"处理；但如果 Task 16 真机验收也观察到退出后进程列表里还有
   `aipet.exe`，需要重新确认是否是同一现象。
+
+# Task 3 实测结果（3 只系统宠物的素材）
+
+记录时间：2026-09-11。环境：`tools/petgen/.venv`（Python 3.14），Kling `kling-v3`，
+`ffmpeg`/`ffprobe` 来自 chocolatey。TDD（`tests/test_package.py`）RED→GREEN 之后按 Step 6–11
+顺序执行，全程未切换品种、未触发预算停止规则。
+
+## TDD 证据（`test_package.py`）
+
+RED（Step 2，实现前）：
+
+```
+tests\test_package.py:3: in <module>
+    from petgen.package import COVER_MAX, make_cover, pet_json
+E   ModuleNotFoundError: No module named 'petgen.package'
+1 error in 0.15s
+```
+
+GREEN（Step 5，实现 `petgen/package.py` 与 `petgen/__main__.py` 之后，跑全量测试）：
+
+```
+....................................................                     [100%]
+52 passed in 0.76s
+```
+
+`petgen/package.py`、`petgen/__main__.py` 与简报（task-3-brief.md）代码块逐字符 diff 一致
+（`main()` 里 `("video", cmd_video, ("action", ACTIONS))` 这一处元组结构核对过，非
+`("video", cmd_video, ACTIONS)`）。
+
+## Step 6：导入 spike 参考图 + 9 项门槛（不花钱）
+
+`import-spike` 12/12 文件全部命中（3 只宠物 × [src + ref-stand/walk/lie]），无 MISSING，
+因此没有跑 `source`/`pose` 补拍，图像单位消耗为 0。9 项门槛全部一次通过，与简报预告的数值一致
+（金毛站姿 blob_core 最高但仍 <200）：
+
+```
+PASS ragdoll/stand: floating=605 blob_core=21
+PASS ragdoll/walk: floating=283 blob_core=1
+PASS ragdoll/lie: floating=146 blob_core=1
+PASS gold/stand: floating=961 blob_core=142
+PASS gold/walk: floating=483 blob_core=27
+PASS gold/lie: floating=6 blob_core=0
+PASS corgi/stand: floating=472 blob_core=7
+PASS corgi/walk: floating=25 blob_core=0
+PASS corgi/lie: floating=34 blob_core=0
+```
+
+## Step 7：15 个视频生成 + QA（45 视频单位，无重试）
+
+跑之前 `balance`：视频 79/100（online），图像 832/1000（online），足够 45 单位预算，未触发
+「不足 45 先停」规则。按简报要求布偶猫先做，逐条 `video` + `qa` 分开执行（每条视频约 70–120s）。
+**15/15 一次性通过 QA，全程 0 次重试，未触发"布偶猫 5 个全失败→停下问用户换品种"的分支。**
+
+扣费与剩余（`video` 命令输出的 `final_unit_deduction`/剩余单位行）：
+
+| 宠物 | 动作 | deduction | 单位说明 |
+|---|---|---|---|
+| ragdoll | stand | 3 | 76 units left |
+| ragdoll | walk | 3 | 73 units left |
+| ragdoll | sleep | 3 | 70 units left |
+| ragdoll | lick_paw | 3 | 67 units left |
+| ragdoll | act_cute | 3 | 64 units left |
+| gold | stand | 3 | 61 units left |
+| gold | walk | 3 | 58 units left |
+| gold | sleep | 3 | 55 units left |
+| gold | lick_paw | 3 | 52 units left |
+| gold | act_cute | 3 | 49 units left |
+| corgi | stand | 3 | 46 units left |
+| corgi | walk | 3 | 43 units left |
+| corgi | sleep | 3 | 40 units left |
+| corgi | lick_paw | 3 | 37 units left |
+| corgi | act_cute | 3 | 34 units left |
+
+每条 `qa` 的原始 JSON（`pass` 全为 `true`，格式全部 960x960 / 24fps / 121 帧）：
+
+```json
+{"pet": "ragdoll", "action": "stand", "pass": true, "format": {"width": 960, "height": 960, "fps": "24/1", "frames": 121}, "seam": 46.03, "worst_step": 39.58, "blob_core_first": 43, "blob_core_last": 27}
+{"pet": "ragdoll", "action": "walk", "pass": true, "format": {"width": 960, "height": 960, "fps": "24/1", "frames": 121}, "seam": 33.5, "worst_step": 31.94, "blob_core_first": 25, "blob_core_last": 103}
+{"pet": "ragdoll", "action": "sleep", "pass": true, "format": {"width": 960, "height": 960, "fps": "24/1", "frames": 121}, "seam": 48.98, "worst_step": 45.46, "blob_core_first": 1, "blob_core_last": 0}
+{"pet": "ragdoll", "action": "lick_paw", "pass": true, "format": {"width": 960, "height": 960, "fps": "24/1", "frames": 121}, "seam": 46.28, "worst_step": 29.08, "blob_core_first": 41, "blob_core_last": 40}
+{"pet": "ragdoll", "action": "act_cute", "pass": true, "format": {"width": 960, "height": 960, "fps": "24/1", "frames": 121}, "seam": 45.48, "worst_step": 32.21, "blob_core_first": 46, "blob_core_last": 28}
+{"pet": "gold", "action": "stand", "pass": true, "format": {"width": 960, "height": 960, "fps": "24/1", "frames": 121}, "seam": 45.72, "worst_step": 39.47, "blob_core_first": 135, "blob_core_last": 138}
+{"pet": "gold", "action": "walk", "pass": true, "format": {"width": 960, "height": 960, "fps": "24/1", "frames": 121}, "seam": 34.46, "worst_step": 31.1, "blob_core_first": 54, "blob_core_last": 50}
+{"pet": "gold", "action": "sleep", "pass": true, "format": {"width": 960, "height": 960, "fps": "24/1", "frames": 121}, "seam": 48.61, "worst_step": 42.07, "blob_core_first": 0, "blob_core_last": 0}
+{"pet": "gold", "action": "lick_paw", "pass": true, "format": {"width": 960, "height": 960, "fps": "24/1", "frames": 121}, "seam": 44.23, "worst_step": 28.58, "blob_core_first": 134, "blob_core_last": 126}
+{"pet": "gold", "action": "act_cute", "pass": true, "format": {"width": 960, "height": 960, "fps": "24/1", "frames": 121}, "seam": 44.68, "worst_step": 31.73, "blob_core_first": 139, "blob_core_last": 123}
+{"pet": "corgi", "action": "stand", "pass": true, "format": {"width": 960, "height": 960, "fps": "24/1", "frames": 121}, "seam": 46.37, "worst_step": 38.21, "blob_core_first": 16, "blob_core_last": 13}
+{"pet": "corgi", "action": "walk", "pass": true, "format": {"width": 960, "height": 960, "fps": "24/1", "frames": 121}, "seam": 46.53, "worst_step": 31.87, "blob_core_first": 0, "blob_core_last": 0}
+{"pet": "corgi", "action": "sleep", "pass": true, "format": {"width": 960, "height": 960, "fps": "24/1", "frames": 121}, "seam": 48.47, "worst_step": 44.55, "blob_core_first": 0, "blob_core_last": 0}
+{"pet": "corgi", "action": "lick_paw", "pass": true, "format": {"width": 960, "height": 960, "fps": "24/1", "frames": 121}, "seam": 45.33, "worst_step": 28.48, "blob_core_first": 22, "blob_core_last": 15}
+{"pet": "corgi", "action": "act_cute", "pass": true, "format": {"width": 960, "height": 960, "fps": "24/1", "frames": 121}, "seam": 45.1, "worst_step": 25.63, "blob_core_first": 18, "blob_core_last": 5}
+```
+
+收尾 `balance`：视频 34/100（online），图像 832/1000（online，未变，因为没有补拍姿态图）。
+本次任务实际花费：**视频 45 单位（15 条 × 3）、图像 0 单位**。
+
+## Step 8：抽查（肉眼）结论
+
+逐张查看 `work\<pet>-midframes.png`（每个动作第 60 帧，5 动作横排）：
+
+- **ragdoll**（`C:\Users\Administrator\code\aipet\tools\petgen\work\ragdoll-midframes.png`）：
+  5 张里是同一只猫——奶白色身体、深棕色重点色的脸/耳/尾、蓝眼睛，体型和花纹一致；
+  stand/walk/sleep/lick_paw/act_cute 的姿态都能对应各自的名字（尤其 sleep 完全趴下闭眼，
+  lick_paw 低头对着前爪，act_cute 抬起一只前爪）；背景 5 帧都是纯绿色，无阴影无地面。
+- **gold**（`C:\Users\Administrator\code\aipet\tools\petgen\work\gold-midframes.png`）：
+  5 张是同一只金毛——均匀金黄色毛、垂耳、体型一致；stand 站立、walk 迈步、sleep 趴地闭眼、
+  lick_paw 低头对着前爪、act_cute 站立歪头，动作与名字对应；背景 5 帧纯绿。
+- **corgi**（`C:\Users\Administrator\code\aipet\tools\petgen\work\corgi-midframes.png`）：
+  5 张是同一只柯基——橘白相间、大立耳、短腿，花纹一致；stand/walk/sleep/lick_paw/act_cute
+  动作分别对应站立、迈步、趴卧、低头舔爪、抬头歪耳，与名字相符；背景 5 帧纯绿。
+
+三只宠物均未观察到"明显不是同一只"或"动作对不上名字"的情况，Step 7 全部 15 条一次通过、
+未触发 Step 8 的重做规则。
+
+## 单位与余额小结
+
+| 资源包 | 起始 | 结束 | 本任务消耗 |
+|---|---|---|---|
+| 视频（试用-视频生成-100-5并发-1个月） | 79/100 | 34/100 | 45 |
+| 图像（试用-图像生成-1000-9并发-1个月） | 832/1000 | 832/1000 | 0 |
+
+## Git LFS 与提交
+
+- `.gitattributes` 单独先提交（commit `2becd71`），再打包素材、改 `pubspec.yaml`、写本节记录后
+  一并提交。
+- `git lfs ls-files` 应为 18 行（15 个 `.mp4` + 3 个 `cover.png`）；实测行数与结果见下方提交记录。
+- 关注点：`tools/petgen/work/`（含 `qa-*`、`*-midframes.png` 等中间产物）和 `.venv/` 均未加入
+  `git add`，未提交进仓库。
