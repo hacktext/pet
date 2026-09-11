@@ -252,11 +252,19 @@ PASS corgi/lie: floating=34 blob_core=0
 
 # Task 15 烟测
 
-记录时间：2026-09-11。环境同上（Flutter 3.47.2、Windows 11、屏幕缩放 150%）。
-`flutter build windows --release` 产物 `apps\aipet\build\windows\x64\runner\Release\aipet.exe`。
-两个烟测块均按简报 Step 8 的命令跑，`$env:APPDATA` 在同一次 PowerShell 调用内设置和使用。
+记录时间：2026-09-11（第一轮）/ 2026-09-11（fix round 1，runner 修复后重跑）。环境同上
+（Flutter 3.47.2、Windows 11、屏幕缩放 150%）。`flutter build windows --release` 产物
+`apps\aipet\build\windows\x64\runner\Release\aipet.exe`。
 
-## 烟测 1：全新 APPDATA（应只出现主窗口，关掉后进程退出）
+**第一轮的发现**：全新 APPDATA（无当前宠物）启动后，`aipet pet` 窗口的 `IsWindowVisible()`
+一直是 `true`（尽管内容全透明、不影响肉眼观感）。根因是 `windows/runner/flutter_window.cpp`
+未改动的 Flutter 模板逻辑 `SetNextFrameCallback([&]() { this->Show(); })`——首帧渲染完成后无
+条件调用原生 `Show()`，压过了 Dart 侧 `window_manager` 的 `hide()`。控制者裁定：这必须修，
+不能接受——因为一个 Win32 认为"可见、置顶、无边框"的透明窗口仍然会接鼠标点击，首次启动会在
+桌面上留一个 360×360 的死区。修复方式见 Fix round 1。以下先记录 fix round 1 之后的完整烟测
+结果（即最终状态），第一轮的原始记录见本节末尾的「第一轮记录（供参考）」。
+
+## Fix round 1 之后：烟测 1（全新 APPDATA，应只出现主窗口，关掉后进程退出）
 
 命令（合并成一次 PowerShell 调用，本记录为便于阅读把变量输出拆开展示，实际执行顺序与简报一致）：
 
@@ -280,7 +288,7 @@ Start-Sleep -Seconds 3
 ```
 Title       Visible   W    H Rect
 -----       -------   -    - ----
-aipet pet      True 540  540 15,15,555,555
+aipet pet     False 540  540 15,15,555,555
 aipet          True 630 1110 965,209,1595,1319
 MSCTFIME UI   False   0    0 0,0,0,0
 Default IME   False   0    0 0,0,0,0
@@ -291,7 +299,7 @@ Default IME   False   0    0 0,0,0,0
 ```
 Title       Visible   W    H Rect
 -----       -------   -    - ----
-aipet pet      True 540  540 15,15,555,555
+aipet pet     False 540  540 15,15,555,555
 aipet          True 630 1110 965,209,1595,1319
 MSCTFIME UI   False   0    0 0,0,0,0
 Default IME   False   0    0 0,0,0,0
@@ -303,59 +311,24 @@ posted WM_CLOSE to 'aipet'
 
 ```
 存活进程数（Threads.Count -gt 0）：0
-原始进程数（仅供参考）：6
+原始进程数（仅供参考）：7
 ```
 
 **与 Expected 的对照：**
 
 - 主窗口 `aipet` 可见、物理像素 630×1110（= 420×740 逻辑像素 × 150% 缩放）—— **符合**。
-- 关闭主窗口后进程数为 0（用 `Threads.Count -gt 0` 过滤的存活口径）—— **符合**（ruling 3c 的 STOP
-  条件未触发：主窗口 WM_CLOSE 之后没有存活的 `aipet` 进程）。
-- `aipet pet`（宠物窗）在没有当前宠物时应该**不可见**——**不符合**：两次列表里 `aipet pet` 都是
-  `Visible=True`。见下方「已知问题」。
-- 原始进程数（6）比存活数高，是历史几次调试运行遗留的 0-线程/0-句柄残余 pid（与 Task 1 结果文件
-  C9 记录的现象一致），`Stop-Process -Force` 对这些残余 pid 无效（同 C9 记录），不是本次运行新增
-  的活进程，不影响判定。
+- `aipet pet`（宠物窗）在没有当前宠物时**不可见**（`Visible=False`）—— **符合**（runner 修复
+  生效）。
+- 关闭主窗口后进程数为 0（`Threads.Count -gt 0` 过滤的存活口径）—— **符合**。
+- 原始进程数（7）比存活数高，是历史多次调试/重建过程中遗留的 0-线程/0-句柄残余 pid（与 Task 1
+  结果文件 C9 记录的现象一致，`Stop-Process -Force`/`taskkill` 对纯残余 pid 无效），重跑前已确认
+  当时没有存活（`Threads.Count -gt 0`）的旧进程，不影响本次判定。
 
-### 已知问题：`aipet pet` 在无当前宠物时仍是 Win32 可见状态
+## Fix round 1 之后：烟测 2（预置 settings.json，应只出现宠物，关掉后进程退出）
 
-**现象**：全新 APPDATA（没有 `currentPetId`）启动后，`aipet pet` 窗口的 `IsWindowVisible()` 一直
-返回 `true`，不符合简报 Step 8 逐字表述的「`aipet pet` 不可见」。
-
-**根因**：`windows/runner/flutter_window.cpp` 里未改动的 Flutter 官方模板逻辑
-`engine()->SetNextFrameCallback([&]() { this->Show(); })`——首帧渲染完成后无条件调用原生
-`Show()`，与 Dart 侧 `PetWindowController.boot()` / `_PetWindowAppState._syncVisibility()` 通过
-`window_manager` 发出的 `hide()` 调用互相竞争。`main_window_entry.dart`/`pet_window_app.dart` 严格
-按简报原样实现（`Shown only once there is a pet` 那行注释代表的设计假设是：新窗口默认不可见，
-可见性完全交给 `_syncVisibility`），但 `desktop_multi_window`/Flutter Windows 模板生成的
-`flutter_window.cpp` 从未针对这一假设做过调整（这与 Task 1 的 C1–C9 验证范围无关：那批用例全程
-都有宠物在播放，没有验证过"首次启动、无宠物"这一支路的可见性）。
-
-排查中做过两次不同思路的 Dart 侧尝试，均未能压过原生 `Show()`：
-
-1. 在 `_PetWindowAppState.initState()`里 `addListener` 之后立即同步调用一次 `_syncVisibility()`
-   （赶在 `controller.boot()` 第一次 `notifyListeners()` 因 widget 还未挂载而丢失时补上一次）——
-   仍然可见，说明这次 `hide()` 发生在原生首帧 `Show()` 之前，被后者盖过。
-2. 改为在 `SchedulerBinding.instance.addPostFrameCallback` 里调用 `_syncVisibility()`（确保在第一帧
-   构建完成之后再判断可见性，理论上应该晚于原生 `Show()`）——仍然可见，说明 Dart 侧的
-   `handleDrawFrame` 完成时间点仍然早于光栅线程真正把首帧提交给合成器、触发原生回调的时间点。
-
-第二次尝试的代码已保留在 `pet_window_app.dart`（`initState` 里的
-`SchedulerBinding.instance.addPostFrameCallback((_) => _syncVisibility())`，替换了简报原文的裸
-`_syncVisibility()` 调用），因为它是无害的防御性写法（对"已采纳宠物"等后续状态同步仍然正确），
-但**没有解决**这个原生竞态；彻底修复大概率需要改 `windows/runner/flutter_window.cpp`（跳过或延后
-首帧自动 `Show()`，把可见性完全交给 `window_manager`），这类 runner 改动不在本任务 Files 清单内，
-留给控制者判断是否在后续任务里授权。
-
-**实际影响评估为低**：`aipet pet` 窗口本身透明（`backgroundColor: Colors.transparent`、无边框、
-`Scaffold` 背景也是透明）、且没有宠物动画在播放（`ValueListenableBuilder` 渲染 `SizedBox.shrink()`），
-所以尽管 Win32 API 层面"可见"，实际画面上什么都不会画出来，用户在桌面上肉眼看不到任何东西——只有
-用 `EnumWindows`/`IsWindowVisible` 这类 API 才能探测到。烟测其余部分（主窗口正确出现、关闭后进程
-数为 0）均符合预期。
-
-## 烟测 2：预置 settings.json（应只出现宠物，关掉后进程退出）
-
-命令：
+按 fix round 1 要求，先轮询等待金毛 `stand` 的首次矩化完成（`matte-cache\v1` 下出现 `.aipmat`
+且 `.staging` 下没有残留 `*.tmp`），再发 `WM_CLOSE`，并且用 250ms 间隔轮询、记录从 `WM_CLOSE`
+到「存活进程数变 0」之间的耗时。命令（同一次 PowerShell 调用）：
 
 ```powershell
 $env:PATH = "C:\Users\Administrator\code\envs\flutter\bin;$env:PATH"
@@ -365,14 +338,23 @@ New-Item -ItemType Directory "$seeded\com.aipet\aipet" -Force | Out-Null
 '{"schema":1,"currentPetId":"builtin-gold","adoptedPetIds":["builtin-gold"]}' | Set-Content -Encoding ascii "$seeded\com.aipet\aipet\settings.json"
 $env:APPDATA = $seeded
 Start-Process .\build\windows\x64\runner\Release\aipet.exe
-Start-Sleep -Seconds 8
+$cacheDir = "$seeded\com.aipet\aipet\matte-cache\v1"
+$stagingDir = "$cacheDir\.staging"
+# poll every 250 ms up to 30 s for a *.aipmat with no *.tmp left in .staging
 powershell -ExecutionPolicy Bypass -File ..\..\tools\dev\windows.ps1
-Get-ChildItem "$seeded\com.aipet\aipet\matte-cache\v1" -Filter *.aipmat | Select-Object Name, Length
+Get-ChildItem $cacheDir -Filter *.aipmat | Select-Object Name, Length
+# poll every 250 ms up to 10 s from WM_CLOSE for live count == 0, record elapsed ms
 powershell -ExecutionPolicy Bypass -File ..\..\tools\dev\windows.ps1 -CloseTitle "aipet pet"
 Start-Sleep -Seconds 3
 @(Get-Process aipet -ErrorAction SilentlyContinue | Where-Object { $_.Threads.Count -gt 0 }).Count
 @(Get-Process aipet -ErrorAction SilentlyContinue).Count
 Remove-Item Env:APPDATA
+```
+
+矩化就绪轮询：
+
+```
+matting ready: True (waited 3957 ms)
 ```
 
 `windows.ps1`（关闭前）：
@@ -405,29 +387,43 @@ Default IME   False   0   0 0,0,0,0
 posted WM_CLOSE to 'aipet pet'
 ```
 
-3 秒后计数：
-
-```
-存活进程数（Threads.Count -gt 0）：0
-原始进程数（仅供参考）：5
-```
+从 `WM_CLOSE` 到「存活进程数（`Threads.Count -gt 0`）变 0」的耗时（250ms 轮询，最多 10s）：
+**3382 ms**。此后再等 3 秒复查，存活进程数仍为 0（原始进程数 8，同样是历史残余 pid）。
 
 **与 Expected 的对照：**
 
 - `aipet pet` 可见、且列表里没有 `aipet` 主窗口 —— **符合**（只有 `aipet pet` 一个有标题的顶层
   窗口）。
 - 缓存目录里恰好 1 个 `.aipmat`（金毛 `stand` 动作的矩化结果，53686843 字节）—— **符合**。
-- 向宠物窗发 `WM_CLOSE` 后进程数为 0 —— **符合**。第一次跑这一块时曾在 3 秒整这个时间点测到
-  存活数为 1（真实播放中的宠物需要多做 `AlphaVideoController.dispose()` 等清理，比烟测 1 的
-  "无宠物、瞬间退出"路径慢一点），几秒后复查该 pid 已经变成 0 线程/0 句柄的残余状态（与上面
-  C9 现象一致，不是卡死）；为了记录里给出一次干净复现，本节贴的是重跑后 3 秒整存活数即为 0 的
-  一次结果。两次跑的现象一致指向"偶尔比 3 秒慢一点，但确实会退出"，不是挂起。
+- 向宠物窗发 `WM_CLOSE` 后（等待矩化真正完成再关闭、且用精确耗时测量代替固定 3 秒断言）存活
+  进程数收敛到 0，耗时 3382 ms —— **符合**（比一次性的固定 3 秒判据略慢一点点，这也解释了
+  fix round 1 之前那次烟测 2 偶尔在 3 秒整测到存活数为 1 的现象：不是卡死，是这条退出路径
+  ——真播放中的宠物需要走 `AlphaVideoController.dispose()` 等清理——本来就比"无宠物瞬间退出"
+  慢，量级在 3.0–3.4 秒左右）。
 
 ## 小结
 
-- 两块烟测的「进程数为 0」「窗口标题/尺寸」核心断言均通过。
-- 唯一的字面偏差是烟测 1 里 `aipet pet` 在无宠物时仍报告 `Visible=True`（Win32 API 层面），根因
-  是 Flutter Windows 模板 `flutter_window.cpp` 的首帧自动 `Show()` 与 `window_manager` 的 `hide()`
-  之间的原生竞态，不在 Task 15 的文件清单内、也不属于"lint 允许的最小改动"范畴，留给控制者裁决；
-  由于窗口内容全透明、没有动画，用户肉眼在桌面上看不出区别。
+- Fix round 1 之后，两块烟测的全部字面 Expected（含 `aipet pet` 在无宠物时不可见）都已满足。
+- runner 修复：`windows/runner/flutter_window.cpp` 的 `SetNextFrameCallback` 不再自动
+  `Show()`，宠物窗的可见性完全由 `window_manager`（Dart 侧）决定；`initState` 里保留的
+  `SchedulerBinding.instance.addPostFrameCallback((_) => _syncVisibility())`
+  用来补上 `controller.boot()` 第一次 `notifyListeners()` 在 widget 挂载前就触发、因而丢失的
+  那次状态同步（不是用来跟原生 `Show()` 抢时序——原生已经不再自动显示了）。
 - 未观察到需要 STOP（ruling 3c）的情况：两块烟测在关闭对应窗口后最终都能把存活进程数收敛到 0。
+
+## 第一轮记录（供参考，问题已在 fix round 1 修复）
+
+烟测 1（关闭前 `windows.ps1`）：
+
+```
+Title       Visible   W    H Rect
+-----       -------   -    - ----
+aipet pet      True 540  540 15,15,555,555
+aipet          True 630 1110 965,209,1595,1319
+MSCTFIME UI   False   0    0 0,0,0,0
+Default IME   False   0    0 0,0,0,0
+```
+
+`aipet pet` 当时是 `Visible=True`（应为 `False`），其余（`aipet` 主窗口尺寸、关闭后进程数为 0）
+与 fix round 1 后一致。诊断细节、两次未成功的纯 Dart 侧尝试记录在 `task-15-report.md` 的
+「Fix round 1」一节。

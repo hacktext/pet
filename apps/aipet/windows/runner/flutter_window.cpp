@@ -35,8 +35,11 @@ bool FlutterWindow::OnCreate() {
   });
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
-  flutter_controller_->engine()->SetNextFrameCallback([&]() {
-    this->Show();
+  flutter_controller_->engine()->SetNextFrameCallback([]() {
+    // Deliberately not Show(): the Dart side (window_manager) owns this
+    // window's visibility -- the pet window appears only once there is a pet
+    // on the desktop (spec 3.3). desktop_multi_window sub-windows (the main
+    // window) do not use this class.
   });
 
   // Flutter can complete the first frame before the "show window" callback is

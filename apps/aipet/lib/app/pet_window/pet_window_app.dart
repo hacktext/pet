@@ -110,13 +110,12 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
     trayManager.addListener(this);
     windowManager.addListener(this);
     widget.controller.addListener(_syncVisibility);
-    // The runner shows the native window unconditionally once the engine's
-    // first frame is produced (flutter_window.cpp's SetNextFrameCallback),
-    // which can land after controller.boot()'s pre-first-frame notifyListeners
-    // and would otherwise leave a pet-less window visible forever (spec 3.3
-    // wants it hidden until a pet is on the desktop). Re-sync once that first
-    // frame has actually landed so a hide() here is the last word, not the
-    // native show()'s.
+    // runApp() defers mounting this State to a later event-loop turn, but
+    // controller.boot() runs synchronously up to its first notifyListeners()
+    // -- for a fresh, no-pet run that call fires before this listener is
+    // registered, so the starting state would otherwise never reach us. Sync
+    // once after the first frame so we pick up whatever boot() already
+    // decided.
     SchedulerBinding.instance.addPostFrameCallback((_) => _syncVisibility());
     unawaited(_setUpTray());
   }
