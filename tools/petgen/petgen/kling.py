@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -37,7 +38,15 @@ def _call(method: str, path: str, body: dict | None = None) -> dict:
         with urllib.request.urlopen(req, timeout=60) as r:
             return json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
-        return json.loads(e.read().decode("utf-8", "replace") or "{}")
+        try:
+            return json.loads(e.read().decode("utf-8", "replace") or "{}")
+        except (json.JSONDecodeError, ValueError):
+            body_text = e.read().decode("utf-8", "replace")[:200]
+            return {"code": e.code, "message": body_text}
+    except urllib.error.URLError as e:
+        raise KlingError(f"network error: {e.reason}")
+    except socket.timeout as e:
+        raise KlingError(f"request timeout: {e}")
 
 
 def b64(path: Path) -> str:
@@ -61,7 +70,10 @@ def create_video(body: dict) -> str:
 
 def wait(kind: str, task_id: str, every: float = 8.0, limit: int = 120) -> dict:
     for _ in range(limit):
-        d = _call("GET", f"{_PATHS[kind]}/{task_id}").get("data") or {}
+        res = _call("GET", f"{_PATHS[kind]}/{task_id}")
+        if res.get("code") != 0:
+            raise KlingError(f"{kind} task {task_id} error: code={res.get('code')} {res.get('message')}")
+        d = res.get("data") or {}
         if d.get("task_status") == "succeed":
             return d
         if d.get("task_status") == "failed":
