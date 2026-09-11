@@ -19,7 +19,12 @@ PrepareQueue::~PrepareQueue() {
   // The worker is gone, so jobs_ now holds only jobs that never started.
   for (auto& [dst, job] : jobs_) {
     for (auto& done : job.waiters) {
-      post_([done] { done(Outcome{kCancelled, "cancelled"}); });
+      try {
+        post_([done] { done(Outcome{kCancelled, "cancelled"}); });
+      } catch (...) {
+        // A failing post is swallowed: the Done is lost, but terminating the app
+        // is worse. The Dart side has its own timeouts to recover.
+      }
     }
   }
   jobs_.clear();
@@ -70,7 +75,12 @@ void PrepareQueue::Run() {
     jobs_.erase(dst);
     lk.unlock();
     for (auto& done : waiters) {
-      post_([done, out] { done(out); });
+      try {
+        post_([done, out] { done(out); });
+      } catch (...) {
+        // A failing post is swallowed: the Done is lost, but terminating the app
+        // is worse. The Dart side has its own timeouts to recover.
+      }
     }
     lk.lock();
   }

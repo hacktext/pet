@@ -25,7 +25,12 @@ inline constexpr int32_t kCancelled = -100;
 // hands every result back through `post`, never on the worker itself (the
 // plugin's post lands on the platform thread, the only place a Flutter
 // MethodResult may be answered). Jobs are keyed by destination: a Submit for a
-// destination that is already queued or running only adds a waiter.
+// destination that is already queued or running only adds a waiter; the
+// destination's first src and edge parameters are used (later submissions' are
+// ignored).
+//
+// Constraints on `post`: must not run the Task synchronously/reentrantly (the
+// destructor iterates jobs_ without the lock after joining the worker).
 class PrepareQueue {
  public:
   using Work = std::function<Outcome(const std::wstring& src, const std::wstring& dst, uint32_t edge)>;

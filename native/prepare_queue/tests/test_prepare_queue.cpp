@@ -188,3 +188,28 @@ TEST(PrepareQueue, DestructorWaitsForTheRunningJobAndCancelsThePending) {
   EXPECT_EQ(codes, (std::vector<int32_t>{0, kCancelled}));
   EXPECT_EQ(gate.started().size(), 1u) << "the pending job must never start once teardown began";
 }
+
+TEST(PrepareQueue, PostFailureDoesNotKillTheWorker) {
+  Inbox inbox;
+  Gate gate;
+  gate.Open();
+  std::vector<Outcome> got;
+  bool first_call = true;
+  auto throwing_poster = [&](PrepareQueue::Task t) {
+    if (first_call) {
+      first_call = false;
+      throw std::runtime_error("post failed");
+    }
+    // Forward to inbox after first call
+    inbox.poster()(std::move(t));
+  };
+  PrepareQueue q(gate.work(0), throwing_poster);
+  q.Submit(L"a.mp4", L"a", 720, [&](const Outcome& o) { got.push_back(o); });
+  q.Submit(L"b.mp4", L"b", 720, [&](const Outcome& o) { got.push_back(o); });
+  ASSERT_TRUE(inbox.WaitFor(1));
+  inbox.Drain();
+  // The first result (a) is lost because its post threw, but b's result arrives
+  EXPECT_EQ(got.size(), 1u);
+  EXPECT_EQ(got[0].code, 0);
+  EXPECT_EQ(gate.started().size(), 2u) << "both a and b should have been worked on";
+}
