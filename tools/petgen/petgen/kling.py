@@ -38,11 +38,11 @@ def _call(method: str, path: str, body: dict | None = None) -> dict:
         with urllib.request.urlopen(req, timeout=60) as r:
             return json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
+        body_text = e.read().decode("utf-8", "replace")
         try:
-            return json.loads(e.read().decode("utf-8", "replace") or "{}")
+            return json.loads(body_text or "{}")
         except (json.JSONDecodeError, ValueError):
-            body_text = e.read().decode("utf-8", "replace")[:200]
-            return {"code": e.code, "message": body_text}
+            return {"code": e.code, "message": body_text[:200]}
     except urllib.error.URLError as e:
         raise KlingError(f"network error: {e.reason}")
     except socket.timeout as e:

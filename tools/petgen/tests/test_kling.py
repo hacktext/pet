@@ -1,3 +1,5 @@
+import io
+import json
 import pytest
 import urllib.error
 
@@ -77,23 +79,35 @@ class TestWait:
 
 class TestCall:
     def test_non_json_http_error_returns_dict(self, monkeypatch):
-        """_call returns error dict when HTTPError body is non-JSON."""
-        html_body = "<html><body>502 Bad Gateway</body></html>"
+        """_call returns error dict when HTTPError body is non-JSON HTML (body read once)."""
+        html_body = "<html><body>502 Bad Gateway - the server is temporarily unavailable</body></html>"
 
         def mock_urlopen(req, timeout=None):
-            err = urllib.error.HTTPError("https://example.invalid", 502, "Bad Gateway", {}, None)
-            # Mock the read() method to return non-JSON HTML
-            err.read = lambda: html_body.encode()
-            raise err
+            # Create a real HTTPError with fp that can only be read once
+            fp = io.BytesIO(html_body.encode())
+            raise urllib.error.HTTPError("https://example.invalid", 502, "Bad Gateway", {}, fp)
 
         monkeypatch.setattr(kling.urllib.request, "urlopen", mock_urlopen)
 
         result = kling._call("GET", "/v1/images/generations/task-1")
 
         assert result["code"] == 502
-        assert "502" in result["message"] or "Bad Gateway" in result["message"]
-        # Check that message is truncated to ~200 chars
-        assert len(result["message"]) <= 250
+        # Message should be the first 200 chars of the HTML body
+        assert result["message"] == html_body[:200]
+
+    def test_json_http_error_returns_parsed_dict(self, monkeypatch):
+        """_call returns parsed JSON dict when HTTPError body is JSON."""
+        json_body = '{"code": 1201, "message": "invalid request"}'
+
+        def mock_urlopen(req, timeout=None):
+            fp = io.BytesIO(json_body.encode())
+            raise urllib.error.HTTPError("https://example.invalid", 400, "Bad Request", {}, fp)
+
+        monkeypatch.setattr(kling.urllib.request, "urlopen", mock_urlopen)
+
+        result = kling._call("POST", "/v1/images/generations")
+
+        assert result == {"code": 1201, "message": "invalid request"}
 
     def test_urlerror_raises_kling_error(self, monkeypatch):
         """_call raises KlingError when URLError occurs."""
