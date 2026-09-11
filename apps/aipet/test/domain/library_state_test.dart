@@ -26,6 +26,9 @@ void main() {
     test('current pet is the companion', () => expect(of('a'), CardStatus.companion));
     test('adopted but not current can be switched to', () => expect(of('b'), CardStatus.switchable));
     test('never adopted can be adopted', () => expect(of('z'), CardStatus.adoptable));
+    test('preparing also wins over an adopted, non-current pet', () {
+      expect(cardStatusFor(petId: 'b', complete: true, state: s.preparing('b')), CardStatus.preparing);
+    });
   });
 
   test('adopted() makes the pet current, records it once, clears preparing', () {
