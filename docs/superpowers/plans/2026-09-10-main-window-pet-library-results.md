@@ -401,15 +401,113 @@ posted WM_CLOSE to 'aipet pet'
   ——真播放中的宠物需要走 `AlphaVideoController.dispose()` 等清理——本来就比"无宠物瞬间退出"
   慢，量级在 3.0–3.4 秒左右）。
 
-## 小结
+## Fix round 1 part 2：退出耗时诊断（A9 的 3 秒预算）
 
-- Fix round 1 之后，两块烟测的全部字面 Expected（含 `aipet pet` 在无宠物时不可见）都已满足。
-- runner 修复：`windows/runner/flutter_window.cpp` 的 `SetNextFrameCallback` 不再自动
-  `Show()`，宠物窗的可见性完全由 `window_manager`（Dart 侧）决定；`initState` 里保留的
-  `SchedulerBinding.instance.addPostFrameCallback((_) => _syncVisibility())`
-  用来补上 `controller.boot()` 第一次 `notifyListeners()` 在 widget 挂载前就触发、因而丢失的
-  那次状态同步（不是用来跟原生 `Show()` 抢时序——原生已经不再自动显示了）。
-- 未观察到需要 STOP（ruling 3c）的情况：两块烟测在关闭对应窗口后最终都能把存活进程数收敛到 0。
+Fix round 1 的烟测 2 测得 WM_CLOSE → 存活进程数为 0 耗时 3382 ms，超过 A9 的 3 秒预算。按控制者
+要求，先用临时计时代码测量耗时具体花在哪一步，再决定是否要改代码——不能盲目改。
+
+### 测量方法（临时代码，未提交）
+
+在 `quit()`（`pet_window_app.dart`）里加了一个 `Stopwatch` 和四个时间戳标记（`enter` /
+`player.dispose done` / `tray destroy done` / `before windowManager.destroy`），同步写入
+`%TEMP%\aipet-quit-timing.txt`。复用同一个预置了金毛设置的 APPDATA 目录（先跑一次让
+`stand.aipmat` 缓存生效，进入"稳态"），随后做 3 次独立测量：每次单独一个 PowerShell 调用，
+启动 → 等 `aipet pet` 出现 → 再等 3 秒 → 发 `WM_CLOSE` 并记录外部耗时（100ms 轮询直到存活进程数
+为 0）→ 打印计时文件。
+
+### 测量结果（3 次，稳态，金毛 `stand`）
+
+| 次数 | 外部耗时（WM_CLOSE → 存活数为 0） | `enter`→`player.dispose done` | →`tray destroy done` | →`before windowManager.destroy` | `windowManager.destroy()` 及之后（差值） |
+|---|---|---|---|---|---|
+| 1 | 3232 ms | +6 ms | +10 ms | +14 ms | ≈ 3218 ms |
+| 2 | 3297 ms | +5 ms | +9 ms | +13 ms | ≈ 3284 ms |
+| 3 | 3185 ms | +5 ms | +10 ms | +13 ms | ≈ 3172 ms |
+
+三次的 Dart 侧总耗时（`enter` 到 `before windowManager.destroy`）都在 **13–14 ms**，而外部总耗时
+在 **3185–3297 ms**——超过 **99.5%** 的时间都发生在 `await windowManager.destroy()` 这一句调用
+本身（等它的 Future 完成）以及/或者它返回之后的引擎关闭、插件析构、进程退出阶段，不在
+`player.dispose()` / `trayManager.destroy()` 这两步串行 `await` 里。
+
+### 诊断结论
+
+审阅者提出的候选修复（`player.dispose()` 和 `trayManager.destroy()` 用 `Future.wait` 并发跑）
+即使完全生效，最多也只能省下这两步之间的几毫秒（9–10 ms 量级），相对 3.2 秒的总耗时可以忽略
+不计——它们不是耗时主因，改了也达不到 ≤2.5 秒的目标。真正的耗时在
+`windowManager.destroy()`（原生 `window_manager` 插件的销毁实现）及其之后的引擎收尾 / 进程退出，
+这部分代码不属于本任务 Dart 层，按控制者给出的分支规则（"如果 post-destroy 占主导：STOP，不要
+在没有裁决的情况下改原生插件或 runner"）——**这里 STOP，不做 Dart 侧的并发改动（因为它救不了
+真正的耗时来源），也没有改 `window_manager` 插件或 runner 的销毁逻辑**，如实汇报数字，交给控制者
+裁决是否要为此另开任务去看 `window_manager` 插件内部或者换一种退出方式（比如不经过
+`window_manager.destroy()`、直接调用更底层的进程退出 API）。
+
+### 本轮改动 vs 未改动
+
+- **改了**：`apps/aipet/windows/runner/flutter_window.cpp` 里 `ForceRedraw()` 上方的注释
+  （review Minor 2）——原注释还在说"确保窗口显示"，但窗口现在默认隐藏、可见性完全交给 Dart，
+  注释已更新为准确描述（保留一次待渲染的帧，让引擎即使窗口隐藏也能渲染、从而触发
+  `SetNextFrameCallback`）。`ForceRedraw()` 调用本身未变。
+- **没改**：`quit()` 的实现——诊断显示 Dart 侧三步（`player.dispose` / `trayManager.destroy` /
+  两者之间的调度开销）总共只占 13–14 ms，不是瓶颈，所以没有做 `Future.wait` 并发化或任何其他
+  quit() 内部改动（那样做不会解决真正的耗时来源，只会遮盖诊断结果）。
+- 计时代码（`Stopwatch`、`aipet-quit-timing.txt` 写入）已完全移除，`pet_window_app.dart` 与
+  `fix round 1` 提交（`38d8ce4`）时的内容逐字一致（用 `git diff` 核实过没有残留）。
+
+### 最终重跑（非插桩构建）：烟测 2
+
+用移除计时代码后重新构建的 `aipet.exe` 又跑了一遍完整的烟测 2（新的随机 APPDATA 目录，
+先轮询等待金毛 `stand` 矩化完成再关闭）：
+
+```
+matting ready: True
+```
+
+`windows.ps1`（关闭前）：
+
+```
+Title       Visible   W   H Rect
+-----       -------   -   - ----
+aipet pet      True 540 540 15,15,555,555
+MSCTFIME UI   False   0   0 0,0,0,0
+Default IME   False   0   0 0,0,0,0
+```
+
+缓存目录列表：
+
+```
+Name                                         Length
+----                                         ------
+3e685ebed97fd730ebbb3b74ca785ef9-p1.aipmat 53686843
+```
+
+`windows.ps1 -CloseTitle "aipet pet"`：
+
+```
+Title       Visible   W   H Rect
+-----       -------   -   - ----
+aipet pet      True 540 540 15,15,555,555
+MSCTFIME UI   False   0   0 0,0,0,0
+Default IME   False   0   0 0,0,0,0
+
+posted WM_CLOSE to 'aipet pet'
+```
+
+从 `WM_CLOSE` 到存活进程数为 0：**3509 ms**（100ms 轮询）；此后再等 3 秒复查仍为 0（原始进程数
+11，历史残余 pid，不影响判定）。这个数字与上面 3 次诊断测量（3185–3297 ms）同一量级，
+进一步印证退出耗时是这条路径本身稳定的特征，不是偶发抖动。
+
+### 退出耗时对照表（本轮修复前 / 本轮结论后——注意本轮未对 quit() 做代码改动）
+
+| | 外部耗时（WM_CLOSE → 存活数 0） | 说明 |
+|---|---|---|
+| Fix round 1 烟测 2（改 runner 之后，未诊断） | 3382 ms | 触发本轮诊断的原始读数 |
+| 诊断测量 #1（稳态，插桩版） | 3232 ms | Dart 侧仅 14 ms |
+| 诊断测量 #2（稳态，插桩版） | 3297 ms | Dart 侧仅 13 ms |
+| 诊断测量 #3（稳态，插桩版） | 3185 ms | Dart 侧仅 13 ms |
+| 最终重跑（移除插桩后的正式构建） | 3509 ms | 与上面同一量级，未改 quit() 代码 |
+
+**结论：退出耗时稳定在约 3.2–3.5 秒，未达到 ≤2.5 秒的目标；根因在 `windowManager.destroy()`
+本身及其后的引擎/进程收尾，不在本任务 Dart 代码里，按裁决规则本轮不做进一步改动，等待控制者
+决定是否要为 `window_manager` 插件或替代退出方式单开任务。**
 
 ## 第一轮记录（供参考，问题已在 fix round 1 修复）
 

@@ -42,9 +42,11 @@ bool FlutterWindow::OnCreate() {
     // window) do not use this class.
   });
 
-  // Flutter can complete the first frame before the "show window" callback is
-  // registered. The following call ensures a frame is pending to ensure the
-  // window is shown. It is a no-op if the first frame hasn't completed yet.
+  // Flutter can complete the first frame before SetNextFrameCallback above is
+  // registered. This keeps a frame pending so the engine still renders (and
+  // fires that callback) even though the window itself starts hidden --
+  // visibility is owned by the Dart side, not by this native code. It is a
+  // no-op if the first frame hasn't completed yet.
   flutter_controller_->ForceRedraw();
 
   return true;
