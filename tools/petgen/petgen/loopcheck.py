@@ -29,6 +29,10 @@ def _psnr_avgs(stats: Path) -> list[float]:
 def psnr_series(video: Path, workdir: Path) -> tuple[list[float], list[float]]:
     """Per-frame PSNR against frame 0, and between consecutive frames.
 
+    Frame 0 is extracted from the decoded stream (not PNG round-trip) to keep
+    both series on the same codec scale; a PNG extracted and re-looped as reference
+    introduces quantization artifacts (~56 dB) that don't reflect real video quality.
+
     ffmpeg runs with cwd=workdir and relative stats-file names: a Windows
     path's drive colon would break the filtergraph syntax."""
     workdir.mkdir(parents=True, exist_ok=True)
@@ -37,9 +41,8 @@ def psnr_series(video: Path, workdir: Path) -> tuple[list[float], list[float]]:
     def run(args: list[str]) -> None:
         subprocess.run(["ffmpeg", "-v", "error", *args], check=True, cwd=workdir)
 
-    run(["-y", "-i", str(video), "-frames:v", "1", "f0.png"])
-    run(["-i", str(video), "-loop", "1", "-i", "f0.png", "-filter_complex",
-         "[1:v]format=yuv420p[r];[0:v]format=yuv420p[m];[m][r]psnr=stats_file=vs_f0.log:shortest=1",
+    run(["-i", str(video), "-filter_complex",
+         "[0:v]split[a][b];[b]trim=end_frame=1,loop=loop=-1:size=1:start=0[f0];[a][f0]psnr=stats_file=vs_f0.log:shortest=1",
          "-f", "null", "-"])
     run(["-i", str(video), "-filter_complex",
          "[0:v]split[a][b];[b]trim=start_frame=1,setpts=PTS-STARTPTS[b1];[a][b1]psnr=stats_file=consec.log:shortest=1",
