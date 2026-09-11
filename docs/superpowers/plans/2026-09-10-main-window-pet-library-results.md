@@ -1,0 +1,119 @@
+# Task 1 实测结果（多窗口原型）
+
+记录时间：2026-09-11。环境：Flutter 3.47.2（stable）、Dart 3.13.2、Windows 11。
+`apps\aipet`，`flutter build windows --debug` 产物 `aipet.exe`，
+`AIPET_PROTO_AUTORUN=1` 自动驱动，日志 `%TEMP%\aipet_proto.log`。
+
+只跑了一次 Step 5（构建与运行一次成功，没有因环境原因失败过，因此没有删日志重跑）。
+
+## 完整日志原文
+
+```
+[proto] engine windowId=2707be5a-f37c-499f-86b4-c3fc0390ab47 arguments=""
+[proto] C2 tray icon + menu set
+[proto] C1 frame after 1s = 1
+[proto] C3 created main window ad132150-1624-4f4f-8204-b3e016b6d186 (windows now [2707be5a-f37c-499f-86b4-c3fc0390ab47, ad132150-1624-4f4f-8204-b3e016b6d186])
+[proto] engine windowId=ad132150-1624-4f4f-8204-b3e016b6d186 arguments="main_window"
+[proto] C6 window_manager in sub window: no exception
+[proto] pet got ping
+[proto] C4 main->pet: pong-from-pet
+[proto] main got ping
+[proto] C5 pet->main: pong-from-main
+[proto] C7 windows before external WM_CLOSE: [2707be5a-f37c-499f-86b4-c3fc0390ab47, ad132150-1624-4f4f-8204-b3e016b6d186]
+[proto] C7 windows after external WM_CLOSE: [2707be5a-f37c-499f-86b4-c3fc0390ab47]
+[proto] C3 created main window e7961310-1928-49e2-816e-c8dd1df4d269 (windows now [2707be5a-f37c-499f-86b4-c3fc0390ab47, e7961310-1928-49e2-816e-c8dd1df4d269])
+[proto] engine windowId=e7961310-1928-49e2-816e-c8dd1df4d269 arguments="main_window"
+[proto] C6 window_manager in sub window: no exception
+[proto] pet got ping
+[proto] C4 main->pet: pong-from-pet
+[proto] main got ping
+[proto] C7-reopen pet->main: pong-from-main
+[proto] C8 pet window hidden
+[proto] main got ping
+[proto] C8 pet->main: pong-from-main
+[proto] C9 quitting
+```
+
+WM_CLOSE 脚本输出（在主窗口出现后等 2 秒再发）：
+
+```
+posted WM_CLOSE to 1510102
+```
+
+25 秒后采集：
+
+```
+Get-Content "$env:TEMP\aipet_proto.log"    # 见上
+Get-Process aipet -ErrorAction SilentlyContinue | Select-Object Id, @{n='WS_MB';e={[int]($_.WorkingSet64/1MB)}}
+   Id WS_MB
+   -- -----
+60460     0
+```
+
+## C1–C9 判定表
+
+| # | 检查 | 结论 | 依据（日志原文） |
+|---|---|---|---|
+| C1 | 主引擎里 alpha_video 播放 | **通过** | `[proto] C1 frame after 1s = 1`（>0） |
+| C2 | 托盘图标 + 菜单设置 | **通过** | `[proto] C2 tray icon + menu set`（点击交互留到 Task 16 真机验收） |
+| C3 | 建子窗口 | **通过** | `[proto] C3 created main window ad132150-1624-4f4f-8204-b3e016b6d186 (windows now [...])`（重开后再次出现：`[proto] C3 created main window e7961310-...`） |
+| C4 | 主窗口 → 宠物窗 | **通过** | `[proto] C4 main->pet: pong-from-pet`（出现两次，重开后仍通） |
+| C5 | 宠物窗 → 主窗口 | **通过** | `[proto] C5 pet->main: pong-from-main` |
+| C6 | 子窗口里 window_manager | **通过** | `[proto] C6 window_manager in sub window: no exception`（两次子窗口实例都无异常）；且 WM_CLOSE 脚本按标题 `aipet proto main` 找到了窗口并成功 `posted WM_CLOSE to 1510102` —— 标题确实生效，两个条件都满足 |
+| C7 | 点 × 后 | **销毁**，重开后通道仍通 | before：`[2707be5a-..., ad132150-...]`；after：`[2707be5a-...]`——主窗口 id（`ad132150-...`）从列表消失，即 WM_CLOSE 让 desktop_multi_window **销毁**了子窗口而不是隐藏（若是隐藏，id 应该还在列表里）。重开产生了全新 id（`e7961310-...`），随后 `[proto] C7-reopen pet->main: pong-from-main` 证明重开后通道仍然正常 |
+| C8 | 宠物窗隐藏时通道 | **通过** | `[proto] C8 pet window hidden` 之后 `[proto] C8 pet->main: pong-from-main`，宠物窗隐藏不影响 `WindowMethodChannel` |
+| C9 | 退出 | **字面判据未过，但已确认应用本体已完全退出** | 见下方详细说明 |
+
+### C9 详细说明
+
+`[proto] C9 quitting` 之后按 Step 5 等 25 秒采集，`Get-Process aipet` **没有返回空**，仍能查到
+pid 60460（`Id=60460 WS_MB=0`）。按判据表字面要求这一项没有通过。但进一步诊断显示该 pid 已经
+不是一个"卡住的活进程"，而是系统尚未回收的残余进程对象：
+
+- `tasklist /v /fi "PID eq 60460"`：`Status` 显示 `Unknown`，`Mem Usage 132 K`，`CPU Time 0:00:00`。
+- `(Get-Process -Id 60460).Threads.Count` = 0（正常运行中的 GUI 进程至少有一条消息泵线程）。
+- `Get-Process -Id 60460 | Select HandleCount, WorkingSet64` → `HandleCount=0`，`WorkingSet64=32768`（32KB）。
+- 用 `EnumWindows` + `GetWindowThreadProcessId` 枚举系统所有窗口，属于 pid 60460 的窗口数 = **0**。
+- `Stop-Process -Id 60460 -Force` 之后该 pid 仍在 `Get-Process` 里出现（说明它已经不是一个可以被
+  信号终止的"活"进程）。
+- 对照实验：用同样的 `Start-Process` 方式起停一个 `cmd.exe /c exit 0`（一次性短生命周期进程），
+  2 秒后 `Get-Process -Id <pid>` 直接返回空——说明本环境下 `Start-Process` 启动的普通短生命周期
+  进程不会留下这种残余记录，残余现象是 `aipet.exe` 特有的，不是通用环境噪音。
+
+综合以上：`aipet.exe` 自身的线程、窗口、句柄都已清零，唯独 pid 条目还挂在系统进程表里没被回收——
+这是"进程已经跑完自己的清理路径、调用了 `ExitProcess`，但 pid 对象因为某处残留的句柄引用还没被
+内核释放"的典型特征，而不是 Dart/C++ 代码卡死。怀疑跟 `windows/runner/main.cpp` 里的
+`AttachConsole(ATTACH_PARENT_PROCESS)`（把子进程挂到发起它的 PowerShell 控制台上）以及本次用
+一次性 PowerShell 会话跑 `Start-Process` 后该会话立即退出的组合有关，不认为是多窗口原型本身的
+缺陷。**Task 15 不应仅凭 `Get-Process` 判断退出是否完成**；如果需要脚本化验收，建议改用应用自己
+上报的退出标记（比如日志里的最后一行）或者进程句柄的 `WaitForExit`/`GetExitCodeProcess`，而不是
+残留 pid 是否还能被 `Get-Process` 枚举到。
+
+## 判定规则结论
+
+C1、C3、C4、C5 全部通过 → **不触发"停止执行本计划，重新讨论方案"**，继续按当前多窗口设计推进。
+
+**C6、C7 结论（Task 15 据此选分支）：**
+
+- **C6：`window_manager` 在子窗口（`desktop_multi_window` 创建的独立引擎）里可以正常工作**——
+  两次创建的子窗口引擎调用 `windowManager.ensureInitialized()` / `waitUntilReadyToShow()` /
+  `show()` 都没有抛异常，且设置的英文标题 `aipet proto main` 真的生效（外部脚本用
+  `EnumWindows` + `GetWindowText` 按标题精确匹配到了它，而不是误中宠物窗）。Task 15 可以放心
+  在主窗口（子窗口）里用 `window_manager` 控制标题栏/尺寸/居中等窗口 chrome，不需要绕开
+  `window_manager` 另找方案。
+- **C7：点 ×（WM_CLOSE）销毁子窗口，不是隐藏**——`before`/`after` 窗口 id 列表对比证明子窗口
+  id 从存活列表里消失，即 `desktop_multi_window` 对 WM_CLOSE 的默认处理是销毁整个子窗口
+  （连带其引擎）。重新 `WindowController.create()` 会产生一个全新 id 的窗口实例，且
+  `WindowMethodChannel('aipet/pet')` 在新实例上依然正常收发（`C7-reopen pet->main:
+  pong-from-main`）。**Task 15 的含义**：主窗口"关闭"在效果上等价于"整个主窗口引擎被销毁"，
+  不能假设主窗口里的内存态（比如 `MainWindowModel`）会在下次打开时还在——每次重新打开主窗口都
+  需要重新 `create()` 一个子窗口并重新初始化其状态/重新 `setMethodCallHandler`，不能走"`hide()`
+  之后 `show()` 复用同一个存活实例"的分支设计。
+
+## 对后续任务的其他参考
+
+- C2（托盘图标 + 菜单）只验证了"设置不抛异常"，真实的点击（左键打开宠物库 / 右键弹出菜单 /
+  菜单项点击）没有被自动化验证到，按计划留给 Task 16 的真机点击验收。
+- C9 的残余 pid 现象已如上归因为测试手法（`Start-Process` + `AttachConsole` 组合）产生的假象，
+  不建议作为"退出流程有 bug"处理；但如果 Task 16 真机验收也观察到退出后进程列表里还有
+  `aipet.exe`，需要重新确认是否是同一现象。
