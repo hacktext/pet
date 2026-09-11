@@ -70,18 +70,18 @@ get_filename_component(AIPET_NATIVE_DIR "${AIPET_REPO_WINDOWS_DIR}/../../../nati
 # fetched for this Flutter-embedded build).
 set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 
-# EXCLUDE_FROM_ALL: native/'s five test executables (pcmat_tests,
-# matte_core_tests, mf_decode_tests, pet_matte_tests, frame_source_tests)
-# and GoogleTest's own targets are added via plain add_executable with no
-# guard of their own, so without this they would join the parent project's
-# default ALL target and get compiled on every ordinary flutter
-# build/run/test -d windows. This only excludes native_build's own
-# default-build targets; ${PLUGIN_NAME} still links pet_matte and
-# frame_source below, so CMake still builds those (and their dependencies
-# matte_core, mf_decode, pcmat, lz4_static) on demand, as dependencies of a
-# target that IS in ALL.
+# EXCLUDE_FROM_ALL: native/'s six test executables (pcmat_tests,
+# matte_core_tests, mf_decode_tests, pet_matte_tests, frame_source_tests,
+# prepare_queue_tests) and GoogleTest's own targets are added via plain
+# add_executable with no guard of their own, so without this they would join
+# the parent project's default ALL target and get compiled on every ordinary
+# flutter build/run/test -d windows. This only excludes native_build's own
+# default-build targets; ${PLUGIN_NAME} still links pet_matte, frame_source
+# and prepare_queue below, so CMake still builds those (and their
+# dependencies matte_core, mf_decode, pcmat, lz4_static) on demand, as
+# dependencies of a target that IS in ALL.
 add_subdirectory("${AIPET_NATIVE_DIR}" native_build EXCLUDE_FROM_ALL)
-target_link_libraries(${PLUGIN_NAME} PRIVATE pet_matte frame_source)
+target_link_libraries(${PLUGIN_NAME} PRIVATE pet_matte frame_source prepare_queue)
 
 # Symbols are hidden by default to reduce the chance of accidental conflicts
 # between plugins. This should not be removed; any symbols that should be

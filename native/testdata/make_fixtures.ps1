@@ -21,3 +21,12 @@ ffmpeg -y -f lavfi -i "color=c=0x00FF00:s=320x320:d=1:r=24" `
   -filter_complex "[0:v][1:v]overlay=x='40+n*6':y=40:shortest=1,gblur=sigma=1" `
   -c:v libx264 -pix_fmt yuv420p -an $out
 Write-Host "wrote $out"
+
+# A slow fixture for the async-prepare test: 1280x1280, 5 s, so a blocking
+# prepare holds the platform thread long enough to measure.
+$long = Join-Path $PSScriptRoot "green_box_long.mp4"
+ffmpeg -y -f lavfi -i "color=c=0x00FF00:s=1280x1280:d=5:r=24" `
+  -f lavfi -i "color=c=white:s=300x300:d=5:r=24" `
+  -filter_complex "[0:v][1:v]overlay=x='100+n*6':y=200:shortest=1,gblur=sigma=1" `
+  -c:v libx264 -pix_fmt yuv420p -an $long
+Write-Host "wrote $long"

@@ -8,6 +8,14 @@
 #include <map>
 #include <memory>
 
+// HWND in STRICT mode is HWND__*, so the header can name it without pulling
+// in <windows.h>.
+struct HWND__;
+
+namespace prepare_queue {
+class PrepareQueue;
+}  // namespace prepare_queue
+
 namespace alpha_video {
 
 // Defined in alpha_video_plugin.cpp. Opaque here: the header only needs to
@@ -66,6 +74,16 @@ class AlphaVideoPlugin : public flutter::Plugin {
   // still alive, instead of relying on DLL_PROCESS_DETACH ordering that a
   // static's destructor cannot control. See C-2 in the final review.
   std::map<int64_t, std::shared_ptr<Clip>> clips_;
+
+  // Message-only window created on the platform thread. Worker-thread
+  // prepare results are PostMessage'd here so that the MethodResult reply
+  // runs on the platform thread, the only thread Flutter allows it on.
+  HWND__* message_window_ = nullptr;
+
+  // Single-worker queue running pet_matte_prepare off the platform thread
+  // (spec 6). Null only if message_window_ could not be created, in which
+  // case "prepare" falls back to the old blocking call.
+  std::unique_ptr<prepare_queue::PrepareQueue> prepare_queue_;
 };
 
 }  // namespace alpha_video

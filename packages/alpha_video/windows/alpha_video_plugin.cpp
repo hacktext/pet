@@ -5,6 +5,9 @@
 
 #include "frame_source/frame_source.h"
 #include "pet_matte/pet_matte.h"
+#include "prepare_queue/prepare_queue.h"
+
+#include <objbase.h>
 
 #include <flutter/method_channel.h>
 #include <flutter/plugin_registrar_windows.h>
@@ -161,6 +164,44 @@ void StartTicker(Clip* c) {
   });
 }
 
+constexpr UINT kRunOnPlatformThread = WM_APP + 0x51;
+constexpr wchar_t kMessageWindowClass[] = L"AipetAlphaVideoPlatformThread";
+
+// Runs on the platform thread: the window is created there.
+LRESULT CALLBACK PlatformThreadProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+  if (msg == kRunOnPlatformThread) {
+    std::unique_ptr<prepare_queue::PrepareQueue::Task> task(
+        reinterpret_cast<prepare_queue::PrepareQueue::Task*>(lp));
+    (*task)();
+    return 0;
+  }
+  return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+HWND CreatePlatformThreadWindow() {
+  static const bool registered = [] {
+    WNDCLASSW wc{};
+    wc.lpfnWndProc = PlatformThreadProc;
+    wc.hInstance = GetModuleHandleW(nullptr);
+    wc.lpszClassName = kMessageWindowClass;
+    return RegisterClassW(&wc) != 0;
+  }();
+  (void)registered;  // a second engine reuses the class; CreateWindowExW reports real failures
+  return CreateWindowExW(0, kMessageWindowClass, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr,
+                         GetModuleHandleW(nullptr), nullptr);
+}
+
+// Worker thread. Media Foundation gets a COM apartment of its own here; on
+// the platform thread (blocking fallback) CoInitializeEx fails with
+// RPC_E_CHANGED_MODE and nothing is uninitialized.
+prepare_queue::Outcome RunPetMattePrepare(const std::wstring& src, const std::wstring& dst, uint32_t edge) {
+  const HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  const int32_t code = pet_matte_prepare(src.c_str(), dst.c_str(), edge);
+  prepare_queue::Outcome out{code, code != 0 ? pet_matte_last_error() : ""};
+  if (SUCCEEDED(hr)) CoUninitialize();
+  return out;
+}
+
 }  // namespace
 
 // static
@@ -182,9 +223,30 @@ void AlphaVideoPlugin::RegisterWithRegistrar(
 }
 
 AlphaVideoPlugin::AlphaVideoPlugin(flutter::PluginRegistrarWindows *registrar)
-    : registrar_(registrar) {}
+    : registrar_(registrar), message_window_(CreatePlatformThreadWindow()) {
+  if (!message_window_) return;
+  HWND hwnd = message_window_;
+  prepare_queue_ = std::make_unique<prepare_queue::PrepareQueue>(
+      RunPetMattePrepare, [hwnd](prepare_queue::PrepareQueue::Task task) {
+        auto* boxed = new prepare_queue::PrepareQueue::Task(std::move(task));
+        if (!PostMessageW(hwnd, kRunOnPlatformThread, 0, reinterpret_cast<LPARAM>(boxed))) delete boxed;
+      });
+}
 
 AlphaVideoPlugin::~AlphaVideoPlugin() {
+  // Stop the queue first: it joins the worker (a running prepare finishes)
+  // and posts cancellations for jobs that never started. This engine is going
+  // away and nobody awaits those replies, so drop every posted task without
+  // running it, then destroy the window.
+  prepare_queue_.reset();
+  if (message_window_) {
+    MSG msg;
+    while (PeekMessageW(&msg, message_window_, kRunOnPlatformThread, kRunOnPlatformThread, PM_REMOVE)) {
+      delete reinterpret_cast<prepare_queue::PrepareQueue::Task*>(msg.lParam);
+    }
+    DestroyWindow(message_window_);
+    message_window_ = nullptr;
+  }
   // Tear down anything the Dart side never disposed. Safe to do here and
   // nowhere else: this runs on the platform thread (engine destruction is
   // synchronous from the caller that drops the FlutterViewController), with
@@ -379,24 +441,33 @@ void AlphaVideoPlugin::HandleMethodCall(
         result->Error("bad_path", "path is not valid UTF-8");
         return;
       }
-      // pet_matte_prepare 的负返回码携带的错误详情（pet_matte_last_error）
-      // 之前被丢弃了：调用方只看到一个裸 int，且是通过 Success 送达的，
-      // 忘记检查返回值的调用方会把失败当成成功。改成 Error 携带详情，和
-      // "open"/"play" 对原生失败的处理方式一致。
-      const int32_t code = pet_matte_prepare(wsrc.c_str(), wdst.c_str(),
-                                              static_cast<uint32_t>(edge));
-      if (code != 0) {
-        result->Error("prepare_failed", pet_matte_last_error(),
-                      flutter::EncodableValue(code));
+      if (!prepare_queue_) {  // no message window: keep the old blocking path
+        const prepare_queue::Outcome o = RunPetMattePrepare(wsrc, wdst, static_cast<uint32_t>(edge));
+        if (o.code != 0) {
+          result->Error("prepare_failed", o.error, flutter::EncodableValue(o.code));
+        } else {
+          result->Success(flutter::EncodableValue(o.code));
+        }
         return;
       }
-      result->Success(flutter::EncodableValue(code));
+      // Answered later on the platform thread (PlatformThreadProc runs the
+      // posted Done). Failures still arrive as Error("prepare_failed", ...)
+      // carrying pet_matte_last_error(), as before.
+      std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>> pending(std::move(result));
+      prepare_queue_->Submit(wsrc, wdst, static_cast<uint32_t>(edge),
+                             [pending](const prepare_queue::Outcome& o) {
+                               if (o.code != 0) {
+                                 pending->Error("prepare_failed", o.error, flutter::EncodableValue(o.code));
+                               } else {
+                                 pending->Success(flutter::EncodableValue(o.code));
+                               }
+                             });
       return;
     }
 
     result->NotImplemented();
   } catch (const std::exception& e) {
-    result->Error("bad_args", e.what());
+    if (result) result->Error("bad_args", e.what());
   }
 }
 
