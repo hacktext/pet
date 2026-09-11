@@ -105,8 +105,9 @@ void main() {
 
   test('dispose while adopt waits for the ack is a BridgeTimeout', () async {
     adoptImpl = (id) => Completer<void>().future; // never completes, never pushes
-    final f = main.adopt('b');
+    final expectation =
+        expectLater(main.adopt('b'), throwsA(isA<BridgeTimeout>().having((e) => e.stage, 'stage', 'ack')));
     await main.dispose();
-    await expectLater(f, throwsA(isA<BridgeTimeout>().having((e) => e.stage, 'stage', 'ack')));
+    await expectation;
   });
 }
