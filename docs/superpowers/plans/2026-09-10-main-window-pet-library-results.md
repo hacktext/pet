@@ -240,8 +240,12 @@ PASS corgi/lie: floating=34 blob_core=0
 
 ## Git LFS 与提交
 
-- `.gitattributes` 单独先提交（commit `2becd71`），再打包素材、改 `pubspec.yaml`、写本节记录后
-  一并提交。
-- `git lfs ls-files` 应为 18 行（15 个 `.mp4` + 3 个 `cover.png`）；实测行数与结果见下方提交记录。
+- `.gitattributes` 单独先提交（commit `2becd71` "chore: track built-in pet media with Git LFS"），
+  再打包素材、改 `pubspec.yaml`、写本节记录后一并提交
+  （commit `a59aeb8` "feat(aipet): built-in golden retriever, corgi and ragdoll (5 actions each)"，
+  26 files changed）。
+- `git lfs ls-files` 实测 **18 行**（15 个 `.mp4` + 3 个 `cover.png`），与预期一致；抽查
+  `builtin-gold/stand.mp4` 在 git 对象里是 LFS 指针（`version https://git-lfs.github.com/spec/v1`
+  + `oid sha256:...` + `size 1766550`），磁盘上文件实际大小同样是 1766550 字节，指针生效正确。
 - 关注点：`tools/petgen/work/`（含 `qa-*`、`*-midframes.png` 等中间产物）和 `.venv/` 均未加入
-  `git add`，未提交进仓库。
+  `git add`，未提交进仓库；`git status` 在提交后为空，工作区干净。
