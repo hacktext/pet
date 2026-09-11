@@ -25,16 +25,12 @@ typedef EnsureFn = Future<File> Function(File source);
 /// Everything the pet window decides. The only writer of settings.json.
 class PetWindowController extends ChangeNotifier {
   PetWindowController({
-    required PetLibrary library,
-    required SettingsStore settings,
-    required EnsureFn ensure,
-    required ClipPlayer player,
-    required Future<void> Function(LibraryState state) push,
-  })  : _library = library,
-        _settings = settings,
-        _ensure = ensure,
-        _player = player,
-        _push = push;
+    required this._library,
+    required this._settings,
+    required this._ensure,
+    required this._player,
+    required this._push,
+  });
 
   final PetLibrary _library;
   final SettingsStore _settings;
