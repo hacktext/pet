@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 
@@ -31,7 +32,8 @@ class WindowChannelTransport implements BridgeTransport {
   @override
   void setHandler(BridgeHandler? handler) {
     unawaited(_channel.setMethodCallHandler(
-        handler == null ? null : (call) => handler(call.method, call.arguments)));
+        handler == null ? null : (call) => handler(call.method, call.arguments))
+        .catchError((Object e) { developer.log('setMethodCallHandler failed: $e', name: 'aipet.bridge'); }));
   }
 }
 
@@ -76,12 +78,17 @@ class PetWindowBridge {
       case BridgeMethods.getState:
         return state().toJson();
       case BridgeMethods.adopt:
-        final petId = (args! as Map<Object?, Object?>)['petId']! as String;
         try {
-          await onAdopt(petId);
-          return {'ok': true};
-        } on AdoptError catch (e) {
-          return {'ok': false, 'code': e.code, 'message': e.message};
+          final petId = (args! as Map<Object?, Object?>)['petId']! as String;
+          try {
+            await onAdopt(petId);
+            return {'ok': true};
+          } on AdoptError catch (e) {
+            return {'ok': false, 'code': e.code, 'message': e.message};
+          }
+        } catch (e) {
+          developer.log('adopt(?) failed: $e', name: 'aipet.bridge');
+          return {'ok': false, 'code': 'prepare_failed', 'message': '$e'};
         }
       case BridgeMethods.mainWindowClosing:
         await onMainWindowClosing();
@@ -128,7 +135,7 @@ class MainWindowBridge {
     try {
       final v = await _transport.invoke(BridgeMethods.getState).timeout(ackTimeout);
       return LibraryState.fromJson(v! as Map<Object?, Object?>);
-    } on TimeoutException {
+    } on Exception {
       throw const BridgeTimeout('getState');
     }
   }
@@ -138,16 +145,18 @@ class MainWindowBridge {
   Future<void> adopt(String petId) async {
     final ack = states.firstWhere((s) => s.preparingPetId == petId || s.currentPetId == petId).timeout(ackTimeout);
     final call = _transport.invoke(BridgeMethods.adopt, {'petId': petId}).timeout(adoptTimeout);
+    call.ignore(); // suppress errors if call fails early
     try {
       await ack;
     } on TimeoutException {
-      call.ignore();
+      throw const BridgeTimeout('ack');
+    } on StateError {
       throw const BridgeTimeout('ack');
     }
     final Object? r;
     try {
       r = await call;
-    } on TimeoutException {
+    } on Exception {
       throw const BridgeTimeout('adopt');
     }
     final m = r! as Map<Object?, Object?>;

@@ -13,6 +13,9 @@ class FakeTransport implements BridgeTransport {
   /// When true, calls arriving at THIS end never get an answer (a hung window).
   bool silent = false;
 
+  /// When set on the end being CALLED (peer), invoke throws it.
+  Object? failWith;
+
   static (FakeTransport, FakeTransport) pair() {
     final a = FakeTransport._();
     final b = FakeTransport._();
@@ -25,6 +28,7 @@ class FakeTransport implements BridgeTransport {
   Future<Object?> invoke(String method, [Object? args]) async {
     final h = peer._handler;
     if (h == null) throw StateError('nothing is listening on the other side');
+    if (peer.failWith != null) throw peer.failWith!;
     if (peer.silent) return Completer<Object?>().future;
     return _wire(await h(method, _wire(args)));
   }

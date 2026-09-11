@@ -82,4 +82,31 @@ void main() {
     expect(closing, 1);
     expect(quits, 1);
   });
+
+  test('a channel failure on getState is a BridgeTimeout', () async {
+    petEnd.failWith = Exception('engine gone');
+    await expectLater(
+        main.getState(), throwsA(isA<BridgeTimeout>().having((e) => e.stage, 'stage', 'getState')));
+  });
+
+  test('a non-AdoptError from onAdopt comes back as prepare_failed', () async {
+    adoptImpl = (id) async {
+      await pet.pushState(state.preparing(id));
+      throw StateError('bug');
+    };
+    await expectLater(
+        main.adopt('b'), throwsA(isA<AdoptError>().having((e) => e.code, 'code', 'prepare_failed')));
+  });
+
+  test('an early channel failure on adopt is a BridgeTimeout, not a raw error', () async {
+    petEnd.failWith = Exception('engine gone');
+    await expectLater(main.adopt('b'), throwsA(isA<BridgeTimeout>().having((e) => e.stage, 'stage', 'ack')));
+  });
+
+  test('dispose while adopt waits for the ack is a BridgeTimeout', () async {
+    adoptImpl = (id) => Completer<void>().future; // never completes, never pushes
+    final f = main.adopt('b');
+    await main.dispose();
+    await expectLater(f, throwsA(isA<BridgeTimeout>().having((e) => e.stage, 'stage', 'ack')));
+  });
 }
