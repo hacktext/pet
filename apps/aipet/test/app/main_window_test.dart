@@ -18,6 +18,7 @@ void main() {
   late Future<void> Function(String) adoptImpl;
   late PetWindowBridge petSide;
   late MainWindowModel model;
+  late FakeTransport petEnd;
   var quits = 0;
 
   setUp(() {
@@ -25,7 +26,8 @@ void main() {
     final builtin = Directory('${tmp.path}\\builtin')..createSync();
     writePet(builtin, id: 'builtin-gold', name: '金毛');
     writePet(builtin, id: 'builtin-ragdoll', species: 'cat', name: '布偶猫');
-    final (petEnd, mainEnd) = FakeTransport.pair();
+    final (pe, mainEnd) = FakeTransport.pair();
+    petEnd = pe;
     petState = LibraryState.empty;
     quits = 0;
     adoptImpl = (id) async {};
@@ -144,5 +146,27 @@ void main() {
     await tester.tap(find.text('退出程序'));
     await tester.pump();
     expect(quits, 1);
+  });
+
+  test('a push during startup is not overwritten by the older getState reply', () async {
+    var replied = false;
+    final gate = Completer<void>();
+    const older = LibraryState.empty;
+    petEnd.setHandler((method, args) async {
+      if (method == BridgeMethods.getState) {
+        await gate.future;
+        replied = true;
+        return older.toJson();
+      }
+      return null;
+    });
+    final starting = model.start();
+    await Future<void>.delayed(Duration.zero);
+    final newer = const LibraryState(currentPetId: 'builtin-gold', adoptedPetIds: ['builtin-gold']);
+    await petSide.pushState(newer);
+    gate.complete();
+    await starting;
+    expect(replied, isTrue);
+    expect(model.statusOf(model.plazaPets.firstWhere((p) => p.id == 'builtin-gold')), CardStatus.companion);
   });
 }

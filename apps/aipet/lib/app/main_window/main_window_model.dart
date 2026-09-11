@@ -32,12 +32,16 @@ class MainWindowModel extends ChangeNotifier {
   Future<void> start() async {
     _pets = _library.scan();
     _bridge.start();
+    var pushed = false;
     _sub = _bridge.states.listen((s) {
+      pushed = true;
       _state = s;
       notifyListeners();
     });
     try {
-      _state = await _bridge.getState();
+      final s = await _bridge.getState();
+      // A push that arrived while we were asking is newer than this reply.
+      if (!pushed) _state = s;
     } on BridgeTimeout {
       // The pet window pushes stateChanged whenever something happens; the
       // cards simply start from "nobody adopted" until it does.
