@@ -36,13 +36,16 @@ void main() {
   late Future<File> Function(File) ensure;
   late PetWindowController c;
 
-  PetWindowController make() => PetWindowController(
+  PetWindowController make({Duration prepareTimeout = kPrepareTimeout}) => PetWindowController(
         library: PetLibrary(builtinRoot: builtin, customRoot: Directory('${tmp.path}\\custom')),
         settings: settings,
         ensure: (f) => ensure(f),
         player: player,
         push: (s) async => pushed.add(s),
+        prepareTimeout: prepareTimeout,
       );
+  const short = Duration(milliseconds: 50);
+  const failFast = Timeout(Duration(seconds: 5)); // a missing cap must fail, not hang for 30 s
 
   setUp(() {
     tmp = Directory.systemTemp.createTempSync('petwin_');
@@ -143,6 +146,33 @@ void main() {
       expect(player.plays, ['builtin-gold/stand.mp4|loop']);
     });
 
+    test('a preparation that never finishes fails after prepareTimeout and frees the pet window', () async {
+      c = make(prepareTimeout: short);
+      await c.boot();
+      pushed.clear();
+      ensure = (f) => Completer<File>().future; // a hung native prepare
+      await expectLater(
+          c.adopt('builtin-gold'), throwsA(isA<AdoptError>().having((e) => e.code, 'code', 'prepare_failed')));
+      expect(c.state, LibraryState.empty);
+      expect(pushed.map((s) => s.preparingPetId), ['builtin-gold', null]);
+      ensure = (f) async => f;
+      await c.adopt('builtin-ragdoll'); // not busy
+      expect(c.currentPet?.id, 'builtin-ragdoll');
+      expect(player.plays, ['builtin-ragdoll/stand.mp4|loop']);
+    }, timeout: failFast);
+
+    test('a clip matted after the deadline is not put on screen', () async {
+      c = make(prepareTimeout: short);
+      await c.boot();
+      final matte = Completer<File>();
+      ensure = (f) => matte.future;
+      await expectLater(c.adopt('builtin-gold'), throwsA(isA<AdoptError>()));
+      matte.complete(File('${builtin.path}\\builtin-gold\\stand.mp4'));
+      await Future<void>.delayed(Duration.zero);
+      expect(player.plays, isEmpty);
+      expect(c.currentPet, isNull);
+    }, timeout: failFast);
+
     test('a failed save still shows the pet and announces it', () async {
       // A FILE where the settings folder should be: save() throws, load() still returns empty.
       final blocked = File('${tmp.path}\\blocked')..writeAsStringSync('x');
@@ -184,6 +214,20 @@ void main() {
       expect(c.currentAction, 'stand');
       expect(c.error, contains('睡觉'));
     });
+
+    test('an action whose clip never gets ready gives up with the message, and the next action plays', () async {
+      c = make(prepareTimeout: short);
+      await c.boot();
+      ensure = (f) => Completer<File>().future;
+      await c.playAction('sleep');
+      expect(c.currentAction, 'stand');
+      expect(c.error, contains('睡觉'));
+      ensure = (f) async => f;
+      await c.playAction('lick_paw');
+      expect(player.plays.last, 'builtin-gold/lick_paw.mp4|once');
+      expect(c.currentAction, 'lick_paw');
+      expect(c.error, isNull);
+    }, timeout: failFast);
 
     test('actions the pet does not have are ignored', () async {
       await c.boot();

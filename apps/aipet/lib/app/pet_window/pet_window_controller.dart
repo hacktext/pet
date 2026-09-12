@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:developer' as developer;
 import 'dart:io';
 
@@ -22,6 +23,11 @@ abstract class ClipPlayer {
 /// The matted .aipmat for a clip: MatteCache.ensure in production.
 typedef EnsureFn = Future<File> Function(File source);
 
+/// How long a clip may take to be matted and put on screen (spec 3.2 / 7:
+/// "上限 60 秒"). Just under the main window's 60 s adoptTimeout, so its
+/// "preparing cleared" push arrives before the main window gives up.
+const Duration kPrepareTimeout = Duration(seconds: 55);
+
 /// Everything the pet window decides. The only writer of settings.json.
 class PetWindowController extends ChangeNotifier {
   PetWindowController({
@@ -30,7 +36,10 @@ class PetWindowController extends ChangeNotifier {
     required this._ensure,
     required this._player,
     required this._push,
+    this.prepareTimeout = kPrepareTimeout,
   });
+
+  final Duration prepareTimeout;
 
   final PetLibrary _library;
   final SettingsStore _settings;
@@ -95,8 +104,7 @@ class PetWindowController extends ChangeNotifier {
     await _push(_state);
     _switching = true;
     try {
-      final clip = await _ensure(pet.actionFile(kIdleAction));
-      await _player.play(clip, loop: true);
+      await _prepareAndPlay(pet, kIdleAction);
     } catch (e) {
       _state = _state.preparing(null);
       notifyListeners();
@@ -125,9 +133,7 @@ class PetWindowController extends ChangeNotifier {
     final pet = currentPet!;
     _switching = true;
     try {
-      final clip = await _ensure(pet.actionFile(key));
-      final loop = isLooping(key);
-      await _player.play(clip, loop: loop, onFinished: loop ? null : () => playAction(kIdleAction));
+      await _prepareAndPlay(pet, key);
       _currentAction = key;
       _error = null;
     } catch (e) {
@@ -135,6 +141,27 @@ class PetWindowController extends ChangeNotifier {
     } finally {
       _switching = false;
       notifyListeners();
+    }
+  }
+
+  /// Mats [key]'s clip and puts it on screen, giving up with a
+  /// TimeoutException after [prepareTimeout] -- a hung prepare must not leave
+  /// preparingPetId / _switching set forever. A clip that finishes matting
+  /// after the deadline is not played: the caller has already moved on.
+  Future<void> _prepareAndPlay(Pet pet, String key) async {
+    var gaveUp = false;
+    Future<void> run() async {
+      final clip = await _ensure(pet.actionFile(key));
+      if (gaveUp) return;
+      final loop = isLooping(key);
+      await _player.play(clip, loop: loop, onFinished: loop ? null : () => playAction(kIdleAction));
+    }
+
+    try {
+      await run().timeout(prepareTimeout);
+    } on TimeoutException {
+      gaveUp = true;
+      rethrow;
     }
   }
 }
