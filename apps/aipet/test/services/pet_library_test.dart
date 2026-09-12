@@ -6,6 +6,21 @@ import 'package:flutter_test/flutter_test.dart';
 
 import '../support/pet_fixtures.dart';
 
+/// A root that exists but cannot be listed (e.g. access denied).
+class _UnlistableDir extends Fake implements Directory {
+  _UnlistableDir(this.path);
+
+  @override
+  final String path;
+
+  @override
+  bool existsSync() => true;
+
+  @override
+  List<FileSystemEntity> listSync({bool recursive = false, bool followLinks = true}) =>
+      throw PathAccessException(path, const OSError('Access is denied.', 5));
+}
+
 void main() {
   late Directory tmp, builtin, custom;
   late PetLibrary lib;
@@ -51,6 +66,12 @@ void main() {
   test('missing roots are simply empty', () {
     final none = PetLibrary(builtinRoot: Directory('${tmp.path}\\x'), customRoot: Directory('${tmp.path}\\y'));
     expect(none.scan(), isEmpty);
+  });
+
+  test('a root that cannot be listed counts as empty; the other root still loads', () {
+    writePet(custom, id: 'custom-lucky', origin: 'custom');
+    final locked = PetLibrary(builtinRoot: _UnlistableDir('${tmp.path}\\locked'), customRoot: custom);
+    expect(locked.scan().map((p) => p.id), ['custom-lucky']);
   });
 
   test('incomplete folders are still listed (the card shows 素材缺失)', () {

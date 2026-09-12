@@ -31,15 +31,23 @@ class PetLibrary {
   }
 
   // One bad folder (a broken download, a hand-edited pet.json) must not hide
-  // every other pet, so failures are logged and skipped.
+  // every other pet, so failures are logged and skipped. A root that cannot
+  // be listed at all (e.g. access denied) counts as empty: boot() must not
+  // throw, or a first run would never open the library.
   List<Pet> _scanRoot(Directory root, PetOrigin origin) {
-    if (!root.existsSync()) return const [];
-    final dirs = root.listSync().whereType<Directory>().toList()..sort((a, b) => a.path.compareTo(b.path));
+    final List<Directory> dirs;
+    try {
+      if (!root.existsSync()) return const [];
+      dirs = root.listSync().whereType<Directory>().toList()..sort((a, b) => a.path.compareTo(b.path));
+    } catch (e) {
+      developer.log('cannot list ${root.path}: $e', name: 'aipet.library');
+      return const [];
+    }
     final out = <Pet>[];
     for (final dir in dirs) {
-      final json = File('${dir.path}${Platform.pathSeparator}pet.json');
-      if (!json.existsSync()) continue;
       try {
+        final json = File('${dir.path}${Platform.pathSeparator}pet.json');
+        if (!json.existsSync()) continue;
         final pet = parsePet(json.readAsStringSync(), dir);
         if (pet.origin != origin) throw FormatException('origin ${pet.origin.name} under the ${origin.name} root');
         out.add(pet);
