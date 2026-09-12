@@ -1,6 +1,7 @@
 """Finish a Kling clip for packaging: key the animal off the green, brighten /
 saturate / sharpen only the animal, put it back on exact #00FF00 and encode at
-a bitrate that keeps the fur (spec 2026-09-12 pet image quality)."""
+CRF 16 with -tune grain, at a bitrate that keeps the fur (spec 2026-09-12 pet
+image quality)."""
 from __future__ import annotations
 
 import json
@@ -18,9 +19,9 @@ OUT_EDGE = 960
 FPS = 24
 TARGET_LUMA = 155.0          # subject mean luma after grading (0..255)
 MAX_P95 = 235.0              # never push the brightest 5 % past this
-SATURATION = 1.10
+SATURATION = 1.20
 GAMMA_MAX = 2.5
-USM_RADIUS, USM_AMOUNT, USM_THRESHOLD = 1.5, 0.8, 2
+USM_RADIUS, USM_AMOUNT, USM_THRESHOLD = 1.5, 1.2, 2
 CRF = 16
 GREEN = np.array([0.0, 1.0, 0.0], dtype=np.float32)
 _W = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
@@ -154,7 +155,7 @@ def finish_clip(src: Path, dst: Path, gamma: float) -> int:
                            stdout=subprocess.PIPE)
     enc = subprocess.Popen(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
                             "-s", f"{OUT_EDGE}x{OUT_EDGE}", "-r", str(FPS), "-i", "-",
-                            "-c:v", "libx264", "-preset", "slow", "-crf", str(CRF), "-pix_fmt", "yuv420p",
+                            "-c:v", "libx264", "-preset", "slow", "-crf", str(CRF), "-tune", "grain", "-pix_fmt", "yuv420p",
                             "-movflags", "+faststart", str(tmp)], stdin=subprocess.PIPE)
     size = OUT_EDGE * OUT_EDGE * 3
     frames = 0
@@ -192,5 +193,7 @@ def pet_gamma(workdir: Path, override: float | None = None) -> float:
     if not stand.exists():
         raise FileNotFoundError(f"no {stand.name} in {workdir} to derive the pet's grade from")
     g = solve_gamma(frame_rgb(stand, 30))
-    grade.write_text(json.dumps({"gamma": g, "from": "stand.mp4 frame 30"}) + "\n", encoding="utf-8")
+    tmp = grade.with_name(grade.name + ".partial")
+    tmp.write_text(json.dumps({"gamma": g, "from": "stand.mp4 frame 30"}) + "\n", encoding="utf-8")
+    tmp.replace(grade)
     return g
