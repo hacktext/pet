@@ -3,7 +3,12 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 
 /// Bump when pet_matte's output changes, so old caches are not reused.
-const String kMattePipelineVersion = 'p1';
+/// p2: 960-px caches and edge-only despill (2026-09-12 image quality).
+const String kMattePipelineVersion = 'p2';
+
+/// Long edge of the matted cache. Sources are 960x960; keeping every source
+/// pixel is what makes the fur read as fur (spec 2026-09-12).
+const int kMatteTargetEdge = 960;
 
 typedef PrepareFn = Future<void> Function({required String source, required String destination});
 

@@ -44,7 +44,7 @@ Future<void> runPetWindow() async {
   final cache = MatteCache(
     root: matteCacheRoot(appData),
     prepare: ({required source, required destination}) =>
-        AlphaVideo.prepare(source: source, destination: destination, targetEdge: 720),
+        AlphaVideo.prepare(source: source, destination: destination, targetEdge: kMatteTargetEdge),
   );
   final player = AlphaClipPlayer();
   final launcher = LibraryLauncher();
