@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parents[1]  # tools/petgen
@@ -20,16 +21,25 @@ from petgen.keycheck import score_file  # noqa: E402
 from petgen.loopcheck import probe, psnr_series, seam_verdict  # noqa: E402
 from petgen.package import ACTIONS, make_cover, pet_json  # noqa: E402
 from petgen.prompts import PETS, POSE_ASPECT, REF_POSE_FOR_ACTION, action_prompt, pose_prompt, source_prompt  # noqa: E402
+from petgen.finish import finish_clip, frame_rgb, metrics, pet_gamma  # noqa: E402
 
 SPIKE_OUT = Path(r"C:\Users\Administrator\AppData\Local\Temp\claude\c--Users-Administrator-code-aipet"
                  r"\4fbc451a-51c9-48a5-9f6b-54b7e4f439b7\scratchpad\out")
-VIDEO_UNITS = 3
+# Pre-flight minimum per 5 s clip. std is 3 units; pro's price is unknown until
+# the first call (read final_unit_deduction), so demand a generous floor.
+VIDEO_UNITS = {"std": 3, "pro": 10}
 
 
-def pet_dir(pet: str) -> Path:
-    d = WORK / pet
+def pet_dir(pet: str, tag: str | None = None) -> Path:
+    d = WORK / pet / tag if tag else WORK / pet
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def _video_task_id(pet: str, action: str, tag: str | None, mode: str) -> str:
+    """Kling rejects a reused external_task_id, and re-generating a clip is the
+    whole point of --tag: make every call's id unique."""
+    return f"petgen-{pet}-{action}-{tag or 'main'}-{mode}-{int(time.time() * 1000)}"
 
 
 def _video_units_left() -> float:
@@ -69,19 +79,23 @@ def cmd_source(a) -> int:
 
 
 def cmd_pose(a) -> int:
-    body = {"model_name": "kling-v3", "image_reference": "subject", "prompt": pose_prompt(a.pet, a.pose),
+    body = {"model_name": "kling-v3", "image_reference": "subject",
+            "prompt": pose_prompt(a.pet, a.pose, bright=a.bright),
             "image": kling.b64(pet_dir(a.pet) / "src.png"), "aspect_ratio": POSE_ASPECT[a.pose],
-            "resolution": "1k", "n": 1}
+            "resolution": a.resolution, "n": 1}
     d = kling.wait("image", kling.create_image(body))
-    kling.download(d["task_result"]["images"][0]["url"], pet_dir(a.pet) / f"ref-{a.pose}.png")
-    print(f"pose {a.pet}/{a.pose}: deduction {d.get('final_unit_deduction')}")
+    out = pet_dir(a.pet, a.tag) / f"ref-{a.pose}.png"
+    kling.download(d["task_result"]["images"][0]["url"], out)
+    print(f"pose {a.pet}/{a.pose} ({a.resolution}{', bright' if a.bright else ''}) -> {out.relative_to(HERE)}: "
+          f"deduction {d.get('final_unit_deduction')}")
     return 0
 
 
 def cmd_gate(a) -> int:
     from petgen.compose import EdgeError, compose
     try:
-        r = compose(pet_dir(a.pet) / f"ref-{a.pose}.png", pet_dir(a.pet), f"ref-{a.pose}")
+        d = pet_dir(a.pet, a.tag)
+        r = compose(d / f"ref-{a.pose}.png", d, f"ref-{a.pose}", calibrate=a.calibrate)
     except EdgeError as e:
         print(f"FAIL {a.pet}/{a.pose}: {e}")
         return 1
@@ -91,20 +105,24 @@ def cmd_gate(a) -> int:
 
 
 def cmd_video(a) -> int:
-    ref = pet_dir(a.pet) / f"ref-{REF_POSE_FOR_ACTION[a.action]}-green.png"
+    d = pet_dir(a.pet, a.tag)
+    ref = d / f"ref-{REF_POSE_FOR_ACTION[a.action]}-green.png"
     if not ref.exists():
-        print(f"no gated reference {ref.name}: run gate first")
+        print(f"no gated reference {ref.relative_to(HERE)}: run gate first")
         return 1
+    need = VIDEO_UNITS[a.mode]
     left = _video_units_left()
-    if left < VIDEO_UNITS:
-        print(f"only {left} video units left -- stopping")
+    if left < need:
+        print(f"only {left} video units left, {a.mode} needs {need} -- stopping")
         return 2
     img = kling.b64(ref)
     body = {"model_name": "kling-v3", "image": img, "image_tail": img, "prompt": action_prompt(a.pet, a.action),
-            "duration": "5", "mode": "std", "external_task_id": f"petgen-{a.pet}-{a.action}"}
-    d = kling.wait("video", kling.create_video(body), every=10)
-    kling.download(d["task_result"]["videos"][0]["url"], pet_dir(a.pet) / f"{a.action}.mp4")
-    print(f"video {a.pet}/{a.action}: deduction {d.get('final_unit_deduction')}, {left - VIDEO_UNITS:.0f} units left")
+            "duration": "5", "mode": a.mode, "external_task_id": _video_task_id(a.pet, a.action, a.tag, a.mode)}
+    r = kling.wait("video", kling.create_video(body), every=10)
+    out = d / f"{a.action}.mp4"
+    kling.download(r["task_result"]["videos"][0]["url"], out)
+    print(f"video {a.pet}/{a.action} ({a.mode}) -> {out.relative_to(HERE)}: "
+          f"deduction {r.get('final_unit_deduction')}, {_video_units_left():.0f} units left")
     return 0
 
 
@@ -115,9 +133,34 @@ def _frame(video: Path, out: Path, last: bool) -> Path:
     return out
 
 
+def cmd_finish(a) -> int:
+    d = pet_dir(a.pet, a.tag)
+    src = d / f"{a.action}.mp4"
+    if not src.exists():
+        print(f"missing {src.relative_to(HERE)}")
+        return 1
+    try:
+        gamma = pet_gamma(d, a.gamma)
+    except FileNotFoundError as e:
+        print(f"{e}: pass --gamma")
+        return 1
+    dst = d / f"{a.action}-final.mp4"
+    frames = finish_clip(src, dst, gamma)
+    before, after = metrics(frame_rgb(src, 30)), metrics(frame_rgb(dst, 30))
+    kbps = dst.stat().st_size * 8 / (frames / 24) / 1000
+    print(json.dumps({"pet": a.pet, "action": a.action, "tag": a.tag, "gamma": gamma, "frames": frames,
+                      "kbps": round(kbps), "luma": [round(before[0], 1), round(after[0], 1)],
+                      "p95": [round(before[1], 1), round(after[1], 1)],
+                      "sharpness": [round(before[2], 2), round(after[2], 2)]}, ensure_ascii=False))
+    return 0
+
+
 def cmd_qa(a) -> int:
-    d = pet_dir(a.pet)
-    v = d / f"{a.action}.mp4"
+    d = pet_dir(a.pet, a.tag)
+    v = d / f"{a.action}-final.mp4"
+    if not v.exists():
+        print(f"missing {v.relative_to(HERE)}: run finish first")
+        return 1
     fmt = probe(v)
     fmt_ok = fmt == {"width": 960, "height": 960, "fps": "24/1", "frames": 121}
     ok_seam, seam, worst = seam_verdict(*psnr_series(v, d / f"qa-{a.action}"))
@@ -132,16 +175,16 @@ def cmd_qa(a) -> int:
 
 def cmd_package(a) -> int:
     from PIL import Image
-    d = pet_dir(a.pet)
-    clips = [d / f"{k}.mp4" for k in ACTIONS]
+    d = pet_dir(a.pet, a.tag)
+    clips = [d / f"{k}-final.mp4" for k in ACTIONS]
     missing = [c.name for c in clips if not c.exists()]
     if missing:
         print(f"missing clips {missing}")
         return 1
     out = ASSETS / f"builtin-{a.pet}"
     out.mkdir(parents=True, exist_ok=True)
-    for c in clips:
-        shutil.copy2(c, out / c.name)
+    for k, c in zip(ACTIONS, clips):
+        shutil.copy2(c, out / f"{k}.mp4")
     make_cover(Image.open(d / "ref-stand-cutout.png").convert("RGBA")).save(out / "cover.png")
     (out / "pet.json").write_text(json.dumps(pet_json(a.pet), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"packaged {out.relative_to(REPO)}")
@@ -155,11 +198,23 @@ def main() -> int:
     sub.add_parser("import-spike").set_defaults(fn=cmd_import_spike)
     for name, fn, extra in [("source", cmd_source, None), ("pose", cmd_pose, ("pose", list(POSE_ASPECT))),
                             ("gate", cmd_gate, ("pose", list(POSE_ASPECT))), ("video", cmd_video, ("action", ACTIONS)),
-                            ("qa", cmd_qa, ("action", ACTIONS)), ("package", cmd_package, None)]:
+                            ("finish", cmd_finish, ("action", ACTIONS)), ("qa", cmd_qa, ("action", ACTIONS)),
+                            ("package", cmd_package, None)]:
         p = sub.add_parser(name)
         p.add_argument("pet", choices=list(PETS))
         if extra:
             p.add_argument(extra[0], choices=extra[1])
+        if name != "source":
+            p.add_argument("--tag", default=None, help="work/<pet>/<tag>/ instead of work/<pet>/")
+        if name == "pose":
+            p.add_argument("--resolution", choices=["1k", "2k"], default="1k")
+            p.add_argument("--bright", action="store_true")
+        if name == "gate":
+            p.add_argument("--calibrate", action="store_true")
+        if name == "video":
+            p.add_argument("--mode", choices=list(VIDEO_UNITS), default="std")
+        if name == "finish":
+            p.add_argument("--gamma", type=float, default=None)
         p.set_defaults(fn=fn)
     a = ap.parse_args()
     return a.fn(a)

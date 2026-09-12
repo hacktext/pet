@@ -45,7 +45,7 @@ def _segment(src: Path) -> np.ndarray:
     return np.asarray(rgba, dtype=np.float32)
 
 
-def compose(src: Path, out_dir: Path, stem: str) -> ComposeResult:
+def compose(src: Path, out_dir: Path, stem: str, calibrate: bool = False) -> ComposeResult:
     arr = _segment(src)
     alpha_u8 = arr[..., 3].astype(np.uint8)
     sides = edge_touches(alpha_u8)
@@ -54,7 +54,11 @@ def compose(src: Path, out_dir: Path, stem: str) -> ComposeResult:
     x0, x1, y0, y1 = subject_bbox(alpha_u8)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    cut = Image.fromarray(arr[y0:y1, x0:x1].astype(np.uint8), "RGBA")
+    region = arr[y0:y1, x0:x1]
+    if calibrate:
+        from petgen.finish import calibrate_rgba  # same exposure target as the video grade
+        region = calibrate_rgba(region)
+    cut = Image.fromarray(np.clip(region + 0.5, 0, 255).astype(np.uint8), "RGBA")
     cutout = out_dir / f"{stem}-cutout.png"
     cut.save(cutout)
 

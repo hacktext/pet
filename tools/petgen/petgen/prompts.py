@@ -57,14 +57,21 @@ def source_prompt(pet: str) -> str:
             "浅灰色无缝影棚背景，柔和的漫射光，毛发细节清晰锐利，画面里只有这一只动物。")
 
 
-def pose_prompt(pet: str, pose: str) -> str:
+# Recipe v2 (2026-09-12): bright high-key studio light. Our first references
+# came out dim (subject luma ~128) and Kling carries the reference's exposure
+# straight into the video.
+BRIGHT = "明亮柔和的高调影棚光，整体曝光充足，毛色鲜亮饱满，每一缕毛丝都清晰可见，焦点清晰。"
+
+
+def pose_prompt(pet: str, pose: str, bright: bool = False) -> str:
     p = PETS[pet]
-    return (f"参考图中这只{p['breed']}的全身照片，保持它的脸、毛色和花纹完全一样。{p['features']}。"
+    base = (f"参考图中这只{p['breed']}的全身照片，保持它的脸、毛色和花纹完全一样。{p['features']}。"
             + POSES[pose] +
             "它只占画面中间大约一半的宽度，四周留出大片空白，尾巴尖离画面边缘很远。"
             "背景是浅灰色的无缝影棚背景纸，颜色均匀中性，没有任何物体，画面没有边框。"
             "柔和的大面积漫射光，几乎没有投影，身下没有明显的影子。"
             "写实摄影，毛发细节清晰锐利，画面里只有这一只动物。")
+    return base + BRIGHT if bright else base
 
 
 def action_prompt(pet: str, action: str) -> str:

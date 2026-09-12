@@ -33,3 +33,13 @@ def test_cats_and_dogs_act_cute_differently():
     dog = action_prompt("gold", "act_cute").replace(PETS["gold"]["breed"], "X")
     cat = action_prompt("ragdoll", "act_cute").replace(PETS["ragdoll"]["breed"], "X")
     assert dog != cat
+
+
+from petgen.prompts import BRIGHT, pose_prompt
+
+
+def test_bright_pose_prompt_adds_the_lighting_and_keeps_the_rest():
+    base = pose_prompt("gold", "stand")
+    bright = pose_prompt("gold", "stand", bright=True)
+    assert BRIGHT not in base
+    assert bright == base + BRIGHT
