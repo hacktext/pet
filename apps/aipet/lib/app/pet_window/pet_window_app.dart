@@ -13,6 +13,7 @@ import '../../services/pet_library.dart';
 import '../../services/settings_store.dart';
 import '../../services/window_bridge.dart';
 import 'clip_player.dart';
+import 'close_policy.dart';
 import 'library_launcher.dart';
 import 'pet_window_controller.dart';
 
@@ -67,14 +68,18 @@ Future<void> runPetWindow() async {
     }
   }
 
+  final closePolicy = ClosePolicy(
+    state: () => controller.state,
+    hasPet: () => controller.currentPet != null,
+    changes: controller,
+    quit: quit,
+    reopenLibrary: launcher.open,
+  );
   bridge = PetWindowBridge(
     WindowChannelTransport(),
     state: () => controller.state,
     onAdopt: controller.adopt,
-    // Spec 3.3: closing the library with nobody on the desktop ends the app.
-    onMainWindowClosing: () async {
-      if (controller.currentPet == null) await quit();
-    },
+    onMainWindowClosing: closePolicy.libraryClosing,
     onQuit: quit,
   )..start();
 
