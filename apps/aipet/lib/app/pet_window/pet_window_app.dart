@@ -12,6 +12,7 @@ import '../../services/matte_cache.dart';
 import '../../services/pet_library.dart';
 import '../../services/settings_store.dart';
 import '../../services/window_bridge.dart';
+import 'app_exit.dart';
 import 'clip_player.dart';
 import 'close_policy.dart';
 import 'library_launcher.dart';
@@ -56,17 +57,13 @@ Future<void> runPetWindow() async {
     push: (s) => bridge.pushState(s),
   );
 
-  var quitting = false;
-  Future<void> quit() async {
-    if (quitting) return;
-    quitting = true;
-    try {
-      await player.dispose();
-      await trayManager.destroy();
-    } finally {
-      await windowManager.destroy(); // ends the process, sub-window engine included
-    }
-  }
+  final quit = AppExit(
+    // Off the screen first: the native teardown after destroy() takes seconds.
+    hide: [windowManager.hide, launcher.hideIfOpen],
+    // Clips are torn down before the engine (pet_shell's I-7 lesson).
+    release: [player.dispose, trayManager.destroy],
+    destroy: windowManager.destroy, // ends the process, sub-window engine included
+  ).quit;
 
   final closePolicy = ClosePolicy(
     state: () => controller.state,
