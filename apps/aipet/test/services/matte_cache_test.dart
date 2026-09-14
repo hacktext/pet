@@ -37,7 +37,7 @@ void main() {
 
   test('key is 32 hex chars of sha256 plus the pipeline version', () {
     final k = MatteCache.keyFor('abc'.codeUnits);
-    expect(k, matches(RegExp(r'^[0-9a-f]{32}-p2$')));
+    expect(k, matches(RegExp(r'^[0-9a-f]{32}-p3$')));
     expect(k, startsWith('ba7816bf8f01cfea414140de5dae2223')); // sha256("abc")
     expect(MatteCache.keyFor('abd'.codeUnits), isNot(k));
   });

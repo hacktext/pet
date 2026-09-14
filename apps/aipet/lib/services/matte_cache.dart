@@ -4,7 +4,8 @@ import 'package:crypto/crypto.dart';
 
 /// Bump when pet_matte's output changes, so old caches are not reused.
 /// p2: 960-px caches and edge-only despill (2026-09-12 image quality).
-const String kMattePipelineVersion = 'p2';
+/// p3: max-limiter despill -- p2 left a green outline on the desktop (2026-09-13).
+const String kMattePipelineVersion = 'p3';
 
 /// Long edge of the matted cache. Sources are 960x960; keeping every source
 /// pixel is what makes the fur read as fur (spec 2026-09-12).

@@ -2,31 +2,41 @@
 #include <vector>
 #include "matte_core/despill.h"
 
-TEST(Despill, TransparentGreenFringeIsPulledDownToNeighbourAverage) {
-  // a = 0：与旧公式一致。B=40, G=200, R=60 → G 压到 (40+60)/2 = 50
-  std::vector<uint8_t> px{40, 200, 60, 0};
-  matte::BgraImage img{px.data(), 1, 1, 4};
-  matte::ApplyDespill(img);
-  EXPECT_EQ(px[1], 50);
-  EXPECT_EQ(px[0], 40);  // B 不动
-  EXPECT_EQ(px[2], 60);  // R 不动
-  EXPECT_EQ(px[3], 0);   // alpha 不动
+TEST(Despill, GreenSpillIsRemovedWhateverTheAlpha) {
+  // B=40, G=200, R=60 → G 压到 max(R,B) = 60。键控的过渡带很陡，含绿幕的毛边常拿到
+  // 很高甚至 255 的 alpha，所以去溢色不能按 alpha 打折（2026-09-13 真机 A6 的绿边）。
+  for (uint8_t a : {uint8_t{0}, uint8_t{128}, uint8_t{255}}) {
+    std::vector<uint8_t> px{40, 200, 60, a};
+    matte::BgraImage img{px.data(), 1, 1, 4};
+    matte::ApplyDespill(img);
+    EXPECT_EQ(px[1], 60) << "alpha " << int(a);
+    EXPECT_EQ(px[0], 40) << "alpha " << int(a);  // B 不动
+    EXPECT_EQ(px[2], 60) << "alpha " << int(a);  // R 不动
+    EXPECT_EQ(px[3], a) << "alpha " << int(a);   // alpha 不动
+  }
 }
 
-TEST(Despill, HalfTransparentFringeIsPulledDownByHalf) {
-  // a = 128：超出量 150 只压掉 (150*127+127)/255 = 75 → G = 125
-  std::vector<uint8_t> px{40, 200, 60, 128};
+TEST(Despill, GoldenFurEdgeKeepsItsColour) {
+  // 金毛半透明的毛边：G > (R+B)/2 = 180，但 G < R，不是绿溢色，不能被压成橙色
+  std::vector<uint8_t> px{120, 210, 240, 128};
   matte::BgraImage img{px.data(), 1, 1, 4};
   matte::ApplyDespill(img);
-  EXPECT_EQ(px[1], 125);
+  EXPECT_EQ(px[1], 210);
 }
 
-TEST(Despill, OpaqueYellowFurKeepsItsGreen) {
-  // 金毛的黄色高光：G > (R+B)/2，但完全不透明，不能被压成橙色
+TEST(Despill, OpaqueGoldenFurKeepsItsColour) {
   std::vector<uint8_t> px{120, 210, 240, 255};
   matte::BgraImage img{px.data(), 1, 1, 4};
   matte::ApplyDespill(img);
   EXPECT_EQ(px[1], 210);
+}
+
+TEST(Despill, BlueEyeKeepsItsGreen) {
+  // 布偶猫偏青的蓝眼睛：G 高于 (R+B)/2 = 140，但低于 B，不是绿溢色
+  std::vector<uint8_t> px{200, 150, 80, 255};
+  matte::BgraImage img{px.data(), 1, 1, 4};
+  matte::ApplyDespill(img);
+  EXPECT_EQ(px[1], 150);
 }
 
 TEST(Despill, NonGreenDominantPixelIsUnchanged) {
