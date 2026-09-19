@@ -31,7 +31,7 @@ class ComposeResult:
     bbox: tuple[int, int, int, int]
 
 
-def _segment(src: Path) -> np.ndarray:
+def segment(src: Path) -> np.ndarray:
     from rembg import new_session, remove  # heavy import, only when composing
 
     if MODEL not in _sessions:
@@ -45,8 +45,26 @@ def _segment(src: Path) -> np.ndarray:
     return np.asarray(rgba, dtype=np.float32)
 
 
+def place(cut: Image.Image) -> np.ndarray:
+    """The cutout scaled to FILL of the canvas and centred: float32 RGBA, EDGE x EDGE."""
+    scale = FILL * EDGE / max(cut.width, cut.height)
+    cut = cut.convert("RGBA").resize((round(cut.width * scale), round(cut.height * scale)), Image.LANCZOS)
+    canvas = np.zeros((EDGE, EDGE, 4), dtype=np.float32)
+    ox, oy = (EDGE - cut.width) // 2, (EDGE - cut.height) // 2
+    canvas[oy:oy + cut.height, ox:ox + cut.width] = np.asarray(cut, dtype=np.float32)
+    return canvas
+
+
+def on_green(canvas: np.ndarray, out: Path) -> Path:
+    """Soft fur edges blend into key green, exactly like a real screen edge."""
+    a = canvas[..., 3:] / 255.0
+    rgb = canvas[..., :3] * a + KEY * (1.0 - a)
+    Image.fromarray(np.clip(rgb + 0.5, 0, 255).astype(np.uint8), "RGB").save(out)
+    return out
+
+
 def compose(src: Path, out_dir: Path, stem: str, calibrate: bool = False) -> ComposeResult:
-    arr = _segment(src)
+    arr = segment(src)
     alpha_u8 = arr[..., 3].astype(np.uint8)
     sides = edge_touches(alpha_u8)
     if sides:
@@ -62,14 +80,5 @@ def compose(src: Path, out_dir: Path, stem: str, calibrate: bool = False) -> Com
     cutout = out_dir / f"{stem}-cutout.png"
     cut.save(cutout)
 
-    scale = FILL * EDGE / max(x1 - x0, y1 - y0)
-    cut = cut.resize((round((x1 - x0) * scale), round((y1 - y0) * scale)), Image.LANCZOS)
-    canvas = np.zeros((EDGE, EDGE, 4), dtype=np.float32)
-    ox, oy = (EDGE - cut.width) // 2, (EDGE - cut.height) // 2
-    canvas[oy:oy + cut.height, ox:ox + cut.width] = np.asarray(cut, dtype=np.float32)
-    a = canvas[..., 3:] / 255.0
-    # Soft fur edges blend into key green, exactly like a real screen edge.
-    out = canvas[..., :3] * a + KEY * (1.0 - a)
-    green = out_dir / f"{stem}-green.png"
-    Image.fromarray(np.clip(out + 0.5, 0, 255).astype(np.uint8), "RGB").save(green)
+    green = on_green(place(cut), out_dir / f"{stem}-green.png")
     return ComposeResult(green, cutout, (x0, x1, y0, y1))
