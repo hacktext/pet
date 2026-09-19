@@ -36,6 +36,23 @@ def test_a_raised_tail_barely_moves_the_prop():
     assert abs(left + w / 2 - 300) < 15
 
 
+def test_a_big_raised_tail_does_not_steal_the_prop():
+    # ragdoll 2026-09-19: a fluffy tail as high as the ears and bigger than the
+    # head in the top band pulled the bowl under the belly.
+    a = np.zeros((EDGE, EDGE), np.uint8)
+    a[150:350, 200:401] = 255    # head, centre 300
+    a[100:500, 560:800] = 255    # tail: taller and wider, reaching above the ears
+    a[350:880, 200:800] = 255    # body
+    a[880:900, 220:380] = 255    # front paws: the lowest pixels, nearest the camera
+    assert prop_box(a, "bowl", 200, 100)[0] == 160   # centred on the head: 300 - 280 / 2
+
+
+def test_an_oversized_prop_is_shrunk_to_fit_the_canvas():
+    left, top, w, h = prop_box(_animal(), "bowl", 10, 1000)   # absurdly tall prop
+    assert w >= 1 and h >= 1
+    assert left >= 8 and top >= 8 and left + w <= EDGE - 8 and top + h <= EDGE - 8
+
+
 def test_prop_is_kept_on_the_canvas():
     a = np.zeros((EDGE, EDGE), np.uint8)
     a[710:1010, 0:61] = 255    # H = 300 at the bottom-left corner

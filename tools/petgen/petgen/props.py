@@ -14,21 +14,42 @@ from petgen.edges import edge_touches, subject_bbox
 
 PROP_REFS = {"front-bowl": "bowl", "front-ball": "ball"}  # reference stem -> prop
 PROP_WIDTH = {"bowl": 0.35, "ball": 0.14}                 # of the animal's height
-HEAD_BAND = 0.20   # top share of the animal whose columns locate the head
+HEAD_BAND = 0.20   # top share of the animal: the head, and maybe a raised tail
+FOOT_BAND = 0.04   # bottom share: the paws, front ones lowest (nearest the camera)
 DROP = 0.03        # prop bottom below the paws: it stands in front of them
 MARGIN = 8
 
 
-def prop_box(alpha: np.ndarray, kind: str, prop_w: int, prop_h: int) -> tuple[int, int, int, int]:
-    """(left, top, w, h) of the prop on the canvas: under the head (a front-facing
-    animal's front legs are below it), pixel-weighted so a raised tail tip in the
-    top band barely pulls it, and clamped inside the canvas."""
-    x0, x1, y0, y1 = subject_bbox(alpha)
+def _runs(occupied: np.ndarray) -> list[tuple[int, int]]:
+    """[start, end) of every run of True in a 1-D bool array."""
+    edges = np.flatnonzero(np.diff(np.concatenate(([0], occupied.astype(np.int8), [0]))))
+    return list(zip(edges[::2].tolist(), edges[1::2].tolist()))
+
+
+def _head_x(alpha: np.ndarray, y0: int, y1: int) -> float:
+    """Column centre of the head: a front-facing animal's front legs are below
+    it. In the top band the head and a raised tail are separate column runs;
+    the head is the run above the feet (ragdoll 2026-09-19: its fluffy tail
+    was as high as its ears and bigger than its head)."""
     h = y1 - y0
-    _, xs = np.nonzero(alpha[y0:y0 + max(1, round(HEAD_BAND * h))] > 10)
-    cx = float(xs.mean())
+    top = alpha[y0:y0 + max(1, round(HEAD_BAND * h))] > 10
+    feet_x = float(np.nonzero(alpha[y1 - max(1, round(FOOT_BAND * h)):y1] > 10)[1].mean())
+    s, e = min(_runs(top.any(0)), key=lambda r: abs((r[0] + r[1] - 1) / 2 - feet_x))
+    return float(np.nonzero(top[:, s:e])[1].mean()) + s
+
+
+def prop_box(alpha: np.ndarray, kind: str, prop_w: int, prop_h: int) -> tuple[int, int, int, int]:
+    """(left, top, w, h) of the prop on the canvas: under the head, just below
+    the paws, shrunk if need be and clamped inside the canvas."""
+    _, _, y0, y1 = subject_bbox(alpha)
+    h = y1 - y0
+    cx = _head_x(alpha, y0, y1)
     w = max(1, round(PROP_WIDTH[kind] * h))
     ph = max(1, round(w * prop_h / prop_w))
+    limit = EDGE - 2 * MARGIN
+    if w > limit or ph > limit:
+        f = limit / max(w, ph)
+        w, ph = max(1, int(w * f)), max(1, int(ph * f))
     bottom = min(round(y1 + DROP * h), EDGE - MARGIN)
     top = max(bottom - ph, MARGIN)
     left = min(max(round(cx - w / 2), MARGIN), EDGE - MARGIN - w)
