@@ -8,7 +8,7 @@ def test_pet_json_matches_spec_schema():
     assert j == {
         "schema": 1, "id": "builtin-ragdoll", "name": "布偶猫", "species": "cat",
         "origin": "builtin", "blurb": "蓝眼睛的小仙女，安静又粘人", "cover": "cover.png",
-        "actions": ["stand", "walk", "sleep", "lick_paw", "act_cute"],
+        "actions": ["stand", "walk", "sleep", "feed", "play", "lick_paw", "act_cute"],
     }
 
 

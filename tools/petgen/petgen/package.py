@@ -5,7 +5,7 @@ from PIL import Image
 
 from petgen.prompts import PETS
 
-ACTIONS = ["stand", "walk", "sleep", "lick_paw", "act_cute"]
+ACTIONS = ["stand", "walk", "sleep", "feed", "play", "lick_paw", "act_cute"]
 COVER_MAX = 512
 COVER_PAD = 0.06
 
