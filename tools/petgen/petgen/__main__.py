@@ -17,17 +17,18 @@ ASSETS = REPO / "apps" / "aipet" / "assets" / "pets"
 os.environ.setdefault("U2NET_HOME", str(WORK / "u2net"))  # before rembg is imported
 
 from petgen import kling  # noqa: E402
-from petgen.keycheck import score_file  # noqa: E402
+from petgen.keycheck import BLOB_CORE_MAX, frame_scores, score_file  # noqa: E402
 from petgen.loopcheck import probe, psnr_series, seam_verdict  # noqa: E402
 from petgen.package import ACTIONS, make_cover, pet_json  # noqa: E402
-from petgen.prompts import PETS, POSE_ASPECT, REF_POSE_FOR_ACTION, action_prompt, pose_prompt, source_prompt  # noqa: E402
+from petgen.prompts import (PETS, POSE_ASPECT, PROPS, REF_POSE_FOR_ACTION, action_prompt, pose_prompt,  # noqa: E402
+                            source_prompt)
 from petgen.finish import finish_clip, frame_rgb, metrics, pet_gamma  # noqa: E402
 
 SPIKE_OUT = Path(r"C:\Users\Administrator\AppData\Local\Temp\claude\c--Users-Administrator-code-aipet"
                  r"\4fbc451a-51c9-48a5-9f6b-54b7e4f439b7\scratchpad\out")
-# Pre-flight minimum per 5 s clip. std is 3 units; pro's price is unknown until
-# the first call (read final_unit_deduction), so demand a generous floor.
-VIDEO_UNITS = {"std": 3, "pro": 10}
+# Pre-flight minimum per 5 s clip: std 3 units, pro 4 (measured 2026-09-12).
+VIDEO_UNITS = {"std": 3, "pro": 4}
+PROP_DIR = WORK / "props"
 
 
 def pet_dir(pet: str, tag: str | None = None) -> Path:
@@ -104,6 +105,43 @@ def cmd_gate(a) -> int:
     return 0 if s.passed else 1
 
 
+def cmd_prop(a) -> int:
+    from petgen.compose import EdgeError
+    from petgen.props import cut_prop
+    body = {"model_name": "kling-v3", "prompt": PROPS[a.kind],
+            "negative_prompt": "动物，人，文字，水印，边框，多个物体", "aspect_ratio": "1:1", "resolution": "1k", "n": 1}
+    d = kling.wait("image", kling.create_image(body))
+    src = PROP_DIR / f"{a.kind}.png"
+    kling.download(d["task_result"]["images"][0]["url"], src)
+    print(f"prop {a.kind} -> {src.relative_to(HERE)}: deduction {d.get('final_unit_deduction')}")
+    try:
+        out = cut_prop(src, PROP_DIR / f"{a.kind}-cutout.png")
+    except EdgeError as e:
+        print(f"FAIL prop {a.kind}: {e}")
+        return 1
+    print(f"PASS prop {a.kind} -> {out.relative_to(HERE)}")
+    return 0
+
+
+def cmd_propref(a) -> int:
+    from petgen.props import PROP_REFS, compose_prop
+    d = pet_dir(a.pet, a.tag)
+    cut = d / "ref-front-cutout.png"
+    if not cut.exists():
+        print(f"no {cut.relative_to(HERE)}: run pose / gate front first")
+        return 1
+    ok = True
+    for stem, kind in PROP_REFS.items():
+        prop = PROP_DIR / f"{kind}-cutout.png"
+        if not prop.exists():
+            print(f"no {prop.relative_to(HERE)}: run prop {kind} first")
+            return 1
+        s = score_file(compose_prop(cut, prop, kind, d / f"ref-{stem}-green.png"))
+        ok = ok and s.passed
+        print(f"{'PASS' if s.passed else 'FAIL'} {a.pet}/{stem}: floating={s.floating} blob_core={s.blob_core}")
+    return 0 if ok else 1
+
+
 def cmd_video(a) -> int:
     d = pet_dir(a.pet, a.tag)
     ref = d / f"ref-{REF_POSE_FOR_ACTION[a.action]}-green.png"
@@ -163,13 +201,15 @@ def cmd_qa(a) -> int:
         return 1
     fmt = probe(v)
     fmt_ok = fmt == {"width": 960, "height": 960, "fps": "24/1", "frames": 121}
-    ok_seam, seam, worst = seam_verdict(*psnr_series(v, d / f"qa-{a.action}"))
+    ok_seam, seam, worst_step = seam_verdict(*psnr_series(v, d / f"qa-{a.action}"))
     first = score_file(_frame(v, d / f"qa-{a.action}-first.png", last=False))
     last = score_file(_frame(v, d / f"qa-{a.action}-last.png", last=True))
-    passed = fmt_ok and ok_seam and first.passed and last.passed
+    worst = max(frame_scores(v))
+    passed = fmt_ok and ok_seam and first.passed and last.passed and worst < BLOB_CORE_MAX
     print(json.dumps({"pet": a.pet, "action": a.action, "pass": passed, "format": fmt,
-                      "seam": round(seam, 2), "worst_step": round(worst, 2),
-                      "blob_core_first": first.blob_core, "blob_core_last": last.blob_core}, ensure_ascii=False))
+                      "seam": round(seam, 2), "worst_step": round(worst_step, 2),
+                      "blob_core_first": first.blob_core, "blob_core_last": last.blob_core,
+                      "blob_core_worst": worst}, ensure_ascii=False))
     return 0 if passed else 1
 
 
@@ -185,7 +225,7 @@ def cmd_package(a) -> int:
     out.mkdir(parents=True, exist_ok=True)
     for k, c in zip(ACTIONS, clips):
         shutil.copy2(c, out / f"{k}.mp4")
-    make_cover(Image.open(d / "ref-stand-cutout.png").convert("RGBA")).save(out / "cover.png")
+    make_cover(Image.open(d / "ref-front-cutout.png").convert("RGBA")).save(out / "cover.png")
     (out / "pet.json").write_text(json.dumps(pet_json(a.pet), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"packaged {out.relative_to(REPO)}")
     return 0
@@ -196,10 +236,13 @@ def main() -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("balance").set_defaults(fn=cmd_balance)
     sub.add_parser("import-spike").set_defaults(fn=cmd_import_spike)
+    pp = sub.add_parser("prop")
+    pp.add_argument("kind", choices=list(PROPS))
+    pp.set_defaults(fn=cmd_prop)
     for name, fn, extra in [("source", cmd_source, None), ("pose", cmd_pose, ("pose", list(POSE_ASPECT))),
                             ("gate", cmd_gate, ("pose", list(POSE_ASPECT))), ("video", cmd_video, ("action", ACTIONS)),
                             ("finish", cmd_finish, ("action", ACTIONS)), ("qa", cmd_qa, ("action", ACTIONS)),
-                            ("package", cmd_package, None)]:
+                            ("propref", cmd_propref, None), ("package", cmd_package, None)]:
         p = sub.add_parser(name)
         p.add_argument("pet", choices=list(PETS))
         if extra:

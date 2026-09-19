@@ -46,3 +46,26 @@ def test_partial_pixel_next_to_opaque_is_not_floating():
 def test_pass_threshold_is_strict():
     assert Score(floating=5000, blob_core=BLOB_CORE_MAX - 1).passed
     assert not Score(floating=0, blob_core=BLOB_CORE_MAX).passed
+
+
+import subprocess
+
+from petgen.keycheck import frame_scores
+
+
+def test_frame_scores_catch_a_ghost_in_the_middle_of_a_clip(tmp_path):
+    # 13 frames: an opaque red square throughout; frame 6 also carries a
+    # half-keyed olive patch (100,160,0 keys to alpha ~115) away from it --
+    # the dissolving-bowl ghost of the 2026-09-19 spike.
+    frames = np.zeros((13, 240, 240, 3), np.uint8)
+    frames[...] = (0, 255, 0)
+    frames[:, 80:160, 80:160] = (220, 40, 40)
+    frames[6, 10:50, 170:230] = (100, 160, 0)
+    video = tmp_path / "ghost.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", "240x240", "-r", "24",
+                    "-i", "-", "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p", str(video)],
+                   input=frames.tobytes(), check=True)
+    scores = frame_scores(video, step=6)
+    assert len(scores) == 3                     # frames 0, 6, 12
+    assert scores[1] >= BLOB_CORE_MAX
+    assert scores[0] < 50 and scores[2] < 50
