@@ -10,6 +10,8 @@
     "stand",
     "walk",
     "sleep",
+    "feed",
+    "play",
     "lick_paw",
     "act_cute"
   ],
