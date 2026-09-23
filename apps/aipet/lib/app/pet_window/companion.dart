@@ -30,6 +30,10 @@ class Companion {
       onAction: (k) => unawaited(userAction(k)),
       onClose: presenter.close,
       onHover: (inside) => inside ? presenter.hudEnter() : presenter.hudExit(),
+      // Panel calls are best-effort, local IPC: 500 ms is far longer than a
+      // healthy round trip, and a slow or wedged panel must never hold up
+      // the pet window (spec: quit's own short overall budget).
+      timeout: const Duration(milliseconds: 500),
     )..start();
     pets.addListener(_petsChanged);
     stats.addListener(_pushView);
@@ -117,13 +121,16 @@ class Companion {
     presenter.busy = walker.walking;
   }
 
-  /// Quitting: stop walking and take the panel off the screen.
+  /// Quitting: stop walking and take the panel off the screen. The hide is
+  /// fired, not awaited -- the panel engine lives in this process and dies
+  /// with it, so a hide that never lands costs nothing here, and AppExit's
+  /// own short quit budget must not be spent waiting on it.
   Future<void> shutdown() async {
     _walkGen++;
     walker.stop();
     _roam?.cancel();
     _roam = null;
-    await hud.hide();
+    unawaited(hud.hide());
   }
 
   void _petsChanged() {

@@ -42,6 +42,7 @@ void main() {
   late WalkDriver walker;
   late Companion c;
   late List<String> panel;
+  late FakeTransport panelEnd;
 
   Future<void> run(WidgetTester t, Duration span) async {
     final end = now.add(span);
@@ -69,7 +70,8 @@ void main() {
     );
     stats = StatsKeeper(StatsStore(appData), now: () => now);
     walker = WalkDriver(mover, facing: () => Facing.left, clock: () => now, frame: frame);
-    final (petEnd, panelEnd) = FakeTransport.pair();
+    final (petEnd, pEnd) = FakeTransport.pair();
+    panelEnd = pEnd;
     panel = [];
     HudWindowBridge(panelEnd,
         onShow: (r, v) async => panel.add('show $r ${v.name} ${v.todayInteractions}'),
@@ -201,5 +203,17 @@ void main() {
     await walking;
     walker.dispose();
     tmp.deleteSync(recursive: true);
+  });
+
+  testWidgets('shutdown does not wait for a wedged panel', (t) async {
+    await boot();
+    final walking = c.userAction('walk');
+    await run(t, const Duration(seconds: 1));
+    panelEnd.silent = true; // the panel stops answering
+    await c.shutdown(); // must return promptly, not after a 2 s timeout
+    expect(walker.walking, isFalse);
+    await walking;
+    await t.pump(const Duration(milliseconds: 500)); // let the fired-and-forgotten hide's own timeout land
+    finish();
   });
 }

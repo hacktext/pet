@@ -78,13 +78,13 @@ Future<void> runPetWindow() async {
     mover: mover,
     hudTransport: WindowChannelTransport(kHudChannel),
   );
-  Timer.periodic(const Duration(minutes: 1), (_) => stats.tick());
+  final statsTicker = Timer.periodic(const Duration(minutes: 1), (_) => stats.tick());
 
   final quit = AppExit(
     // Off the screen first: the native teardown after destroy() takes seconds.
     hide: [companion.shutdown, windowManager.hide, launcher.hideIfOpen],
     // Clips are torn down before the engine (pet_shell's I-7 lesson).
-    release: [player.dispose, trayManager.destroy],
+    release: [player.dispose, trayManager.destroy, () async => statsTicker.cancel()],
     destroy: windowManager.destroy, // ends the process, sub-window engine included
   ).quit;
 
