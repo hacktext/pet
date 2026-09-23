@@ -17,7 +17,7 @@ ASSETS = REPO / "apps" / "aipet" / "assets" / "pets"
 os.environ.setdefault("U2NET_HOME", str(WORK / "u2net"))  # before rembg is imported
 
 from petgen import kling  # noqa: E402
-from petgen.keycheck import BLOB_CORE_MAX, frame_scores, score_file  # noqa: E402
+from petgen.keycheck import FRAME_BLOB_MAX, frame_scores, score_file  # noqa: E402
 from petgen.loopcheck import probe, psnr_series, seam_verdict  # noqa: E402
 from petgen.package import ACTIONS, chosen_facing, make_cover, pet_json  # noqa: E402
 from petgen.prompts import (PETS, POSE_ASPECT, PROPS, REF_POSE_FOR_ACTION, action_prompt, pose_prompt,  # noqa: E402
@@ -205,7 +205,7 @@ def cmd_qa(a) -> int:
     first = score_file(_frame(v, d / f"qa-{a.action}-first.png", last=False))
     last = score_file(_frame(v, d / f"qa-{a.action}-last.png", last=True))
     worst = max(frame_scores(v))
-    passed = fmt_ok and ok_seam and first.passed and last.passed and worst < BLOB_CORE_MAX
+    passed = fmt_ok and ok_seam and first.passed and last.passed and worst < FRAME_BLOB_MAX
     print(json.dumps({"pet": a.pet, "action": a.action, "pass": passed, "format": fmt,
                       "seam": round(seam, 2), "worst_step": round(worst_step, 2),
                       "blob_core_first": first.blob_core, "blob_core_last": last.blob_core,

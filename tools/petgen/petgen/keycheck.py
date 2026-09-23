@@ -16,7 +16,13 @@ from petgen.loopcheck import probe
 
 KEY_CB, KEY_CR, INNER_T, OUTER_T = -0.331, -0.419, 0.28, 0.45
 SCORE_EDGE = 800
-BLOB_CORE_MAX = 200  # calibrated, see the plan's Global Constraints
+BLOB_CORE_MAX = 200  # for a still (reference image, first / last frame)
+# Mid-clip frames are judged loosely: a moving tail motion-blurs into the green
+# and keys as a faint ghost, and the competitor's shipped clips do it too
+# (measured 2026-09-23: their worst frames are play 665, sleep 995, stand 507).
+# What this still catches is the real defect -- a prop dissolving in or out, or
+# a tail smearing across half the clip (measured 2529-8072).
+FRAME_BLOB_MAX = 1000
 FLOATING_REF = 911   # competitor reference frame; context only
 
 

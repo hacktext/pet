@@ -1,6 +1,6 @@
 import numpy as np
 
-from petgen.keycheck import BLOB_CORE_MAX, Score, alpha_map, blob_core_mask, floating_mask
+from petgen.keycheck import BLOB_CORE_MAX, FRAME_BLOB_MAX, Score, alpha_map, blob_core_mask, floating_mask
 
 
 def rgb(color, h=4, w=4):
@@ -67,5 +67,5 @@ def test_frame_scores_catch_a_ghost_in_the_middle_of_a_clip(tmp_path):
                    input=frames.tobytes(), check=True)
     scores = frame_scores(video, step=6)
     assert len(scores) == 3                     # frames 0, 6, 12
-    assert scores[1] >= BLOB_CORE_MAX
+    assert scores[1] >= FRAME_BLOB_MAX          # a whole translucent object, not a blurred tail
     assert scores[0] < 50 and scores[2] < 50
