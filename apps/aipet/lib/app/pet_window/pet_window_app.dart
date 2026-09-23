@@ -1,22 +1,33 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 
 import 'package:alpha_video/alpha_video.dart';
+import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../../domain/pet.dart';
+import '../../domain/walker.dart';
 import '../../services/app_paths.dart';
+import '../../services/hud_bridge.dart';
 import '../../services/matte_cache.dart';
+import '../../services/native_window.dart';
 import '../../services/pet_library.dart';
 import '../../services/settings_store.dart';
+import '../../services/stats_store.dart';
 import '../../services/window_bridge.dart';
+import '../hud_window/hud_window_entry.dart';
 import 'app_exit.dart';
 import 'clip_player.dart';
 import 'close_policy.dart';
+import 'companion.dart';
 import 'library_launcher.dart';
 import 'pet_window_controller.dart';
+import 'stats_keeper.dart';
+import 'walk_driver.dart';
+import 'window_mover.dart';
 
 /// Primary engine: builds the services, boots, and opens the library on a
 /// first run (spec 3.3).
@@ -57,9 +68,21 @@ Future<void> runPetWindow() async {
     push: (s) => bridge.pushState(s),
   );
 
+  final mover = DesktopWindowMover(NativeWindow.find('aipet pet'));
+  final stats = StatsKeeper(StatsStore(appData));
+  final walker = WalkDriver(mover, facing: () => controller.currentPet?.walkFacing ?? Facing.right);
+  final companion = Companion(
+    pets: controller,
+    stats: stats,
+    walker: walker,
+    mover: mover,
+    hudTransport: WindowChannelTransport(kHudChannel),
+  );
+  Timer.periodic(const Duration(minutes: 1), (_) => stats.tick());
+
   final quit = AppExit(
     // Off the screen first: the native teardown after destroy() takes seconds.
-    hide: [windowManager.hide, launcher.hideIfOpen],
+    hide: [companion.shutdown, windowManager.hide, launcher.hideIfOpen],
     // Clips are torn down before the engine (pet_shell's I-7 lesson).
     release: [player.dispose, trayManager.destroy],
     destroy: windowManager.destroy, // ends the process, sub-window engine included
@@ -80,8 +103,19 @@ Future<void> runPetWindow() async {
     onQuit: quit,
   )..start();
 
-  runApp(PetWindowApp(controller: controller, player: player, launcher: launcher, onQuit: quit));
+  runApp(PetWindowApp(
+    controller: controller,
+    player: player,
+    launcher: launcher,
+    onQuit: quit,
+    companion: companion,
+    walker: walker,
+  ));
   await controller.boot();
+  // The panel engine, created once and kept hidden; without it the pet
+  // window works as before (spec 2026-09-19 E 4).
+  unawaited(WindowController.create(WindowConfiguration(arguments: kHudWindowArgs, hiddenAtLaunch: true))
+      .then<void>((_) {}, onError: (Object e) => developer.log('panel window failed: $e', name: 'aipet.hud')));
   if (controller.currentPet == null) await launcher.open();
 }
 
@@ -92,12 +126,16 @@ class PetWindowApp extends StatefulWidget {
     required this.player,
     required this.launcher,
     required this.onQuit,
+    required this.companion,
+    required this.walker,
   });
 
   final PetWindowController controller;
   final AlphaClipPlayer player;
   final LibraryLauncher launcher;
   final Future<void> Function() onQuit;
+  final Companion companion;
+  final WalkDriver walker;
 
   @override
   State<PetWindowApp> createState() => _PetWindowAppState();
@@ -183,7 +221,7 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
     if (choice == null) return;
     if (choice == 'open') return widget.launcher.open();
     if (choice == 'quit') return widget.onQuit();
-    await c.playAction(choice.substring('action:'.length));
+    await widget.companion.userAction(choice.substring('action:'.length));
   }
 
   @override
@@ -193,30 +231,46 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
           backgroundColor: Colors.transparent,
           // Builder: showMenu needs a context below MaterialApp (Navigator, Overlay).
           body: Builder(
-            builder: (ctx) => GestureDetector(
-              onPanStart: (_) => windowManager.startDragging(),
-              onSecondaryTapUp: (d) => _showMenu(ctx, d.globalPosition),
-              child: Stack(alignment: Alignment.center, children: [
-                ValueListenableBuilder<AlphaVideoController?>(
-                  valueListenable: widget.player.controller,
-                  builder: (_, vc, _) => vc == null ? const SizedBox.shrink() : AlphaVideoView(controller: vc),
-                ),
-                ListenableBuilder(
-                  listenable: widget.controller,
-                  builder: (_, _) {
-                    final e = widget.controller.error;
-                    if (e == null) return const SizedBox.shrink();
-                    return Positioned(
-                      bottom: 8,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        decoration: BoxDecoration(color: const Color(0xCC3D2B1F), borderRadius: BorderRadius.circular(10)),
-                        child: Text(e, style: const TextStyle(color: Colors.white, fontSize: 12)),
-                      ),
-                    );
-                  },
-                ),
-              ]),
+            builder: (ctx) => MouseRegion(
+              onEnter: (_) => widget.companion.petEnter(),
+              onExit: (_) => widget.companion.petExit(),
+              child: GestureDetector(
+                onPanStart: (_) async {
+                  widget.companion.dragStarted();
+                  try {
+                    await windowManager.startDragging(); // returns when the drag ends (modal SC_MOVE loop)
+                  } finally {
+                    widget.companion.dragEnded();
+                  }
+                },
+                onSecondaryTapUp: (d) => _showMenu(ctx, d.globalPosition),
+                child: Stack(alignment: Alignment.center, children: [
+                  ListenableBuilder(
+                    listenable: widget.walker,
+                    builder: (_, child) => Transform.flip(flipX: widget.walker.mirrored, child: child),
+                    child: ValueListenableBuilder<AlphaVideoController?>(
+                      valueListenable: widget.player.controller,
+                      builder: (_, vc, _) => vc == null ? const SizedBox.shrink() : AlphaVideoView(controller: vc),
+                    ),
+                  ),
+                  ListenableBuilder(
+                    listenable: widget.controller,
+                    builder: (_, _) {
+                      final e = widget.controller.error;
+                      if (e == null) return const SizedBox.shrink();
+                      return Positioned(
+                        bottom: 8,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration:
+                              BoxDecoration(color: const Color(0xCC3D2B1F), borderRadius: BorderRadius.circular(10)),
+                          child: Text(e, style: const TextStyle(color: Colors.white, fontSize: 12)),
+                        ),
+                      );
+                    },
+                  ),
+                ]),
+              ),
             ),
           ),
         ),
