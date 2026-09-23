@@ -6,27 +6,10 @@ import 'package:aipet/domain/library_state.dart';
 import 'package:aipet/services/pet_library.dart';
 import 'package:aipet/services/settings_store.dart';
 import 'package:aipet/services/window_bridge.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../support/fake_player.dart';
 import '../support/pet_fixtures.dart';
-
-class FakePlayer implements ClipPlayer {
-  final plays = <String>[]; // "<petId>/<clip file name>|loop" or "|once"
-  VoidCallback? lastOnFinished;
-  Completer<void>? gate;
-
-  @override
-  Future<void> play(File aipmat, {required bool loop, VoidCallback? onFinished}) async {
-    if (gate != null) await gate!.future;
-    final parts = aipmat.path.split('\\');
-    plays.add('${parts[parts.length - 2]}/${parts.last}|${loop ? 'loop' : 'once'}');
-    lastOnFinished = onFinished;
-  }
-
-  @override
-  Future<void> dispose() async {}
-}
 
 void main() {
   late Directory tmp, builtin, appData;
