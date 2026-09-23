@@ -184,24 +184,22 @@ def pet_gamma(workdir: Path, override: float | None = None, builtin: float | Non
     """One grade per pet so every action looks alike: --gamma wins, then this
     folder's saved grade.json, then [builtin] -- the grade carried by
     prompts.PETS for a pet solve_gamma cannot reach, because it only ever
-    brightens -- else solve it from this folder's stand.mp4 frame 30. Whatever
-    is derived is saved, so the pet's other actions and a later re-finish get
-    the same grade."""
+    brightens -- else solve it from this folder's stand.mp4 frame 30 and save
+    that, so the pet's other actions and a later re-finish reuse it."""
     if override is not None:
         return override
     grade = workdir / "grade.json"
     if grade.exists():
         return float(json.loads(grade.read_text(encoding="utf-8"))["gamma"])
+    # Returned, never saved: cmd_finish passes it on every call, so writing it
+    # would only let a stale grade.json outlive a later recalibration of PETS.
     if builtin is not None:
-        return _save_grade(grade, builtin, "prompts.PETS")
+        return builtin
     stand = workdir / "stand.mp4"
     if not stand.exists():
         raise FileNotFoundError(f"no {stand.name} in {workdir} to derive the pet's grade from")
-    return _save_grade(grade, solve_gamma(frame_rgb(stand, 30)), "stand.mp4 frame 30")
-
-
-def _save_grade(grade: Path, gamma: float, source: str) -> float:
+    g = solve_gamma(frame_rgb(stand, 30))
     tmp = grade.with_name(grade.name + ".partial")
-    tmp.write_text(json.dumps({"gamma": gamma, "from": source}) + "\n", encoding="utf-8")
+    tmp.write_text(json.dumps({"gamma": g, "from": "stand.mp4 frame 30"}) + "\n", encoding="utf-8")
     tmp.replace(grade)
-    return gamma
+    return g

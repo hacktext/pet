@@ -103,14 +103,20 @@ def test_pet_gamma_is_solved_once_and_reused(tmp_path):
 
 
 def test_builtin_grade_is_used_when_the_solver_would_only_brighten(tmp_path):
-    # ragdoll's reference is already bright, so solve_gamma can only wash it
-    # out further; its grade lives in prompts.PETS and must survive a work
-    # folder that has no grade.json yet (work/ is not in the repo).
-    assert PETS["ragdoll"]["grade"] < 1.0
+    # ragdoll's reference is already bright (subject luma 172) and solve_gamma
+    # can only wash it out further, so its grade is hand-set. 0.88 brought its
+    # stand from luma 174 to 165.2 (2026-09-23); changing it is a
+    # recalibration, and this line is where it gets recorded.
+    assert PETS["ragdoll"]["grade"] == 0.88
     assert "grade" not in PETS["gold"]
     g = pet_gamma(tmp_path, builtin=PETS["ragdoll"]["grade"])
-    assert g == PETS["ragdoll"]["grade"]
-    saved = json.loads((tmp_path / "grade.json").read_text(encoding="utf-8"))
-    assert saved == {"gamma": g, "from": "prompts.PETS"}
-    assert pet_gamma(tmp_path) == g                  # the other actions reuse it
+    assert g == 0.88
+    # Not written out: cmd_finish passes it every time, and a saved copy would
+    # outlive a later recalibration.
+    assert not (tmp_path / "grade.json").exists()
     assert pet_gamma(tmp_path, override=1.3, builtin=g) == 1.3   # --gamma still wins
+
+
+def test_a_saved_grade_wins_over_the_builtin_one(tmp_path):
+    (tmp_path / "grade.json").write_text(json.dumps({"gamma": 1.05, "from": "hand"}), encoding="utf-8")
+    assert pet_gamma(tmp_path, builtin=0.88) == 1.05

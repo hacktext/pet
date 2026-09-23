@@ -77,15 +77,20 @@ def test_frame_scores_catch_a_ghost_in_the_middle_of_a_clip(tmp_path):
     assert scores[0] < 50 and scores[2] < 50
 
 
-def test_a_blurred_tail_sized_ghost_passes_mid_clip_but_not_as_a_still(tmp_path):
+def test_the_mid_clip_threshold_brackets_a_blurred_tail_and_a_heavier_blob(tmp_path):
     # The calibration of 2026-09-23: mid-clip frames allow what a still may
     # not, because a fast-moving tail motion-blurs into the green and the
-    # competitor's own shipped clips score 507-995 the same way. An 8x8 patch
-    # is that size once scored at SCORE_EDGE. If FRAME_BLOB_MAX ever drops
-    # back to the still's 200, this fails -- which is the point.
+    # competitor's own shipped clips score that way too (their worst frames:
+    # stand 507, play 665, sleep 995). These two patches bracket the
+    # threshold -- 11x11 scores 899, about their worst, and must pass; 12x12
+    # scores 1295 and must not -- so moving FRAME_BLOB_MAX in either
+    # direction fails here, including back to the still's 200.
     frames = _green()
-    frames[6, 20:28, 180:188] = (100, 160, 0)
-    scores = frame_scores(_clip(tmp_path / "tail.mp4", frames), step=6)
-    assert BLOB_CORE_MAX <= scores[1] < FRAME_BLOB_MAX
-    assert not Score(floating=0, blob_core=scores[1]).passed   # a still would be rejected
-    assert scores[0] < 50 and scores[2] < 50
+    frames[6, 20:31, 180:191] = (100, 160, 0)
+    tail = frame_scores(_clip(tmp_path / "tail.mp4", frames), step=6)
+    frames = _green()
+    frames[6, 20:32, 180:192] = (100, 160, 0)
+    heavier = frame_scores(_clip(tmp_path / "heavier.mp4", frames), step=6)
+    assert tail[1] < FRAME_BLOB_MAX <= heavier[1]
+    assert not Score(floating=0, blob_core=tail[1]).passed    # a still would still be rejected
+    assert tail[0] < 50 and tail[2] < 50
