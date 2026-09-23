@@ -50,6 +50,7 @@ class Companion {
 
   Timer? _roam;
   int _walkGen = 0;
+  int _walks = 0; // _walk bodies still in flight; the last one out frees the panel
   bool _dragging = false;
   bool _disposed = false;
   String? _petId;
@@ -86,21 +87,28 @@ class Companion {
 
   Future<void> _walk(Duration length) async {
     final gen = ++_walkGen;
+    _walks++;
     presenter.busy = true;
-    await pets.playAction('walk');
-    if (gen != _walkGen) {
-      // Superseded while our own clip was still being matted. If it landed
-      // anyway it would loop in place forever, so hand it back to stand.
-      if (pets.currentAction == 'walk' && !walker.walking) unawaited(pets.playAction('stand'));
-      presenter.busy = _dragging;
-      return;
+    try {
+      await pets.playAction('walk');
+      if (gen != _walkGen) {
+        // Superseded while our own clip was still being matted. If it landed
+        // anyway it would loop in place forever, so hand it back to stand.
+        if (pets.currentAction == 'walk' && !walker.walking) unawaited(pets.playAction('stand'));
+        return;
+      }
+      if (pets.currentAction != 'walk') return;
+      await walker.walk(length);
+    } finally {
+      // The panel stays down while a drag, a live walk or the walk that took
+      // this one's place is still going on. walker.walking alone is not
+      // enough: WalkDriver.walk() ends the walk it replaces before it has
+      // awaited the window bounds, so the superseded walk wakes up here one
+      // microtask later, while its replacement is not yet walking -- and the
+      // panel would pop up over a window that is about to move away.
+      _walks--;
+      presenter.busy = _dragging || walker.walking || _walks > 0;
     }
-    if (pets.currentAction != 'walk') {
-      presenter.busy = _dragging;
-      return;
-    }
-    await walker.walk(length);
-    presenter.busy = _dragging;
     if (gen == _walkGen && pets.currentAction == 'walk') await pets.playAction('stand');
   }
 
@@ -121,16 +129,19 @@ class Companion {
     presenter.busy = walker.walking;
   }
 
-  /// Quitting: stop walking and take the panel off the screen. The hide is
-  /// fired, not awaited -- the panel engine lives in this process and dies
-  /// with it, so a hide that never lands costs nothing here, and AppExit's
-  /// own short quit budget must not be spent waiting on it.
+  /// Quitting: stop walking and take the panel off the screen, and wait for
+  /// the panel to actually be gone -- quitting from the pet's right-click menu
+  /// happens with the pointer on the pet, so the panel is usually up, and the
+  /// native teardown after destroy() takes seconds with a topmost window still
+  /// on screen. Waiting is safe: every hud call is capped at 500 ms (the
+  /// bridge's own timeout) and AppExit runs its hide steps together, so this
+  /// can cost at most a quarter of its 2 s budget.
   Future<void> shutdown() async {
     _walkGen++;
     walker.stop();
     _roam?.cancel();
     _roam = null;
-    unawaited(hud.hide());
+    await hud.hide();
   }
 
   void _petsChanged() {
@@ -139,6 +150,11 @@ class Companion {
     if (id != _petId) {
       _petId = id;
       stats.select(id);
+      // Adopting goes through the controller, not through us, so a walk can
+      // still be sliding the window while the new pet stands on screen. The
+      // parked _walk wakes into its own superseded branch.
+      _walkGen++;
+      walker.stop();
     }
     if (pets.currentAction == 'stand' && !walker.walking) {
       _roam ??= _scheduleRoam();
@@ -172,7 +188,15 @@ class Companion {
     try {
       final v = view;
       if (v == null) return;
-      await hud.show(await mover.bounds(), v);
+      // Asking the platform for our own rectangle is a round trip: a drag or
+      // a walk starting meanwhile makes the presenter hide the panel and
+      // forget it, and a show landing after that would leave a panel on the
+      // desktop that the presenter believes is gone -- never updated, never
+      // taken away.
+      final b = await mover.bounds();
+      if (_disposed || !presenter.shown) return;
+      await hud.show(b, v);
+      if (!presenter.shown) unawaited(hud.hide());
     } catch (e) {
       developer.log('showHud failed: $e', name: 'aipet.hud');
     }

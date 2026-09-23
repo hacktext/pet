@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
+import 'dart:ui';
 
 import 'package:aipet/app/pet_window/companion.dart';
 import 'package:aipet/app/pet_window/pet_window_controller.dart';
@@ -29,6 +30,15 @@ class LowRandom implements Random {
   bool nextBool() => false;
 }
 
+/// A mover whose bounds() can be parked: on Windows it is a platform round
+/// trip, so anything may happen while the panel waits for it.
+class GatedMover extends FakeMover {
+  Completer<Rect>? gate;
+
+  @override
+  Future<Rect> bounds() => gate?.future ?? super.bounds();
+}
+
 const kSeven = ['stand', 'walk', 'sleep', 'feed', 'play', 'lick_paw', 'act_cute'];
 
 void main() {
@@ -36,13 +46,15 @@ void main() {
   late Directory tmp;
   late DateTime now;
   late FakePlayer player;
-  late FakeMover mover;
+  late GatedMover mover;
   late PetWindowController pets;
   late StatsKeeper stats;
   late WalkDriver walker;
   late Companion c;
   late List<String> panel;
   late FakeTransport panelEnd;
+  Completer<void>? hideGate; // when set, the panel takes its time going away
+  var live = false; // boot() ran and what it built is still standing
 
   Future<void> run(WidgetTester t, Duration span) async {
     final end = now.add(span);
@@ -52,15 +64,17 @@ void main() {
     }
   }
 
-  Future<void> boot({Future<File> Function(File)? ensure}) async {
+  Future<void> boot({Future<File> Function(File)? ensure, bool twoPets = false}) async {
     tmp = Directory.systemTemp.createTempSync('companion_');
     final builtin = Directory('${tmp.path}\\builtin')..createSync();
     writePet(builtin, id: 'builtin-gold', name: '金毛', actions: kSeven);
+    if (twoPets) writePet(builtin, id: 'builtin-corgi', name: '柯基', actions: kSeven);
     final appData = Directory('${tmp.path}\\appdata');
     SettingsStore(appData).save(const LibraryState(currentPetId: 'builtin-gold', adoptedPetIds: ['builtin-gold']));
     now = DateTime(2026, 9, 19, 9);
     player = FakePlayer();
-    mover = FakeMover();
+    mover = GatedMover();
+    hideGate = null;
     pets = PetWindowController(
       library: PetLibrary(builtinRoot: builtin, customRoot: Directory('${tmp.path}\\custom')),
       settings: SettingsStore(appData),
@@ -76,37 +90,55 @@ void main() {
     HudWindowBridge(panelEnd,
         onShow: (r, v) async => panel.add('show $r ${v.name} ${v.todayInteractions}'),
         onUpdate: (v) => panel.add('update ${v.todayInteractions}'),
-        onHide: () async => panel.add('hide')).start();
+        onHide: () async {
+          final gate = hideGate;
+          if (gate != null) await gate.future;
+          panel.add('hide');
+        }).start();
     c = Companion(pets: pets, stats: stats, walker: walker, mover: mover, hudTransport: petEnd, random: LowRandom());
     await pets.boot();
+    live = true;
   }
 
   void finish() {
+    if (!live) return;
+    live = false;
     c.dispose();
     walker.dispose();
     tmp.deleteSync(recursive: true);
   }
 
-  testWidgets('the panel shows the pet, its numbers and the buttons it has', (t) async {
+  /// Every test tears down the Companion, the WalkDriver and its temp folder
+  /// even when an expect fails: testWidgets looks for pending timers when the
+  /// body ends -- before any tearDown would run -- so a leaked walk or roam
+  /// timer would fail the *next* test and hide the real failure.
+  void petTest(String description, Future<void> Function(WidgetTester) body) =>
+      testWidgets(description, (t) async {
+        try {
+          await body(t);
+        } finally {
+          finish();
+        }
+      });
+
+  petTest('the panel shows the pet, its numbers and the buttons it has', (t) async {
     await boot();
     final v = c.view!;
     expect(v.name, '金毛');
     expect([v.intimacy, v.satiety, v.health, v.companionDays, v.todayInteractions], [50, 50, 100, 1, 0]);
     expect(v.status, '状态很好'); // satiety 50 is not below 50
     expect(v.enabled, {'stand', 'walk', 'feed', 'play'});
-    finish();
   });
 
-  testWidgets('a button plays the action and counts an interaction; feeding fills the bowl', (t) async {
+  petTest('a button plays the action and counts an interaction; feeding fills the bowl', (t) async {
     await boot();
     await c.userAction('feed');
     expect(player.plays.last, 'builtin-gold/feed.mp4|once');
     expect(stats.current!.satiety, 80);
     expect(stats.current!.todayInteractions, 1);
-    finish();
   });
 
-  testWidgets('walk moves the window for 20 s and ends on stand', (t) async {
+  petTest('walk moves the window for 20 s and ends on stand', (t) async {
     await boot();
     final done = c.userAction('walk');
     await run(t, const Duration(seconds: 21));
@@ -115,10 +147,9 @@ void main() {
     expect(player.plays, containsAllInOrder(['builtin-gold/walk.mp4|loop', 'builtin-gold/stand.mp4|loop']));
     expect(player.plays.last, 'builtin-gold/stand.mp4|loop');
     expect(walker.walking, isFalse);
-    finish();
   });
 
-  testWidgets('another action mid-walk stops the walk and does not snap back to stand', (t) async {
+  petTest('another action mid-walk stops the walk and does not snap back to stand', (t) async {
     await boot();
     final walking = c.userAction('walk');
     await run(t, const Duration(seconds: 2));
@@ -127,10 +158,9 @@ void main() {
     await run(t, const Duration(seconds: 1));
     expect(player.plays.last, 'builtin-gold/lick_paw.mp4|once');
     expect(walker.walking, isFalse);
-    finish();
   });
 
-  testWidgets('dragging stops a walk and returns to stand', (t) async {
+  petTest('dragging stops a walk and returns to stand', (t) async {
     await boot();
     final walking = c.userAction('walk');
     await run(t, const Duration(seconds: 1));
@@ -140,10 +170,36 @@ void main() {
     expect(walker.walking, isFalse);
     expect(player.plays.last, 'builtin-gold/stand.mp4|loop');
     c.dragEnded();
-    finish();
   });
 
-  testWidgets('hovering shows the panel over the pet window; a change updates it', (t) async {
+  petTest('a walk that replaces another leaves the panel down while it runs', (t) async {
+    await boot();
+    final first = c.userAction('walk');
+    await run(t, const Duration(seconds: 1));
+    unawaited(c.userAction('walk')); // 走路 again: the first walk is superseded
+    await first; // it wakes up the moment the second one takes the driver
+    c.petEnter();
+    await t.pump(const Duration(milliseconds: 300));
+    expect(walker.walking, isTrue);
+    expect(panel, isEmpty, reason: 'the window is still sliding: the panel would sit where the pet no longer is');
+    c.petExit();
+  });
+
+  petTest('adopting another pet mid-walk stops the walk', (t) async {
+    await boot(twoPets: true);
+    final walking = c.userAction('walk');
+    await run(t, const Duration(seconds: 1));
+    expect(walker.walking, isTrue);
+    await pets.adopt('builtin-corgi');
+    await t.pump();
+    expect(walker.walking, isFalse, reason: 'the new pet is standing, so the window must stop sliding');
+    final moves = mover.moves.length;
+    await run(t, const Duration(seconds: 1));
+    expect(mover.moves, hasLength(moves));
+    await walking;
+  });
+
+  petTest('hovering shows the panel over the pet window; a change updates it', (t) async {
     await boot();
     c.petEnter();
     await t.pump(const Duration(milliseconds: 300));
@@ -154,29 +210,43 @@ void main() {
     c.petExit();
     await t.pump(const Duration(milliseconds: 600));
     expect(panel.last, 'hide');
-    finish();
   });
 
-  testWidgets('after 3 idle minutes it roams by itself for 8 s, without counting an interaction', (t) async {
+  petTest('a drag while the panel is being placed does not strand it on screen', (t) async {
+    await boot();
+    c.petEnter();
+    final gate = mover.gate = Completer<Rect>();
+    await t.pump(const Duration(milliseconds: 300)); // the show fires and parks on bounds()
+    expect(panel, isEmpty);
+    c.dragStarted(); // the presenter takes the panel away and believes it gone
+    await t.pump();
+    expect(panel, ['hide']);
+    mover.gate = null;
+    gate.complete(mover.rect); // the bounds finally come back
+    await t.pump();
+    expect(panel.where((p) => p.startsWith('show')), isEmpty,
+        reason: 'a panel the presenter thinks is hidden is never updated or taken away again');
+    c.dragEnded();
+  });
+
+  petTest('after 3 idle minutes it roams by itself for 8 s, without counting an interaction', (t) async {
     await boot();
     await t.pump(const Duration(minutes: 3)); // the walk clock (now) is left alone: the roam starts from here
     expect(player.plays.last, 'builtin-gold/walk.mp4|loop');
     await run(t, const Duration(seconds: 9));
     expect(player.plays.last, 'builtin-gold/stand.mp4|loop');
     expect(stats.current!.todayInteractions, 0);
-    finish();
   });
 
-  testWidgets('no roaming while the pointer is on the pet', (t) async {
+  petTest('no roaming while the pointer is on the pet', (t) async {
     await boot();
     c.petEnter();
     await t.pump(const Duration(minutes: 3));
     expect(player.plays.where((p) => p.contains('walk')), isEmpty);
     c.petExit();
-    finish();
   });
 
-  testWidgets('an action arriving while the walk clip is still being matted leaves the pet off walk', (t) async {
+  petTest('an action arriving while the walk clip is still being matted leaves the pet off walk', (t) async {
     final gate = Completer<File>();
     await boot(ensure: (f) => f.path.endsWith('walk.mp4') ? gate.future : Future.value(f));
     final walking = c.userAction('walk');
@@ -187,10 +257,9 @@ void main() {
     await t.pump();
     expect(pets.currentAction, isNot('walk'));
     expect(player.plays.last, isNot('builtin-gold/walk.mp4|loop'));
-    finish();
   });
 
-  testWidgets('dispose() during a live walk stops it', (t) async {
+  petTest('dispose() during a live walk stops it', (t) async {
     await boot();
     final walking = c.userAction('walk');
     await run(t, const Duration(seconds: 1));
@@ -201,19 +270,34 @@ void main() {
     expect(mover.moves.length, movesAtDispose);
     expect(walker.walking, isFalse);
     await walking;
-    walker.dispose();
-    tmp.deleteSync(recursive: true);
   });
 
-  testWidgets('shutdown does not wait for a wedged panel', (t) async {
+  petTest('quitting waits for the panel to come off the screen', (t) async {
+    await boot();
+    c.petEnter();
+    await t.pump(const Duration(milliseconds: 300));
+    expect(panel, ['show ${mover.rect} 金毛 0']);
+    hideGate = Completer<void>();
+    var quit = false;
+    unawaited(c.shutdown().then((_) => quit = true));
+    await t.pump();
+    expect(quit, isFalse, reason: 'the panel is still on screen, and the native teardown takes seconds');
+    hideGate!.complete();
+    await t.pump();
+    expect(quit, isTrue);
+    expect(panel.last, 'hide');
+  });
+
+  petTest('shutdown does not wait for a wedged panel', (t) async {
     await boot();
     final walking = c.userAction('walk');
     await run(t, const Duration(seconds: 1));
     panelEnd.silent = true; // the panel stops answering
-    await c.shutdown(); // must return promptly, not after a 2 s timeout
+    var quit = false;
+    unawaited(c.shutdown().then((_) => quit = true));
+    await t.pump(const Duration(milliseconds: 500)); // the bridge's own timeout and not a tick more
+    expect(quit, isTrue);
     expect(walker.walking, isFalse);
     await walking;
-    await t.pump(const Duration(milliseconds: 500)); // let the fired-and-forgotten hide's own timeout land
-    finish();
   });
 }

@@ -45,8 +45,10 @@ class WalkDriver extends ChangeNotifier {
   /// Walks for [length]. Completes true when the time is up; false when it
   /// could not start (no work area) or was stopped / replaced.
   Future<bool> walk(Duration length) async {
-    stop();
+    // One bump for both jobs: it supersedes whatever was walking (or still
+    // starting) and claims the generation for this walk.
     final gen = ++_gen;
+    _finish(false);
     final b = await _mover.bounds();
     final work = await _mover.workArea(b);
     if (gen != _gen || work == null) return false;
