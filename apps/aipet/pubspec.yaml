@@ -38,6 +38,8 @@ dependencies:
   window_manager: ^0.5.2
   tray_manager: ^0.5.3
   crypto: ^3.0.7
+  screen_retriever: ^0.2.2
+  ffi: ^2.2.0
   alpha_video:
     path: ../../packages/alpha_video
 
