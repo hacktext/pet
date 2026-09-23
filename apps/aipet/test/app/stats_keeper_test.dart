@@ -75,6 +75,36 @@ void main() {
     expect(k.current!.satiety.round(), 48);
   });
 
+  test('a tick that crosses midnight writes the file even with nothing on screen to show for it', () {
+    now = DateTime(2026, 9, 19, 23, 59, 30);
+    final store = CountingStore(tmp);
+    final k = StatsKeeper(store, now: () => now)..select('builtin-gold');
+    expect(store.saves, 1);
+    expect(k.current!.todayInteractions, 0); // fresh, so the counter has nowhere to move
+    now = DateTime(2026, 9, 20, 0, 0, 10); // 40 s on: every displayed number is the one before
+    k.tick();
+    expect([k.current!.satiety.round(), k.current!.health.round(), k.current!.intimacy.round()], [50, 100, 50]);
+    expect(k.current!.interactionDay, DateTime(2026, 9, 20));
+    expect(store.saves, 2,
+        reason: 'the day on disk is the only thing keeping the snapshot under a day stale, '
+            'and the 30-day catch-up cap out of reach');
+  });
+
+  test('a tick that only moves health writes the file', () {
+    final store = CountingStore(tmp);
+    final k = StatsKeeper(store, now: () => now)..select('builtin-gold');
+    now = now.add(const Duration(hours: 24)); // satiety bottoms out well before this and stays there
+    k.tick();
+    expect(k.current!.satiety, 0);
+    final saves = store.saves;
+    final health = k.current!.health.round();
+    now = now.add(const Duration(minutes: 30)); // starving costs 2 health an hour, so 1 here; nothing else moves
+    k.tick();
+    expect(k.current!.satiety, 0);
+    expect(k.current!.health.round(), health - 1);
+    expect(store.saves, saves + 1);
+  });
+
   test('numbers a skipped save left in memory survive a restart', () {
     final store = CountingStore(tmp);
     final k = StatsKeeper(store, now: () => now)..select('builtin-gold');
@@ -100,6 +130,18 @@ void main() {
     k.tick();
     expect(fired, 3);
     expect(k.current!.satiety, closeTo(55, 1e-6));
+  });
+
+  test('a tick that writes nothing still tells its listeners', () {
+    var fired = 0;
+    final store = CountingStore(tmp);
+    final k = StatsKeeper(store, now: () => now)
+      ..select('builtin-gold')
+      ..addListener(() => fired++);
+    now = now.add(const Duration(seconds: 10)); // satiety 50 -> 49.99: nothing to save
+    k.tick();
+    expect(store.saves, 1);
+    expect(fired, 1, reason: 'the panel works its status text out from the unrounded satiety every time');
   });
 
   test('each pet keeps its own numbers', () {

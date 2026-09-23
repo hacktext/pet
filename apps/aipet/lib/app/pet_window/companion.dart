@@ -50,8 +50,12 @@ class Companion {
 
   Timer? _roam;
   int _walkGen = 0;
+  int _showGen = 0; // only the newest _showHud may place the panel
   int _walks = 0; // _walk bodies still in flight; the last one out frees the panel
   bool _dragging = false;
+
+  /// Shut down or disposed -- once either has happened the panel is on its way
+  /// off the screen and nothing may put it back.
   bool _disposed = false;
   String? _petId;
 
@@ -107,7 +111,10 @@ class Companion {
       // microtask later, while its replacement is not yet walking -- and the
       // panel would pop up over a window that is about to move away.
       _walks--;
-      presenter.busy = _dragging || walker.walking || _walks > 0;
+      // Not once we are on our way out: a walk stopped by shutdown() wakes up
+      // here after the panel has been hidden, and freeing the panel with the
+      // pointer still on the pet would ask for it right back.
+      if (!_disposed) presenter.busy = _dragging || walker.walking || _walks > 0;
     }
     if (gen == _walkGen && pets.currentAction == 'walk') await pets.playAction('stand');
   }
@@ -136,7 +143,13 @@ class Companion {
   /// on screen. Waiting is safe: every hud call is capped at 500 ms (the
   /// bridge's own timeout) and AppExit runs its hide steps together, so this
   /// can cost at most a quarter of its 2 s budget.
+  ///
+  /// Marking us finished comes first, and before the hide: whatever wakes up
+  /// while we wait -- a stopped walk freeing the panel, a stats listener --
+  /// must not ask for a panel we have just taken away.
   Future<void> shutdown() async {
+    _disposed = true;
+    presenter.dispose();
     _walkGen++;
     walker.stop();
     _roam?.cancel();
@@ -185,6 +198,7 @@ class Companion {
 
   Future<void> _showHud() async {
     if (_disposed) return;
+    final gen = ++_showGen;
     try {
       final v = view;
       if (v == null) return;
@@ -192,9 +206,12 @@ class Companion {
       // a walk starting meanwhile makes the presenter hide the panel and
       // forget it, and a show landing after that would leave a panel on the
       // desktop that the presenter believes is gone -- never updated, never
-      // taken away.
+      // taken away. `shown` alone is not enough either: it is true again once
+      // the pointer settles back on the pet, and the round trips can answer
+      // out of order, so an older one would place the panel over the window's
+      // old rectangle and leave it there.
       final b = await mover.bounds();
-      if (_disposed || !presenter.shown) return;
+      if (_disposed || gen != _showGen || !presenter.shown) return;
       await hud.show(b, v);
       if (!presenter.shown) unawaited(hud.hide());
     } catch (e) {

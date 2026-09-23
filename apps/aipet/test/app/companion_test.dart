@@ -53,8 +53,13 @@ void main() {
   late Companion c;
   late List<String> panel;
   late FakeTransport panelEnd;
+  Completer<void>? showGate; // when set, the panel takes its time coming up
   Completer<void>? hideGate; // when set, the panel takes its time going away
-  var live = false; // boot() ran and what it built is still standing
+
+  /// What boot() has built so far, to be undone in reverse. Each step goes in
+  /// the moment there is something to undo, so a boot() that throws half-way
+  /// still takes down what it had already built.
+  final teardown = <void Function()>[];
 
   Future<void> run(WidgetTester t, Duration span) async {
     final end = now.add(span);
@@ -66,6 +71,7 @@ void main() {
 
   Future<void> boot({Future<File> Function(File)? ensure, bool twoPets = false}) async {
     tmp = Directory.systemTemp.createTempSync('companion_');
+    teardown.add(() => tmp.deleteSync(recursive: true));
     final builtin = Directory('${tmp.path}\\builtin')..createSync();
     writePet(builtin, id: 'builtin-gold', name: '金毛', actions: kSeven);
     if (twoPets) writePet(builtin, id: 'builtin-corgi', name: '柯基', actions: kSeven);
@@ -74,6 +80,7 @@ void main() {
     now = DateTime(2026, 9, 19, 9);
     player = FakePlayer();
     mover = GatedMover();
+    showGate = null;
     hideGate = null;
     pets = PetWindowController(
       library: PetLibrary(builtinRoot: builtin, customRoot: Directory('${tmp.path}\\custom')),
@@ -84,11 +91,18 @@ void main() {
     );
     stats = StatsKeeper(StatsStore(appData), now: () => now);
     walker = WalkDriver(mover, facing: () => Facing.left, clock: () => now, frame: frame);
+    teardown.add(walker.dispose);
     final (petEnd, pEnd) = FakeTransport.pair();
     panelEnd = pEnd;
     panel = [];
     HudWindowBridge(panelEnd,
-        onShow: (r, v) async => panel.add('show $r ${v.name} ${v.todayInteractions}'),
+        onShow: (r, v) async {
+          // The real panel asks for the work area before it places itself, so
+          // a hide sent meanwhile can be handled while a show is still in hand.
+          final gate = showGate;
+          if (gate != null) await gate.future;
+          panel.add('show $r ${v.name} ${v.todayInteractions}');
+        },
         onUpdate: (v) => panel.add('update ${v.todayInteractions}'),
         onHide: () async {
           final gate = hideGate;
@@ -96,16 +110,22 @@ void main() {
           panel.add('hide');
         }).start();
     c = Companion(pets: pets, stats: stats, walker: walker, mover: mover, hudTransport: petEnd, random: LowRandom());
+    teardown.add(c.dispose);
     await pets.boot();
-    live = true;
   }
 
   void finish() {
-    if (!live) return;
-    live = false;
-    c.dispose();
-    walker.dispose();
-    tmp.deleteSync(recursive: true);
+    for (final step in teardown.reversed) {
+      // Best effort: Windows refuses to remove a folder while a file in it is
+      // still open, and a teardown that throws would replace the failure that
+      // brought us here with its own.
+      try {
+        step();
+      } catch (e) {
+        printOnFailure('teardown failed: $e');
+      }
+    }
+    teardown.clear();
   }
 
   /// Every test tears down the Companion, the WalkDriver and its temp folder
@@ -229,6 +249,43 @@ void main() {
     c.dragEnded();
   });
 
+  petTest('a panel that came up after the hide is taken away again', (t) async {
+    await boot();
+    c.petEnter();
+    showGate = Completer<void>();
+    await t.pump(const Duration(milliseconds: 300)); // the show is sent, and the panel sits on it
+    expect(panel, isEmpty);
+    c.dragStarted(); // the hide overtakes the show ...
+    await t.pump();
+    expect(panel, ['hide']);
+    showGate!.complete(); // ... and the panel then puts itself back on screen
+    await t.pump();
+    expect(panel, ['hide', 'show ${mover.rect} 金毛 0', 'hide'],
+        reason: 'the show landed last, so the panel is on the desktop and nothing else will take it off');
+    c.petExit();
+    c.dragEnded();
+  });
+
+  petTest('a panel placed while a newer one is being placed does not land with the old rectangle', (t) async {
+    await boot();
+    c.petEnter();
+    final stale = mover.rect;
+    final gate = mover.gate = Completer<Rect>();
+    await t.pump(const Duration(milliseconds: 300)); // show #1 fires and parks on bounds()
+    expect(panel, isEmpty);
+    c.dragStarted(); // the panel goes down ...
+    await t.pump();
+    c.dragEnded(); // ... and the pointer never left the pet, so it is asked for again
+    mover.gate = null;
+    mover.rect = const Rect.fromLTWH(900, 200, 360, 360); // the drag put the pet somewhere else
+    await t.pump(const Duration(milliseconds: 300)); // show #2 asks and hears back at once
+    expect(panel, ['hide', 'show ${mover.rect} 金毛 0']);
+    gate.complete(stale); // show #1 finally hears back, with the rectangle from before the drag
+    await t.pump();
+    expect(panel.last, 'show ${mover.rect} 金毛 0',
+        reason: 'the older show would drop the panel where the pet no longer is, and leave it there');
+  });
+
   petTest('after 3 idle minutes it roams by itself for 8 s, without counting an interaction', (t) async {
     await boot();
     await t.pump(const Duration(minutes: 3)); // the walk clock (now) is left alone: the roam starts from here
@@ -288,7 +345,34 @@ void main() {
     expect(panel.last, 'hide');
   });
 
-  petTest('shutdown does not wait for a wedged panel', (t) async {
+  petTest('quitting with the pointer on the pet does not bring the panel back', (t) async {
+    await boot();
+    c.petEnter();
+    final walking = c.userAction('walk'); // the walk keeps the panel down while the pointer sits on the pet
+    await run(t, const Duration(seconds: 1));
+    expect(panel, isEmpty);
+    await c.shutdown();
+    await t.pump(const Duration(milliseconds: 400)); // longer than the 300 ms the panel waits to come up
+    expect(panel.last, 'hide');
+    expect(panel.where((p) => p.startsWith('show')), isEmpty,
+        reason: 'the stopped walk frees the panel one microtask after the hide, '
+            'and the panel would sit on the desktop for the seconds the teardown takes');
+    expect(c.presenter.shown, isFalse, reason: 'nothing may put the panel back once quitting has begun');
+    await walking;
+  });
+
+  petTest('quitting drops the panel that was on its way up', (t) async {
+    await boot();
+    c.petEnter();
+    await t.pump(const Duration(milliseconds: 100)); // the 300 ms wait before the panel appears is running
+    await c.shutdown();
+    await t.pump(const Duration(milliseconds: 400));
+    expect(panel, ['hide']);
+    expect(c.presenter.shown, isFalse,
+        reason: 'nothing may still be counting down to a panel while the engine is torn down');
+  });
+
+  petTest('shutdown gives a wedged panel the bridge 500 ms and no longer', (t) async {
     await boot();
     final walking = c.userAction('walk');
     await run(t, const Duration(seconds: 1));
