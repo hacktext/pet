@@ -31,6 +31,13 @@ def walk_facing(video: Path) -> str:
     return "left" if upper.mean() < (xs.min() + xs.max()) / 2 else "right"
 
 
+def chosen_facing(override: str | None, video: Path) -> str:
+    """The packaged walkFacing: an explicit choice wins, otherwise the guess
+    from the clip (which a raised tail can fool -- packaging prints it so a
+    human can catch a wrong one and pass --facing)."""
+    return override or walk_facing(video)
+
+
 def make_cover(cutout: Image.Image) -> Image.Image:
     """Transparent-padded, at most COVER_MAX on its long side. The cutout comes
     from the segmentation (not the green composite), so no key-green fringe."""

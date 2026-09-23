@@ -19,7 +19,7 @@ os.environ.setdefault("U2NET_HOME", str(WORK / "u2net"))  # before rembg is impo
 from petgen import kling  # noqa: E402
 from petgen.keycheck import BLOB_CORE_MAX, frame_scores, score_file  # noqa: E402
 from petgen.loopcheck import probe, psnr_series, seam_verdict  # noqa: E402
-from petgen.package import ACTIONS, make_cover, pet_json, walk_facing  # noqa: E402
+from petgen.package import ACTIONS, chosen_facing, make_cover, pet_json  # noqa: E402
 from petgen.prompts import (PETS, POSE_ASPECT, PROPS, REF_POSE_FOR_ACTION, action_prompt, pose_prompt,  # noqa: E402
                             source_prompt)
 from petgen.finish import finish_clip, frame_rgb, metrics, pet_gamma  # noqa: E402
@@ -226,8 +226,10 @@ def cmd_package(a) -> int:
     for k, c in zip(ACTIONS, clips):
         shutil.copy2(c, out / f"{k}.mp4")
     make_cover(Image.open(d / "ref-front-cutout.png").convert("RGBA")).save(out / "cover.png")
-    (out / "pet.json").write_text(json.dumps(pet_json(a.pet, walk_facing(d / "walk-final.mp4")), ensure_ascii=False,
+    facing = chosen_facing(a.facing, d / "walk-final.mp4")
+    (out / "pet.json").write_text(json.dumps(pet_json(a.pet, facing), ensure_ascii=False,
                                               indent=2) + "\n", encoding="utf-8")
+    print(f"walkFacing {facing}{' (--facing)' if a.facing else ' (detected)'}")
     print(f"packaged {out.relative_to(REPO)}")
     return 0
 
@@ -259,6 +261,8 @@ def main() -> int:
             p.add_argument("--mode", choices=list(VIDEO_UNITS), default="std")
         if name == "finish":
             p.add_argument("--gamma", type=float, default=None)
+        if name == "package":
+            p.add_argument("--facing", choices=["left", "right"], default=None)
         p.set_defaults(fn=fn)
     a = ap.parse_args()
     return a.fn(a)
