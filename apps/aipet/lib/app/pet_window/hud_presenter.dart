@@ -1,8 +1,10 @@
 import 'dart:async';
 
 /// When the panel is up (spec 2026-09-19 E 3.2): 300 ms over the pet shows
-/// it, 600 ms off both the pet and the panel hides it, x hides it until the
-/// pointer has left the pet, and walking or dragging (busy) hides it at once.
+/// it, 600 ms off both the pet and the panel hides it. x hides the panel; if
+/// the pointer was on the pet when x was pressed it stays hidden until the
+/// pointer leaves the pet, otherwise the next time the pointer enters the pet
+/// it shows again. Walking or dragging (busy) hides it at once.
 class HudPresenter {
   HudPresenter({
     required this.show,
@@ -19,6 +21,7 @@ class HudPresenter {
   bool _inPet = false;
   bool _inHud = false;
   bool _dismissed = false;
+  bool _dismissedOnPet = false;
   bool _busy = false;
   bool _shown = false;
   Timer? _pending;
@@ -28,12 +31,14 @@ class HudPresenter {
 
   void petEnter() {
     _inPet = true;
+    if (!_dismissedOnPet) _dismissed = false;
     _reconsider();
   }
 
   void petExit() {
     _inPet = false;
     _dismissed = false;
+    _dismissedOnPet = false;
     _reconsider();
   }
 
@@ -44,12 +49,16 @@ class HudPresenter {
 
   void hudExit() {
     _inHud = false;
-    if (!_inPet) _dismissed = false;
+    if (!_inPet) {
+      _dismissed = false;
+      _dismissedOnPet = false;
+    }
     _reconsider();
   }
 
   void close() {
     _dismissed = true;
+    _dismissedOnPet = _inPet;
     _reconsider();
   }
 

@@ -69,4 +69,27 @@ void main() {
     await t.pump(ms * 300);
     expect(log, ['show', 'hide', 'show']);
   });
+
+  testWidgets('x on the panel then straight back to the pet shows it again, whichever event lands first', (t) async {
+    for (final hudExitFirst in [true, false]) {
+      log.clear();
+      p.dispose();
+      p = HudPresenter(show: () => log.add('show'), hide: () => log.add('hide'));
+      p.petEnter();
+      await t.pump(ms * 300);
+      p.hudEnter();
+      p.petExit();
+      p.close();
+      expect(log, ['show', 'hide']);
+      if (hudExitFirst) {
+        p.hudExit();
+        p.petEnter();
+      } else {
+        p.petEnter();
+        p.hudExit();
+      }
+      await t.pump(ms * 300);
+      expect(log, ['show', 'hide', 'show'], reason: 'hudExitFirst=$hudExitFirst');
+    }
+  });
 }
