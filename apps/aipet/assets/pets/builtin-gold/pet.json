@@ -12,5 +12,6 @@
     "sleep",
     "lick_paw",
     "act_cute"
-  ]
+  ],
+  "walkFacing": "left"
 }

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:aipet/domain/pet.dart';
+import 'package:aipet/domain/walker.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 Map<String, Object?> valid() => {
@@ -35,8 +36,15 @@ void main() {
     expect(parsePet(jsonEncode(j), dir).blurb, '');
   });
 
+  test('walkFacing is read and defaults to right', () {
+    expect(parsePet(jsonEncode(valid()), dir).walkFacing, Facing.right);
+    expect(parsePet(jsonEncode(valid()..['walkFacing'] = 'left'), dir).walkFacing, Facing.left);
+    expect(parsePet(jsonEncode(valid()..['walkFacing'] = 'right'), dir).walkFacing, Facing.right);
+  });
+
   final broken = <String, Map<String, Object?> Function()>{
     'not json': () => {},
+    'walkFacing up': () => valid()..['walkFacing'] = 'up',
     'schema 2': () => valid()..['schema'] = 2,
     'missing id': () => valid()..remove('id'),
     'id with spaces': () => valid()..['id'] = 'Gold Dog',

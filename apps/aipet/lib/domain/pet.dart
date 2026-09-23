@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'walker.dart';
+
 /// Parent spec 4.6: these loop; every other action plays once and then
 /// hands back to [kIdleAction].
 const Set<String> kLoopingActions = {'stand', 'walk', 'sleep'};
@@ -38,6 +40,7 @@ class Pet {
     required this.dir,
     required this.cover,
     required this.actions,
+    this.walkFacing = Facing.right,
   });
 
   final String id;
@@ -48,6 +51,10 @@ class Pet {
   final Directory dir;
   final String cover;
   final List<String> actions;
+
+  /// Which way the walk clip faces; the pet window mirrors it when walking
+  /// the other way (spec 2026-09-19 E 3.4).
+  final Facing walkFacing;
 
   File get coverFile => File('${dir.path}${Platform.pathSeparator}$cover');
 
@@ -96,6 +103,12 @@ Pet parsePet(String jsonText, Directory dir) {
     actions.add(a);
   }
   if (!actions.contains(kIdleAction)) throw const FormatException('actions must include stand');
+  final facing = raw['walkFacing'];
+  final walkFacing = switch (facing) {
+    null || 'right' => Facing.right,
+    'left' => Facing.left,
+    _ => throw FormatException('walkFacing must be left or right, got $facing'),
+  };
   return Pet(
     id: id,
     name: name,
@@ -105,5 +118,6 @@ Pet parsePet(String jsonText, Directory dir) {
     dir: dir,
     cover: cover,
     actions: List.unmodifiable(actions),
+    walkFacing: walkFacing,
   );
 }
