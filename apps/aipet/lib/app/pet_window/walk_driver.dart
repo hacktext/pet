@@ -6,6 +6,10 @@ import 'package:flutter/foundation.dart';
 import '../../domain/walker.dart';
 import 'window_mover.dart';
 
+/// A stalled frame or a laptop resume must make the walk slower, never a
+/// teleport: the pet advances at most this much per tick.
+const Duration _maxStep = Duration(milliseconds: 100);
+
 /// One walk across the desktop (spec 2026-09-19 E 3.4): the window follows a
 /// Walker about 30 times a second at its current height. [mirrored] tells the
 /// view to flip the walk clip when it walks against the clip's facing.
@@ -57,7 +61,8 @@ class WalkDriver extends ChangeNotifier {
     notifyListeners();
     _timer = Timer.periodic(frame, (_) {
       final now = _clock();
-      final more = w.step(now.difference(last));
+      final elapsed = now.difference(last);
+      final more = w.step(elapsed > _maxStep ? _maxStep : elapsed);
       last = now;
       _mover.moveTo(Offset(w.x, b.top));
       if (w.heading != heading) {

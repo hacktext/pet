@@ -82,4 +82,14 @@ void main() {
     await run(t, const Duration(milliseconds: 1200));
     expect(await second, isTrue);
   });
+
+  testWidgets('a stalled frame makes the walk slower, never a teleport', (t) async {
+    final done = d.walk(const Duration(seconds: 5));
+    await t.pump();
+    now = now.add(const Duration(seconds: 30)); // the app was stuck for 30 s
+    await t.pump(frame);
+    expect(mover.moves.last.dx, closeTo(100 + 9, 1)); // 100 ms of walking: 9 px, not 2700
+    d.stop();
+    expect(await done, isFalse);
+  });
 }
