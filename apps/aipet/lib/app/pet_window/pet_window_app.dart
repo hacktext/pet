@@ -13,7 +13,6 @@ import '../../domain/walker.dart';
 import '../../services/app_paths.dart';
 import '../../services/hud_bridge.dart';
 import '../../services/matte_cache.dart';
-import '../../services/native_window.dart';
 import '../../services/pet_library.dart';
 import '../../services/settings_store.dart';
 import '../../services/stats_store.dart';
@@ -29,6 +28,9 @@ import 'stats_keeper.dart';
 import 'walk_driver.dart';
 import 'window_mover.dart';
 
+/// The pet window's title; what NativeWindow finds it by (spec 3.1).
+const kPetTitle = 'aipet pet';
+
 /// Primary engine: builds the services, boots, and opens the library on a
 /// first run (spec 3.3).
 Future<void> runPetWindow() async {
@@ -39,7 +41,7 @@ Future<void> runPetWindow() async {
       backgroundColor: Colors.transparent,
       skipTaskbar: true,
       titleBarStyle: TitleBarStyle.hidden,
-      title: 'aipet pet',
+      title: kPetTitle,
     ),
     () async {
       await windowManager.setAsFrameless();
@@ -68,7 +70,7 @@ Future<void> runPetWindow() async {
     push: (s) => bridge.pushState(s),
   );
 
-  final mover = DesktopWindowMover(NativeWindow.find('aipet pet'));
+  final mover = DesktopWindowMover(kPetTitle);
   final stats = StatsKeeper(StatsStore(appData));
   final walker = WalkDriver(mover, facing: () => controller.currentPet?.walkFacing ?? Facing.right);
   final companion = Companion(
@@ -111,11 +113,14 @@ Future<void> runPetWindow() async {
     companion: companion,
     walker: walker,
   ));
-  await controller.boot();
   // The panel engine, created once and kept hidden; without it the pet
-  // window works as before (spec 2026-09-19 E 4).
+  // window works as before (spec 2026-09-19 E 4). The two engines are
+  // independent, so this goes before boot(): a cold first run mattes its clip
+  // in there, up to kPrepareTimeout, and the pet window is on screen and
+  // hoverable the whole time.
   unawaited(WindowController.create(WindowConfiguration(arguments: kHudWindowArgs, hiddenAtLaunch: true))
       .then<void>((_) {}, onError: (Object e) => developer.log('panel window failed: $e', name: 'aipet.hud')));
+  await controller.boot();
   if (controller.currentPet == null) await launcher.open();
 }
 
@@ -239,6 +244,10 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
                   widget.companion.dragStarted();
                   try {
                     await windowManager.startDragging(); // returns when the drag ends (modal SC_MOVE loop)
+                  } catch (e) {
+                    // The callback returns void, so a throw here would land
+                    // nowhere as an uncaught async error; the drag still ends.
+                    developer.log('startDragging failed: $e', name: 'aipet.pet_window');
                   } finally {
                     widget.companion.dragEnded();
                   }

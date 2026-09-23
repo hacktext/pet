@@ -1,8 +1,22 @@
 import 'dart:io';
 
 import 'package:aipet/app/pet_window/stats_keeper.dart';
+import 'package:aipet/domain/pet_stats.dart';
 import 'package:aipet/services/stats_store.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+/// Counts the writes stats.json would take.
+class CountingStore extends StatsStore {
+  CountingStore(super.root);
+
+  int saves = 0;
+
+  @override
+  void save(Map<String, PetStats> all) {
+    saves++;
+    super.save(all);
+  }
+}
 
 void main() {
   late Directory tmp;
@@ -40,6 +54,52 @@ void main() {
     now = now.add(const Duration(hours: 6)); // satiety 50 -> 25
     k.tick();
     expect(k.current!.satiety, closeTo(25, 1e-6));
+  });
+
+  test('a tick that moves nothing on screen writes no file', () {
+    final store = CountingStore(tmp);
+    final k = StatsKeeper(store, now: () => now)..select('builtin-gold');
+    expect(store.saves, 1); // a pet seen for the first time is written once
+    now = now.add(const Duration(seconds: 10)); // satiety 50 -> 49.99, still 50 on screen
+    k.tick();
+    expect(store.saves, 1);
+    expect(k.current!.satiety, lessThan(50)); // the drift is kept in memory
+  });
+
+  test('a tick that rolls a displayed number writes the file', () {
+    final store = CountingStore(tmp);
+    final k = StatsKeeper(store, now: () => now)..select('builtin-gold');
+    now = now.add(const Duration(minutes: 30)); // satiety 50 -> 47.9, 48 on screen
+    k.tick();
+    expect(store.saves, 2);
+    expect(k.current!.satiety.round(), 48);
+  });
+
+  test('numbers a skipped save left in memory survive a restart', () {
+    final store = CountingStore(tmp);
+    final k = StatsKeeper(store, now: () => now)..select('builtin-gold');
+    for (var i = 0; i < 2; i++) {
+      now = now.add(const Duration(minutes: 1));
+      k.tick();
+    }
+    expect(store.saves, 1); // nothing on screen moved, so nothing was written
+    final again = make()..select('builtin-gold'); // the older snapshot, caught up to now
+    expect(again.current!.satiety, closeTo(k.current!.satiety, 1e-9));
+    expect(again.current!.health, closeTo(k.current!.health, 1e-9));
+  });
+
+  test('select, interact and tick all tell their listeners', () {
+    var fired = 0;
+    final k = make()..addListener(() => fired++);
+    k.select('builtin-gold');
+    expect(fired, 1);
+    k.interact('feed');
+    expect(fired, 2);
+    expect(k.current!.satiety, 80);
+    now = now.add(const Duration(hours: 6)); // satiety 80 -> 55
+    k.tick();
+    expect(fired, 3);
+    expect(k.current!.satiety, closeTo(55, 1e-6));
   });
 
   test('each pet keeps its own numbers', () {

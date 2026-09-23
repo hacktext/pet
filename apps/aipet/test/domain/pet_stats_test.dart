@@ -36,6 +36,14 @@ void main() {
     expect(s.health, closeTo(80, 1e-6));
   });
 
+  test('between 20 and 50 satiety, health does not move at all', () {
+    // 45 -> ~40.8 in an hour: never below kHungryBelow, never back up to
+    // kFedFrom, so the neutral band leaves health exactly where it was.
+    final s = advanceStats(at(t0, satiety: 45, health: 70), t0.add(const Duration(hours: 1)));
+    expect(s.satiety, closeTo(45 - kSatietyPerHour, 1e-6));
+    expect(s.health, 70);
+  });
+
   test('values stay within 0..100', () {
     final s = advanceStats(at(t0, satiety: 10, health: 5), t0.add(const Duration(hours: 24)));
     expect(s.satiety, 0);

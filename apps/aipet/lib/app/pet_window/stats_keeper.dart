@@ -28,11 +28,12 @@ class StatsKeeper extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Called once a minute by the pet window.
+  /// Called once a minute by the pet window; saves only when a minute of
+  /// drift actually shows.
   void tick() {
     final id = _petId;
     if (id == null) return;
-    _put(id, advanceStats(_all[id]!, _now()));
+    _put(id, advanceStats(_all[id]!, _now()), saveUnchanged: false);
     notifyListeners();
   }
 
@@ -45,12 +46,29 @@ class StatsKeeper extends ChangeNotifier {
   }
 
   /// Best effort, like settings.json: a failed save must not undo what is on screen.
-  void _put(String id, PetStats s) {
+  void _put(String id, PetStats s, {bool saveUnchanged = true}) {
+    final before = _all[id];
     _all[id] = s;
+    // Every minute moves updatedAt and a fraction of satiety, so a whole-object
+    // comparison would still rewrite stats.json 1440 times a day. Only a
+    // change that shows is worth the temp file, flush and rename: the snapshot
+    // carries its own updatedAt, so the next launch reloads an older one and
+    // advances it to then, landing on the same numbers (spec 3.3).
+    if (!saveUnchanged && before != null && _sameOnScreen(before, s)) return;
     try {
       _store.save(_all);
     } catch (e) {
       developer.log('stats save failed: $e', name: 'aipet.stats');
     }
   }
+
+  /// Everything the panel shows (numbers as rounded there) plus the dates a
+  /// restart would restore differently.
+  static bool _sameOnScreen(PetStats a, PetStats b) =>
+      a.satiety.round() == b.satiety.round() &&
+      a.health.round() == b.health.round() &&
+      a.intimacy.round() == b.intimacy.round() &&
+      a.todayInteractions == b.todayInteractions &&
+      a.interactionDay == b.interactionDay &&
+      a.companionStartedAt == b.companionStartedAt;
 }
