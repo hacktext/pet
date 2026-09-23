@@ -80,6 +80,10 @@ class Companion {
   /// A button in the panel or an item in the right-click menu: counts as an
   /// interaction; 'walk' walks across the screen, anything else plays.
   Future<void> userAction(String key) async {
+    // The panel is hidden on the way out, not stopped: a click already on its
+    // way still arrives over the bridge. Acting on it would rewrite
+    // stats.json during the teardown and walk a window that is off screen.
+    if (_disposed) return;
     final pet = pets.currentPet;
     if (pet == null || !pet.actions.contains(key)) return;
     stats.interact(key);
@@ -198,10 +202,12 @@ class Companion {
 
   Future<void> _showHud() async {
     if (_disposed) return;
-    final gen = ++_showGen;
     try {
       final v = view;
       if (v == null) return;
+      // Below the check above: a show given up for want of a pet places
+      // nothing, so it must not invalidate one that is still in flight.
+      final gen = ++_showGen;
       // Asking the platform for our own rectangle is a round trip: a drag or
       // a walk starting meanwhile makes the presenter hide the panel and
       // forget it, and a show landing after that would leave a panel on the

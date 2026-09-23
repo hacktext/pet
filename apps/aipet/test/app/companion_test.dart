@@ -70,8 +70,10 @@ void main() {
   }
 
   Future<void> boot({Future<File> Function(File)? ensure, bool twoPets = false}) async {
-    tmp = Directory.systemTemp.createTempSync('companion_');
-    teardown.add(() => tmp.deleteSync(recursive: true));
+    // Held in a local as well: the step must undo the folder this boot() just
+    // made, not whichever one the shared variable points at when it runs.
+    final dir = tmp = Directory.systemTemp.createTempSync('companion_');
+    teardown.add(() => dir.deleteSync(recursive: true));
     final builtin = Directory('${tmp.path}\\builtin')..createSync();
     writePet(builtin, id: 'builtin-gold', name: '金毛', actions: kSeven);
     if (twoPets) writePet(builtin, id: 'builtin-corgi', name: '柯基', actions: kSeven);
@@ -383,5 +385,40 @@ void main() {
     expect(quit, isTrue);
     expect(walker.walking, isFalse);
     await walking;
+  });
+
+  petTest('quitting with the panel really on screen leaves it off for good', (t) async {
+    await boot();
+    c.petEnter();
+    await t.pump(const Duration(milliseconds: 300));
+    expect(panel, ['show ${mover.rect} 金毛 0'], reason: 'the panel is up on the desktop when the quit arrives');
+    await c.shutdown();
+    expect(panel, ['show ${mover.rect} 金毛 0', 'hide']);
+    // Quitting from the pet's right-click menu happens with the pointer on
+    // the pet, and the pointer goes on crossing the window for the seconds
+    // the native teardown takes -- hiding the window itself fires an exit.
+    c.petExit();
+    await t.pump(const Duration(milliseconds: 600));
+    c.petEnter();
+    await t.pump(const Duration(milliseconds: 400)); // longer than the 300 ms the panel waits to come up
+    expect(panel, ['show ${mover.rect} 金毛 0', 'hide'],
+        reason: 'the panel is down for the quit: nothing shows it again, and nothing hides it twice');
+    expect(c.presenter.shown, isFalse, reason: 'nothing may put the panel back once quitting has begun');
+  });
+
+  petTest('a panel click that lands after quitting began does nothing', (t) async {
+    await boot();
+    await c.shutdown();
+    final plays = player.plays.length;
+    // The panel is hidden, not stopped: a click already on its way still
+    // arrives over the bridge while the engine is being torn down.
+    final action = c.userAction('walk');
+    await run(t, const Duration(seconds: 21)); // longer than a user walk
+    await action;
+    expect(stats.current!.todayInteractions, 0, reason: 'stats.json must not be rewritten during the teardown');
+    expect(player.plays, hasLength(plays), reason: 'the pet window is on its way off the screen');
+    expect(mover.moves, isEmpty, reason: 'a hidden window must not be walked across the desktop');
+    expect(walker.walking, isFalse);
+    expect(panel.where((p) => p.startsWith('show')), isEmpty);
   });
 }

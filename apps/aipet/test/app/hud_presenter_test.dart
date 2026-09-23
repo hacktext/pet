@@ -108,4 +108,18 @@ void main() {
       expect(log, ['show', 'hide', 'show'], reason: 'hudExitFirst=$hudExitFirst');
     }
   });
+
+  testWidgets('dispose() is final: nothing asks for the panel again', (t) async {
+    p.petEnter();
+    await t.pump(ms * 300);
+    expect(log, ['show']);
+    p.dispose();
+    expect(p.shown, isFalse, reason: 'the panel is on its way off the screen, so it is not up any more');
+    p.petExit();
+    await t.pump(const Duration(seconds: 1));
+    p.petEnter();
+    await t.pump(const Duration(seconds: 1));
+    expect(log, ['show'], reason: 'the pointer still crosses the pet while the engine is torn down');
+    expect(p.shown, isFalse);
+  });
 }

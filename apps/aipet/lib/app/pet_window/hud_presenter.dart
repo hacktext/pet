@@ -24,6 +24,10 @@ class HudPresenter {
   bool _dismissedOnPet = false;
   bool _busy = false;
   bool _shown = false;
+
+  /// Disposed -- the panel is off the screen for good and nothing here may
+  /// ask for it again.
+  bool _done = false;
   Timer? _pending;
 
   bool get shown => _shown;
@@ -69,6 +73,11 @@ class HudPresenter {
   }
 
   void _reconsider() {
+    // Pointer events go on arriving after dispose(): quitting hides the pet
+    // window, which fires a leave, and the pointer keeps crossing it for the
+    // seconds the native teardown takes. None of that may bring the panel
+    // back, and this must not depend on the owner guarding its own callbacks.
+    if (_done) return;
     _pending?.cancel();
     _pending = null;
     final want = !_busy && !_dismissed && (_inPet || (_shown && _inHud));
@@ -97,8 +106,14 @@ class HudPresenter {
     }
   }
 
+  /// For good: after this the panel counts as down and every event is
+  /// ignored. Taking it off the screen is the owner's business -- it has a
+  /// hide of its own to await -- so this only drops the pending timer and
+  /// records that nothing is up.
   void dispose() {
+    _done = true;
     _pending?.cancel();
     _pending = null;
+    _shown = false;
   }
 }
