@@ -81,11 +81,16 @@ class HudPresenter {
     } else if (!want && _shown) {
       if (_busy || _dismissed) {
         _shown = false;
+        // A hidden panel cannot hold the pointer: the window may never
+        // deliver a mouse-leave once it is gone, so the flag would otherwise
+        // stay stuck true and block a later hide.
+        _inHud = false;
         hide();
       } else {
         _pending = Timer(hideDelay, () {
           _pending = null;
           _shown = false;
+          _inHud = false;
           hide();
         });
       }

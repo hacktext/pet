@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:math';
 
 import '../../domain/pet_stats.dart';
@@ -46,6 +47,7 @@ class Companion {
   Timer? _roam;
   int _walkGen = 0;
   bool _dragging = false;
+  bool _disposed = false;
   String? _petId;
 
   /// The panel's content; null with nobody on the desktop.
@@ -82,7 +84,18 @@ class Companion {
     final gen = ++_walkGen;
     presenter.busy = true;
     await pets.playAction('walk');
-    if (gen == _walkGen && pets.currentAction == 'walk') await walker.walk(length);
+    if (gen != _walkGen) {
+      // Superseded while our own clip was still being matted. If it landed
+      // anyway it would loop in place forever, so hand it back to stand.
+      if (pets.currentAction == 'walk' && !walker.walking) unawaited(pets.playAction('stand'));
+      presenter.busy = _dragging;
+      return;
+    }
+    if (pets.currentAction != 'walk') {
+      presenter.busy = _dragging;
+      return;
+    }
+    await walker.walk(length);
     presenter.busy = _dragging;
     if (gen == _walkGen && pets.currentAction == 'walk') await pets.playAction('stand');
   }
@@ -109,10 +122,12 @@ class Companion {
     _walkGen++;
     walker.stop();
     _roam?.cancel();
+    _roam = null;
     await hud.hide();
   }
 
   void _petsChanged() {
+    if (_disposed) return;
     final id = pets.currentPet?.id;
     if (id != _petId) {
       _petId = id;
@@ -129,6 +144,7 @@ class Companion {
 
   /// 3-6 idle minutes, then roam if nothing else is going on (spec 3.4).
   Timer _scheduleRoam() => Timer(Duration(seconds: 180 + _random.nextInt(181)), () {
+        if (_disposed) return;
         _roam = null;
         final idle = pets.currentPet != null &&
             pets.currentAction == 'stand' &&
@@ -145,18 +161,28 @@ class Companion {
       });
 
   Future<void> _showHud() async {
-    final v = view;
-    if (v == null) return;
-    await hud.show(await mover.bounds(), v);
+    if (_disposed) return;
+    try {
+      final v = view;
+      if (v == null) return;
+      await hud.show(await mover.bounds(), v);
+    } catch (e) {
+      developer.log('showHud failed: $e', name: 'aipet.hud');
+    }
   }
 
   void _pushView() {
+    if (_disposed) return;
     final v = view;
     if (presenter.shown && v != null) unawaited(hud.update(v));
   }
 
   void dispose() {
+    _disposed = true;
+    _walkGen++;
+    walker.stop();
     _roam?.cancel();
+    _roam = null;
     presenter.dispose();
     pets.removeListener(_petsChanged);
     stats.removeListener(_pushView);

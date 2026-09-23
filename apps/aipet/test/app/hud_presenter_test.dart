@@ -70,6 +70,22 @@ void main() {
     expect(log, ['show', 'hide', 'show']);
   });
 
+  testWidgets('a hidden panel drops the hover, so leaving the pet still hides it later', (t) async {
+    p.petEnter();
+    await t.pump(ms * 300);
+    expect(log, ['show']);
+    p.hudEnter(); // the pointer moves onto the panel; the window may never see it leave once hidden
+    p.busy = true; // hides at once, without a hudExit ever arriving
+    expect(log, ['show', 'hide']);
+    p.busy = false;
+    p.petEnter();
+    await t.pump(ms * 300);
+    expect(log, ['show', 'hide', 'show']);
+    p.petExit();
+    await t.pump(ms * 600);
+    expect(log, ['show', 'hide', 'show', 'hide']);
+  });
+
   testWidgets('x on the panel then straight back to the pet shows it again, whichever event lands first', (t) async {
     for (final hudExitFirst in [true, false]) {
       log.clear();

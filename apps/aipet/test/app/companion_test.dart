@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 
@@ -50,7 +51,7 @@ void main() {
     }
   }
 
-  Future<void> boot() async {
+  Future<void> boot({Future<File> Function(File)? ensure}) async {
     tmp = Directory.systemTemp.createTempSync('companion_');
     final builtin = Directory('${tmp.path}\\builtin')..createSync();
     writePet(builtin, id: 'builtin-gold', name: '金毛', actions: kSeven);
@@ -62,7 +63,7 @@ void main() {
     pets = PetWindowController(
       library: PetLibrary(builtinRoot: builtin, customRoot: Directory('${tmp.path}\\custom')),
       settings: SettingsStore(appData),
-      ensure: (f) async => f,
+      ensure: ensure ?? (f) async => f,
       player: player,
       push: (_) async {},
     );
@@ -171,5 +172,34 @@ void main() {
     expect(player.plays.where((p) => p.contains('walk')), isEmpty);
     c.petExit();
     finish();
+  });
+
+  testWidgets('an action arriving while the walk clip is still being matted leaves the pet off walk', (t) async {
+    final gate = Completer<File>();
+    await boot(ensure: (f) => f.path.endsWith('walk.mp4') ? gate.future : Future.value(f));
+    final walking = c.userAction('walk');
+    await t.pump();
+    await c.userAction('lick_paw'); // dropped by the controller's own _switching guard, but bumps the generation
+    gate.complete(File('${tmp.path}\\builtin\\builtin-gold\\walk.mp4'));
+    await walking;
+    await t.pump();
+    expect(pets.currentAction, isNot('walk'));
+    expect(player.plays.last, isNot('builtin-gold/walk.mp4|loop'));
+    finish();
+  });
+
+  testWidgets('dispose() during a live walk stops it', (t) async {
+    await boot();
+    final walking = c.userAction('walk');
+    await run(t, const Duration(seconds: 1));
+    c.dispose();
+    final movesAtDispose = mover.moves.length;
+    expect(walker.walking, isFalse);
+    await run(t, const Duration(seconds: 1));
+    expect(mover.moves.length, movesAtDispose);
+    expect(walker.walking, isFalse);
+    await walking;
+    walker.dispose();
+    tmp.deleteSync(recursive: true);
   });
 }
