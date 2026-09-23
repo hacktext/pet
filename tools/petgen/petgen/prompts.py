@@ -8,8 +8,11 @@ PETS = {
     "corgi": {"species": "dog", "name": "柯基", "blurb": "小短腿大耳朵，家里的开心果",
               "breed": "彭布罗克威尔士柯基犬",
               "features": "橘黄色和白色相间，白色的口鼻、脖子和胸口，一对大耳朵直立，四肢很短"},
+    # grade: the gamma solver only ever brightens, and this pet's reference is
+    # already bright (subject luma 172), so its clips come out washed out
+    # unless they are darkened. Hand-set 2026-09-23: stand luma 174 -> 165.2.
     "ragdoll": {"species": "cat", "name": "布偶猫", "blurb": "蓝眼睛的小仙女，安静又粘人",
-                "breed": "布偶猫",
+                "breed": "布偶猫", "grade": 0.88,
                 "features": "蓝色的眼睛，脸、耳朵和尾巴是深棕色的重点色，身体是奶白色的蓬松长毛"},
 }
 

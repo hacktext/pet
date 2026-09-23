@@ -180,20 +180,28 @@ def finish_clip(src: Path, dst: Path, gamma: float) -> int:
     return frames
 
 
-def pet_gamma(workdir: Path, override: float | None = None) -> float:
-    """One grade per pet so every action looks alike: --gamma wins, then the
-    saved grade.json, else solve it from this folder's stand.mp4 frame 30 and
-    save it for the other actions."""
+def pet_gamma(workdir: Path, override: float | None = None, builtin: float | None = None) -> float:
+    """One grade per pet so every action looks alike: --gamma wins, then this
+    folder's saved grade.json, then [builtin] -- the grade carried by
+    prompts.PETS for a pet solve_gamma cannot reach, because it only ever
+    brightens -- else solve it from this folder's stand.mp4 frame 30. Whatever
+    is derived is saved, so the pet's other actions and a later re-finish get
+    the same grade."""
     if override is not None:
         return override
     grade = workdir / "grade.json"
     if grade.exists():
         return float(json.loads(grade.read_text(encoding="utf-8"))["gamma"])
+    if builtin is not None:
+        return _save_grade(grade, builtin, "prompts.PETS")
     stand = workdir / "stand.mp4"
     if not stand.exists():
         raise FileNotFoundError(f"no {stand.name} in {workdir} to derive the pet's grade from")
-    g = solve_gamma(frame_rgb(stand, 30))
+    return _save_grade(grade, solve_gamma(frame_rgb(stand, 30)), "stand.mp4 frame 30")
+
+
+def _save_grade(grade: Path, gamma: float, source: str) -> float:
     tmp = grade.with_name(grade.name + ".partial")
-    tmp.write_text(json.dumps({"gamma": g, "from": "stand.mp4 frame 30"}) + "\n", encoding="utf-8")
+    tmp.write_text(json.dumps({"gamma": gamma, "from": source}) + "\n", encoding="utf-8")
     tmp.replace(grade)
-    return g
+    return gamma

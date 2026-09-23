@@ -178,7 +178,7 @@ def cmd_finish(a) -> int:
         print(f"missing {src.relative_to(HERE)}")
         return 1
     try:
-        gamma = pet_gamma(d, a.gamma)
+        gamma = pet_gamma(d, a.gamma, PETS.get(a.pet, {}).get("grade"))
     except FileNotFoundError as e:
         print(f"{e}: pass --gamma")
         return 1

@@ -1,6 +1,9 @@
+import subprocess
+
 import numpy as np
 
-from petgen.keycheck import BLOB_CORE_MAX, FRAME_BLOB_MAX, Score, alpha_map, blob_core_mask, floating_mask
+from petgen.keycheck import (BLOB_CORE_MAX, FRAME_BLOB_MAX, Score, alpha_map, blob_core_mask, floating_mask,
+                             frame_scores)
 
 
 def rgb(color, h=4, w=4):
@@ -48,24 +51,41 @@ def test_pass_threshold_is_strict():
     assert not Score(floating=0, blob_core=BLOB_CORE_MAX).passed
 
 
-import subprocess
+def _clip(path, frames):
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", "240x240", "-r", "24",
+                    "-i", "-", "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p", str(path)],
+                   input=frames.tobytes(), check=True)
+    return path
 
-from petgen.keycheck import frame_scores
+
+def _green(n=13):
+    frames = np.zeros((n, 240, 240, 3), np.uint8)
+    frames[...] = (0, 255, 0)
+    frames[:, 80:160, 80:160] = (220, 40, 40)   # the opaque subject
+    return frames
 
 
 def test_frame_scores_catch_a_ghost_in_the_middle_of_a_clip(tmp_path):
-    # 13 frames: an opaque red square throughout; frame 6 also carries a
-    # half-keyed olive patch (100,160,0 keys to alpha ~115) away from it --
-    # the dissolving-bowl ghost of the 2026-09-19 spike.
-    frames = np.zeros((13, 240, 240, 3), np.uint8)
-    frames[...] = (0, 255, 0)
-    frames[:, 80:160, 80:160] = (220, 40, 40)
+    # 13 frames; frame 6 also carries a half-keyed olive patch (100,160,0 keys
+    # to alpha ~115) away from the subject -- the dissolving-bowl ghost of the
+    # 2026-09-19 spike, a whole translucent object rather than a blurred edge.
+    frames = _green()
     frames[6, 10:50, 170:230] = (100, 160, 0)
-    video = tmp_path / "ghost.mp4"
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", "240x240", "-r", "24",
-                    "-i", "-", "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p", str(video)],
-                   input=frames.tobytes(), check=True)
-    scores = frame_scores(video, step=6)
+    scores = frame_scores(_clip(tmp_path / "ghost.mp4", frames), step=6)
     assert len(scores) == 3                     # frames 0, 6, 12
-    assert scores[1] >= FRAME_BLOB_MAX          # a whole translucent object, not a blurred tail
+    assert scores[1] >= FRAME_BLOB_MAX
+    assert scores[0] < 50 and scores[2] < 50
+
+
+def test_a_blurred_tail_sized_ghost_passes_mid_clip_but_not_as_a_still(tmp_path):
+    # The calibration of 2026-09-23: mid-clip frames allow what a still may
+    # not, because a fast-moving tail motion-blurs into the green and the
+    # competitor's own shipped clips score 507-995 the same way. An 8x8 patch
+    # is that size once scored at SCORE_EDGE. If FRAME_BLOB_MAX ever drops
+    # back to the still's 200, this fails -- which is the point.
+    frames = _green()
+    frames[6, 20:28, 180:188] = (100, 160, 0)
+    scores = frame_scores(_clip(tmp_path / "tail.mp4", frames), step=6)
+    assert BLOB_CORE_MAX <= scores[1] < FRAME_BLOB_MAX
+    assert not Score(floating=0, blob_core=scores[1]).passed   # a still would be rejected
     assert scores[0] < 50 and scores[2] < 50

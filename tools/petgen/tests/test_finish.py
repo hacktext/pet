@@ -1,3 +1,4 @@
+import json
 import subprocess
 
 import numpy as np
@@ -7,6 +8,7 @@ from petgen.finish import (MAX_P95, TARGET_LUMA, calibrate_rgba, finish_clip, fr
                            pet_gamma, solve_gamma)
 from petgen.keycheck import alpha_map
 from petgen.loopcheck import probe
+from petgen.prompts import PETS
 
 
 def _frame(color, size=200, lo=50, hi=150):
@@ -98,3 +100,17 @@ def test_pet_gamma_is_solved_once_and_reused(tmp_path):
     stand.unlink()                        # every later action reuses the saved grade
     assert pet_gamma(tmp_path) == g
     assert pet_gamma(tmp_path, override=1.3) == 1.3
+
+
+def test_builtin_grade_is_used_when_the_solver_would_only_brighten(tmp_path):
+    # ragdoll's reference is already bright, so solve_gamma can only wash it
+    # out further; its grade lives in prompts.PETS and must survive a work
+    # folder that has no grade.json yet (work/ is not in the repo).
+    assert PETS["ragdoll"]["grade"] < 1.0
+    assert "grade" not in PETS["gold"]
+    g = pet_gamma(tmp_path, builtin=PETS["ragdoll"]["grade"])
+    assert g == PETS["ragdoll"]["grade"]
+    saved = json.loads((tmp_path / "grade.json").read_text(encoding="utf-8"))
+    assert saved == {"gamma": g, "from": "prompts.PETS"}
+    assert pet_gamma(tmp_path) == g                  # the other actions reuse it
+    assert pet_gamma(tmp_path, override=1.3, builtin=g) == 1.3   # --gamma still wins
