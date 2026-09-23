@@ -1,3 +1,4 @@
+import 'dart:developer' as developer;
 import 'dart:ui';
 
 import 'package:screen_retriever/screen_retriever.dart';
@@ -15,7 +16,11 @@ Future<Rect?> displayWorkArea(Rect window) async {
       if (area(d).contains(window.center)) return area(d);
     }
     return area(await screenRetriever.getPrimaryDisplay());
-  } catch (_) {
+  } catch (e) {
+    // Logged, not just swallowed: a null here reads the same whether no
+    // display holds the window or the platform channel is broken, and this
+    // is glue that can only be debugged on a real machine.
+    developer.log('work area unavailable: $e', name: 'aipet.displays');
     return null;
   }
 }

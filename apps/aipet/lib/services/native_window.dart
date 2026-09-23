@@ -13,7 +13,10 @@ class NativeWindow {
 
   final int _hwnd;
 
-  /// This process's top-level window titled [title], or null.
+  /// This process's top-level window titled [title], or null. Titles must be
+  /// unique within the process -- this returns whichever window the OS
+  /// enumerates first -- so the three engines use 'aipet', 'aipet pet' and
+  /// 'aipet hud'.
   static NativeWindow? find(String title) {
     if (!Platform.isWindows) return null;
     final text = title.toNativeUtf16();
@@ -32,7 +35,9 @@ class NativeWindow {
     }
   }
 
-  /// Moves the window; no activation, no z-order change.
+  /// Moves the window; no activation, no z-order change. The BOOL result is
+  /// dropped: a walk calls this about 30 times a second, and a handle that
+  /// went stale would only fail the same way every time.
   void moveTo(int x, int y) => _setWindowPos(_hwnd, 0, x, y, 0, 0, _swpNoSize | _swpNoZOrder | _swpNoActivate);
 
   /// Shows the window at (x, y), topmost, without activating it.
