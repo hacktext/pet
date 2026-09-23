@@ -40,11 +40,18 @@ POSE_ASPECT = {"stand": "16:9", "walk": "16:9", "lie": "21:9", "front": "1:1"}
 REF_POSE_FOR_ACTION = {"stand": "front", "lick_paw": "front", "act_cute": "front",
                        "feed": "front-bowl", "play": "front-ball", "walk": "walk", "sleep": "lie"}
 
-_TAIL = "镜头完全固定，不推拉不摇移。背景始终是均匀的纯绿色，没有影子，没有地面。"
+# 2026-09-23: the lively front idle came back motion-blurred (corgi's per-frame
+# sharpness swung 5.4-10.1 and its fast tail smeared into the green, keying as a
+# ghost). The competitor manages the same motion at sharpness 11, so ask for it.
+_TAIL = ("镜头完全固定，不推拉不摇移。背景始终是均匀的纯绿色，没有影子，没有地面。"
+         "每一帧都清晰锐利，毛发丝缕分明，没有运动模糊，没有拖影和残影。")
 _ACTIONS = {
     "stand": {
-        "dog": ("{it}面朝镜头站在原地，开心地张着嘴。整个五秒里一直在做明显、连续的动作：头向左右转动看看四周，"
-                "歪了歪头，尾巴大幅度地左右摇摆，耳朵随之抖动，身体重心轻轻左右移动。"
+        # 2026-09-23: a fast-wagging tail smears into the green screen and keys
+        # as a ghost, so the motion stays wide but slow.
+        "dog": ("{it}面朝镜头站在原地，开心地张着嘴。整个五秒里一直在做明显、连续但缓慢从容的动作：头慢慢向左右转动看看四周，"
+                "歪了歪头，尾巴慢慢地左右摆动，耳朵随之轻轻抖动，身体重心缓缓左右移动。"
+                "所有动作都放慢，不要快速抖动或甩动。"
                 "四只脚掌始终踩在原地，不走动，不转身，不坐下，不趴下。最后头回到正对镜头的姿势。"),
         "cat": ("{it}面朝镜头站在原地。整个五秒里一直在做明显、连续的动作：头向左右转动好奇地看看四周，"
                 "歪了歪头，慢慢眨眼，耳朵灵活地转动，尾巴大幅度地慢慢摆动，身体重心轻轻左右移动。"
