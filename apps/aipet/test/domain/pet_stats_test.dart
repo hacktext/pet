@@ -87,6 +87,17 @@ void main() {
     expect(statusText(at(t0, satiety: 50)), '状态很好');
   });
 
+  test('the status judges the numbers the panel shows, not the raw ones', () {
+    // A fresh pet is at exactly 50 and drains at once, so it read 有点饿了
+    // next to 饱食度 50% on the real machine.
+    expect(statusText(at(t0, satiety: 49.6)), '状态很好');
+    expect(statusText(at(t0, satiety: 49.4)), '有点饿了');
+    expect(statusText(at(t0, satiety: 19.6)), '有点饿了');
+    expect(statusText(at(t0, satiety: 19.4)), '饿坏了');
+    expect(statusText(at(t0, satiety: 90, health: 59.6)), '状态很好');
+    expect(statusText(at(t0, satiety: 90, health: 59.4)), '不太舒服');
+  });
+
   test('companion days count calendar days', () {
     final s = at(DateTime(2026, 9, 19, 23, 59));
     expect(companionDays(s, DateTime(2026, 9, 20, 0, 1)), 2);

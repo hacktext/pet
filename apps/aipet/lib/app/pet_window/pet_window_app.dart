@@ -8,7 +8,6 @@ import 'package:flutter/scheduler.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
-import '../../domain/pet.dart';
 import '../../domain/walker.dart';
 import '../../services/app_paths.dart';
 import '../../services/hud_bridge.dart';
@@ -23,6 +22,7 @@ import 'clip_player.dart';
 import 'close_policy.dart';
 import 'companion.dart';
 import 'library_launcher.dart';
+import 'pet_menu.dart';
 import 'pet_window_controller.dart';
 import 'stats_keeper.dart';
 import 'walk_driver.dart';
@@ -207,26 +207,22 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
 
   Future<void> _showMenu(BuildContext ctx, Offset at) async {
     final c = widget.controller;
-    final pet = c.currentPet;
-    final overlay = Overlay.of(ctx).context.findRenderObject()! as RenderBox;
-    final choice = await showMenu<String>(
-      context: ctx,
-      position: RelativeRect.fromRect(at & const Size(1, 1), Offset.zero & overlay.size),
-      items: [
-        if (pet != null) ...[
-          for (final a in pet.actions)
-            CheckedPopupMenuItem<String>(
-                value: 'action:$a', checked: a == c.currentAction, height: 36, child: Text(labelFor(a))),
-          const PopupMenuDivider(),
-        ],
-        const PopupMenuItem<String>(value: 'open', height: 36, child: Text('打开宠物库')),
-        const PopupMenuItem<String>(value: 'quit', height: 36, child: Text('退出')),
-      ],
+    final pick = await showPetMenu(
+      ctx,
+      at: at,
+      actions: c.currentPet?.actions ?? const [],
+      currentAction: c.currentAction,
     );
-    if (choice == null) return;
-    if (choice == 'open') return widget.launcher.open();
-    if (choice == 'quit') return widget.onQuit();
-    await widget.companion.userAction(choice.substring('action:'.length));
+    switch (pick) {
+      case null:
+        return;
+      case PetMenuOpenLibrary():
+        await widget.launcher.open();
+      case PetMenuQuit():
+        await widget.onQuit();
+      case PetMenuAction(:final action):
+        await widget.companion.userAction(action);
+    }
   }
 
   @override

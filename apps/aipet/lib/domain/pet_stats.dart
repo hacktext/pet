@@ -151,10 +151,13 @@ PetStats recordInteraction(PetStats s, DateTime now, {bool fed = false}) {
   );
 }
 
+/// Judged on the rounded values, because those are the ones the panel prints
+/// beside this line: a pet at 49.6 shows 饱食度 50% and must not be called
+/// hungry next to it.
 String statusText(PetStats s) {
-  if (s.health < 60) return '不太舒服';
-  if (s.satiety < kHungryBelow) return '饿坏了';
-  if (s.satiety < kFedFrom) return '有点饿了';
+  if (s.health.round() < 60) return '不太舒服';
+  if (s.satiety.round() < kHungryBelow) return '饿坏了';
+  if (s.satiety.round() < kFedFrom) return '有点饿了';
   return '状态很好';
 }
 
