@@ -107,7 +107,7 @@ int32_t pet_matte_prepare(const wchar_t* srcMp4, const wchar_t* dstAipmat, uint3
   if (frames == 0) { g_lastError = "no frames decoded"; return -2; }
 
   const std::string manifest =
-      std::string("{\"pipeline\":\"aipet-green-matte-1\",\"frames\":") +
+      std::string("{\"pipeline\":\"aipet-green-matte-3\",\"frames\":") +
       std::to_string(frames) + "}";
   if (!writer.Finish(manifest)) { g_lastError = "finalize failed"; return -3; }
   return 0;

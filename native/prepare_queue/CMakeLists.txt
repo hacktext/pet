@@ -1,0 +1,6 @@
+add_library(prepare_queue STATIC src/prepare_queue.cpp)
+target_include_directories(prepare_queue PUBLIC include)
+
+add_executable(prepare_queue_tests tests/test_prepare_queue.cpp)
+target_link_libraries(prepare_queue_tests PRIVATE prepare_queue GTest::gtest_main)
+gtest_discover_tests(prepare_queue_tests)

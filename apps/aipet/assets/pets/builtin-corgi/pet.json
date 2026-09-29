@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "id": "builtin-corgi",
+  "name": "柯基",
+  "species": "dog",
+  "origin": "builtin",
+  "blurb": "小短腿大耳朵，家里的开心果",
+  "cover": "cover.png",
+  "actions": [
+    "stand",
+    "walk",
+    "sleep",
+    "feed",
+    "play",
+    "lick_paw",
+    "act_cute"
+  ],
+  "walkFacing": "right"
+}
