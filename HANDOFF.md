@@ -111,7 +111,14 @@ cd C:\Users\Administrator\code\aipet\apps\aipet; flutter run -d windows --releas
 
 已构建好的 release 在 `apps\aipet\build\windows\x64\runner\Release\aipet.exe`，双击即可。
 **必须 `--release`**：debug 下抠像要 9.7 秒且窗口冻住（Dart UI isolate 就在平台线程上）。
-首次运行会弹出宠物库；领养一只后宠物出现在桌面，托盘图标常驻。
+首次运行会弹出宠物库；领养一只后宠物出现在桌面。之后再启动会直接出现上次的宠物，不再弹宠物库。
+
+日常操作：**托盘图标是个橙色圆点，藏在任务栏溢出区**（点时间左边的 `^`），单击打开宠物库。
+宠物身上右键是两级菜单：`动作 ▸` / `打开宠物库` / `退出`。鼠标移到宠物上约 0.3 秒出状态面板。
+**退出有三条路**：宠物右键 `退出`、托盘右键 `退出`、宠物库「我的」里的 `退出程序`；
+直接关掉宠物库窗口不会退出程序。每个动作第一次播放要抠像，几秒，之后走缓存。
+
+`aipet.exe` 不能单独拷走——同目录的 6 个 dll 和 `data\` 是它的一部分；要放桌面就建快捷方式。
 数据在 `%APPDATA%\com.aipet\aipet\`（`settings.json`、`stats.json`、`pets\`、`matte-cache\`）——
 要从全新状态验收就把它整个移走。
 
