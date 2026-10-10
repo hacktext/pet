@@ -243,3 +243,15 @@ def test_a_clip_poll_blip_backs_off_and_resumes_the_paid_task(rig):
     assert [k for k, _ in rig.fk.created] == ["image"] * 3 + ["video"] * 5
     assert rig.fk.waited.count("video-4") == 2
     assert rig.env.sleep.calls == [30.0]
+
+
+def test_a_redo_stamped_by_the_server_is_applied_once_per_stamp(rig):
+    run_job(rig.job(), rig.env, rig.prog)
+    redo = {"actions": ["play"], "refs": False, "hint": "", "at": 1760000000}
+    rig.up.fail_finish = 1
+    with pytest.raises(RuntimeError, match="server down"):
+        run_job(rig.job(redo=redo), rig.env, rig.prog)
+    run_job(rig.job(redo=redo), rig.env, rig.prog)            # re-claimed: same stamp, not remade
+    assert len(rig.fk.created) == 9
+    run_job(rig.job(redo={**redo, "at": 1760000999}), rig.env, rig.prog)   # asked again later
+    assert [b["external_task_id"] for b in _videos(rig, 8)] == ["aipet-12-play-2", "aipet-12-play-3"]

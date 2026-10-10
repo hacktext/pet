@@ -149,3 +149,13 @@ def test_finish_done_forgets_the_redo_and_its_hints(tmp_path):
     assert s.data["hints"] == {} and s.data["redo_seen"] is None
     apply_redo(s, job, d)                     # the same redo again later is a new request
     assert not s.done("video:play")
+
+
+def test_redo_of_the_stills_alone_remakes_every_still_and_every_clip(tmp_path):
+    job = Job.from_claim(claim(redo={"actions": [], "refs": True, "hint": ""}))
+    d, s = _finished(tmp_path, job)
+    apply_redo(s, job, d)
+    assert _not_done(s, job) == set(job.steps()) - {"fetch"}
+    assert not any((d / f"ref-{p}-green.png").exists() for p in job.poses())
+    assert not any((d / f"{a}.mp4").exists() for a in job.actions)
+    assert s.data["hints"] == {}

@@ -135,7 +135,8 @@ def apply_redo(state: JobState, job: Job, d: Path) -> None:
         listed = list(redo.get("actions") or [])
         poses, actions = [], listed
         if redo.get("refs"):
-            poses = [p for p in POSE_ORDER if p in {base_pose(a) for a in listed}]
+            # stills only, no action named: every still the job uses is remade
+            poses = [p for p in POSE_ORDER if p in {base_pose(a) for a in listed}] if listed else job.poses()
             actions = [a for a in job.actions if base_pose(a) in poses]   # every clip made from a redone still
         hint = (redo.get("hint") or "").strip()
         for a in listed:
