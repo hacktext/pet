@@ -1,0 +1,31 @@
+# aipet 定制宠物生成程序（spec 2026-10-10 5.2）。
+# 安装：复制到 /etc/systemd/system/，按服务器实际路径改 User / 路径，然后
+#   systemctl daemon-reload && systemctl enable --now aipet-worker
+# 停止时 SIGTERM：做完当前步骤再退出（一个视频步骤最长约 20 分钟），所以 TimeoutStopSec 给足。
+# 宝塔「进程守护」等价配置：启动命令同 ExecStart，环境变量同 Environment。
+# 密钥只放在 /opt/aipet/secrets/ 下的 kling.env 与 worker.env（权限 600），本文件不含任何密钥。
+#
+# 服务器准备：Python 3.11+、ffmpeg / ffprobe 在 PATH、
+#   python -m venv .venv && .venv/bin/pip install -r requirements.txt；
+#   /opt/aipet/work/props/ 放 bowl-cutout.png、ball-cutout.png（从本机 tools/petgen/work/props/ 复制）；
+#   /opt/aipet/u2net 第一次运行会下载 rembg 模型（约 224 MB），要可写且持久。
+[Unit]
+Description=aipet custom-pet generation worker (petgen)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aipet
+WorkingDirectory=/opt/aipet/tools/petgen
+Environment=PETGEN_SECRETS=/opt/aipet/secrets
+Environment=U2NET_HOME=/opt/aipet/u2net
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/aipet/tools/petgen/.venv/bin/python -m petgen worker --server https://aipei.pixpickai.com --work /opt/aipet/work
+KillSignal=SIGTERM
+TimeoutStopSec=1800
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
