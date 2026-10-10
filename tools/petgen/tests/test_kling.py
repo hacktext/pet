@@ -134,3 +134,42 @@ class TestCall:
             kling._call("GET", "/v1/images/generations/task-1")
 
         assert "timeout" in str(exc_info.value).lower()
+
+
+class TestWaitHooks:
+    def test_on_poll_runs_before_every_poll(self, monkeypatch):
+        replies = [{"code": 0, "data": {"task_status": "processing"}},
+                   {"code": 0, "data": {"task_status": "succeed"}}]
+        monkeypatch.setattr(kling, "_call", lambda *a, **k: replies.pop(0))
+        monkeypatch.setattr(kling.time, "sleep", lambda x: None)
+        polls = []
+        kling.wait("video", "t-1", on_poll=lambda: polls.append(1))
+        assert polls == [1, 1]
+
+    def test_a_failed_task_is_a_task_failure(self, monkeypatch):
+        monkeypatch.setattr(kling, "_call", lambda *a, **k: {
+            "code": 0, "data": {"task_status": "failed", "task_status_msg": "内容审核未通过"}})
+        with pytest.raises(kling.KlingTaskFailed, match="内容审核未通过"):
+            kling.wait("image", "t-2")
+
+    def test_a_refused_create_is_a_rejection(self, monkeypatch):
+        monkeypatch.setattr(kling, "_call", lambda *a, **k: {"code": 1301, "message": "图片审核未通过"})
+        with pytest.raises(kling.KlingRejected, match="code=1301 图片审核未通过"):
+            kling.create_image({})
+
+
+def test_units_left_sums_the_online_packs_of_a_kind(monkeypatch):
+    monkeypatch.setattr(kling, "balance", lambda: [
+        {"resource_pack_name": "视频生成-100-5并发", "remaining_quantity": "40", "status": "online"},
+        {"resource_pack_name": "视频生成-50", "remaining_quantity": "9", "status": "expired"},
+        {"resource_pack_name": "图像生成-1000-9并发", "remaining_quantity": "968", "status": "online"},
+    ])
+    assert kling.units_left("video") == 40.0
+    assert kling.units_left("image") == 968.0
+
+
+def test_download_goes_through_the_retrying_fetch(monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(kling, "fetch", lambda url, dest: seen.append((url, dest)) or dest)
+    kling.download("https://x.invalid/a.mp4", tmp_path / "a.mp4")
+    assert seen == [("https://x.invalid/a.mp4", tmp_path / "a.mp4")]
