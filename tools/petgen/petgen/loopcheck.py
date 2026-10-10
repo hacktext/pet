@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 from pathlib import Path
+
+from petgen import proc
 
 
 def probe(video: Path) -> dict:
-    out = subprocess.run(
+    out = proc.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0",
          "-show_entries", "stream=width,height,r_frame_rate,nb_frames", "-of", "json", str(video)],
         check=True, capture_output=True, text=True).stdout
@@ -39,7 +40,7 @@ def psnr_series(video: Path, workdir: Path) -> tuple[list[float], list[float]]:
     video = Path(video).resolve()
 
     def run(args: list[str]) -> None:
-        subprocess.run(["ffmpeg", "-v", "error", *args], check=True, cwd=workdir)
+        proc.run(["ffmpeg", "-v", "error", *args], check=True, cwd=workdir)
 
     run(["-i", str(video), "-filter_complex",
          "[0:v]split[a][b];[b]trim=end_frame=1,loop=loop=-1:size=1:start=0[f0];[a][f0]psnr=stats_file=vs_f0.log:shortest=1",

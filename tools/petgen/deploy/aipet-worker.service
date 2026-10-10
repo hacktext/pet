@@ -23,6 +23,8 @@ Environment=U2NET_HOME=/opt/aipet/u2net
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/opt/aipet/tools/petgen/.venv/bin/python -m petgen worker --server https://aipei.pixpickai.com --work /opt/aipet/work
 KillSignal=SIGTERM
+# 只给主进程发 SIGTERM（ffmpeg 子进程不被打断，当前步骤能做完）；超时后才 SIGKILL 整组。
+KillMode=mixed
 TimeoutStopSec=1800
 Restart=always
 RestartSec=30

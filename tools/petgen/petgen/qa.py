@@ -2,9 +2,9 @@
 shared by `petgen qa` and the worker."""
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
+from petgen import proc
 from petgen.keycheck import FRAME_BLOB_MAX, frame_scores, score_file
 from petgen.loopcheck import probe, psnr_series, seam_verdict
 
@@ -13,8 +13,8 @@ FORMAT = {"width": 960, "height": 960, "fps": "24/1", "frames": 121}
 
 def frame_png(video: Path, out: Path, last: bool) -> Path:
     seek = ["-sseof", "-0.05"] if last else []
-    subprocess.run(["ffmpeg", "-v", "error", "-y", *seek, "-i", str(video), "-update", "1", "-frames:v", "1", str(out)],
-                   check=True)
+    proc.run(["ffmpeg", "-v", "error", "-y", *seek, "-i", str(video), "-update", "1", "-frames:v", "1", str(out)],
+             check=True)
     return out
 
 

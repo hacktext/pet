@@ -1,4 +1,5 @@
 import json
+import subprocess
 import threading
 
 import pytest
@@ -340,3 +341,41 @@ def test_the_reported_balance_is_floored_like_the_pause_decision(w):
     worker = w.make()
     assert worker.tick() == "paused"
     assert w.srv.statuses == [(True, LOW_BALANCE, {"image": 1000, "video": 27})]
+
+
+def test_a_crash_during_shutdown_is_a_stop_not_a_failure(w, monkeypatch):
+    """SIGTERM / Ctrl+C also kills ffmpeg: its error is the stop, not the job's fault."""
+    def killed(raw, final, workdir, action):
+        w.stop.set()
+        raise RuntimeError("finish failed for stand.mp4: decoder -15, encoder -15, 0 frames")
+
+    monkeypatch.setattr(pipeline, "finish_and_qa", killed)
+    worker = w.make(claim())
+    assert worker.tick() == "stopped"
+    assert w.srv.failed == []
+
+
+def test_a_step_failed_by_a_killed_subprocess_during_shutdown_is_a_stop(w, monkeypatch):
+    def killed(raw, final, workdir, action):
+        w.stop.set()
+        try:
+            raise subprocess.CalledProcessError(-15, ["ffmpeg"])
+        except subprocess.CalledProcessError as e:
+            raise pipeline.StepFailed("成片处理失败") from e
+
+    monkeypatch.setattr(pipeline, "finish_and_qa", killed)
+    worker = w.make(claim())
+    assert worker.tick() == "stopped"
+    assert w.srv.failed == []
+
+
+def test_a_real_step_failure_during_shutdown_is_still_reported(w, monkeypatch):
+    def refused(body):
+        w.fk.created.append(("image", body))
+        w.stop.set()                              # SIGTERM arrives mid-step
+        raise KlingRejected("create image failed: code=1301 图片审核未通过")
+
+    monkeypatch.setattr(w.fk, "create_image", refused)
+    worker = w.make(claim())
+    assert worker.tick() == "failed"
+    assert len(w.srv.failed) == 1 and "code=1301" in w.srv.failed[0][2]

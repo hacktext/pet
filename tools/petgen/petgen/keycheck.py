@@ -5,13 +5,13 @@ Scores are taken at SCORE_EDGE x SCORE_EDGE so numbers compare across sizes.
 """
 from __future__ import annotations
 
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 
+from petgen import proc
 from petgen.loopcheck import probe
 
 KEY_CB, KEY_CR, INNER_T, OUTER_T = -0.331, -0.419, 0.28, 0.45
@@ -100,9 +100,9 @@ def frame_scores(video: Path, step: int = 6) -> list[int]:
     (spike 2026-09-19)."""
     info = probe(video)
     w, h = info["width"], info["height"]
-    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(video), "-vf", f"select=not(mod(n\\,{step}))",
-                          "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
-                         check=True, capture_output=True).stdout
+    raw = proc.run(["ffmpeg", "-v", "error", "-i", str(video), "-vf", f"select=not(mod(n\\,{step}))",
+                   "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                   check=True, capture_output=True).stdout
     frames = np.frombuffer(raw, np.uint8).reshape(-1, h, w, 3)
     return [score_rgb(np.asarray(Image.fromarray(f).resize((SCORE_EDGE, SCORE_EDGE), Image.BILINEAR))).blob_core
             for f in frames]

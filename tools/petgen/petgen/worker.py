@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import math
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -136,15 +137,24 @@ class Worker:
             log.warning("job %s dropped, the server's reaper will hand it back: %s", job.id, e)
             return "dropped"
         except (StepFailed, BudgetExceeded) as e:
+            if self.stop.is_set() and isinstance(e.__cause__, (subprocess.SubprocessError, OSError)):
+                return self._stopped(job.id, e)       # the shutdown killed the ffmpeg under the step
             self._fail(job.id, rep.step, str(e))
             return "failed"
         except DownloadError as e:
             self._fail(job.id, rep.step, f"照片下载失败：{e}")
             return "failed"
         except Exception as e:  # noqa: BLE001 -- any crash fails this job, the worker carries on
+            if self.stop.is_set():
+                return self._stopped(job.id, e)       # most likely the shutdown's own doing: not the job's fault
             log.exception("job %s crashed in %s", job.id, rep.step)
             self._fail(job.id, rep.step, f"{type(e).__name__}: {e}")
             return "failed"
+
+    def _stopped(self, job_id, e: BaseException) -> str:
+        log.info("stopping: job %s broke off during shutdown (%s: %s); left for the reaper to hand back",
+                 job_id, type(e).__name__, e)
+        return "stopped"
 
     def _fail(self, job_id, stage: str, reason: str) -> None:
         if job_id is None:

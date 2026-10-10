@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageFilter
 
+from petgen import proc
 from petgen.keycheck import alpha_map
 from petgen.loopcheck import probe
 
@@ -141,8 +142,8 @@ def frame_rgb(video: Path, n: int = 30) -> np.ndarray:
     vf = _scale_args(video)
     select = f"select=eq(n\\,{n})"
     vf = ["-vf", f"{select},{vf[1]}"] if vf else ["-vf", select]
-    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(video), *vf, "-frames:v", "1",
-                          "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], check=True, capture_output=True).stdout
+    raw = proc.run(["ffmpeg", "-v", "error", "-i", str(video), *vf, "-frames:v", "1",
+                   "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], check=True, capture_output=True).stdout
     return np.frombuffer(raw, np.uint8).reshape(OUT_EDGE, OUT_EDGE, 3).copy()
 
 
@@ -151,12 +152,12 @@ def finish_clip(src: Path, dst: Path, gamma: float) -> int:
     Writes via a temp file so a failure never leaves a half clip behind."""
     vf = _scale_args(src)
     tmp = dst.with_name(dst.stem + ".partial.mp4")
-    dec = subprocess.Popen(["ffmpeg", "-v", "error", "-i", str(src), *vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
-                           stdout=subprocess.PIPE)
-    enc = subprocess.Popen(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
-                            "-s", f"{OUT_EDGE}x{OUT_EDGE}", "-r", str(FPS), "-i", "-",
-                            "-c:v", "libx264", "-preset", "slow", "-crf", str(CRF), "-tune", "grain", "-pix_fmt", "yuv420p",
-                            "-movflags", "+faststart", str(tmp)], stdin=subprocess.PIPE)
+    dec = proc.popen(["ffmpeg", "-v", "error", "-i", str(src), *vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                     stdout=subprocess.PIPE)
+    enc = proc.popen(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
+                     "-s", f"{OUT_EDGE}x{OUT_EDGE}", "-r", str(FPS), "-i", "-",
+                     "-c:v", "libx264", "-preset", "slow", "-crf", str(CRF), "-tune", "grain", "-pix_fmt", "yuv420p",
+                     "-movflags", "+faststart", str(tmp)], stdin=subprocess.PIPE)
     size = OUT_EDGE * OUT_EDGE * 3
     frames = 0
     try:

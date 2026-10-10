@@ -43,7 +43,7 @@ def test_filtergraphs_never_name_an_absolute_path(monkeypatch, tmp_path):
         for name in ("vs_f0.log", "consec.log"):
             (cwd / name).write_text("n:1 psnr_avg:inf\n", encoding="utf-8")
 
-    monkeypatch.setattr(lc.subprocess, "run", fake_run)
+    monkeypatch.setattr(lc.proc, "run", fake_run)
     work = tmp_path / "psnr"
     lc.psnr_series(tmp_path / "v.mp4", work)
     assert len(calls) == 2
