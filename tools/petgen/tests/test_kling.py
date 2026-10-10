@@ -1,4 +1,6 @@
+import http.client
 import io
+import ssl
 import json
 import pytest
 import urllib.error
@@ -153,7 +155,7 @@ class TestWaitHooks:
             kling.wait("image", "t-2")
 
     def test_a_refused_create_is_a_rejection(self, monkeypatch):
-        monkeypatch.setattr(kling, "_call", lambda *a, **k: {"code": 1301, "message": "图片审核未通过"})
+        monkeypatch.setattr(kling, "_exchange", lambda *a, **k: (None, {"code": 1301, "message": "图片审核未通过"}, False))
         with pytest.raises(kling.KlingRejected, match="code=1301 图片审核未通过"):
             kling.create_image({})
 
@@ -173,3 +175,110 @@ def test_download_goes_through_the_retrying_fetch(monkeypatch, tmp_path):
     monkeypatch.setattr(kling, "fetch", lambda url, dest: seen.append((url, dest)) or dest)
     kling.download("https://x.invalid/a.mp4", tmp_path / "a.mp4")
     assert seen == [("https://x.invalid/a.mp4", tmp_path / "a.mp4")]
+
+
+class _Resp:
+    """A urlopen() response whose read() returns body or raises it."""
+
+    def __init__(self, body):
+        self.body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self):
+        if isinstance(self.body, BaseException):
+            raise self.body
+        return self.body
+
+
+def _urlopen_raising(exc):
+    def urlopen(req, timeout=None):
+        raise exc
+    return urlopen
+
+
+def _http_error(status, body):
+    def urlopen(req, timeout=None):
+        raise urllib.error.HTTPError("https://example.invalid", status, "x", {}, io.BytesIO(body.encode()))
+    return urlopen
+
+
+class TestTransportFailures:
+    """Every way the connection can break is a plain KlingError -- never a
+    crash, never a rejection (the create may have gone through)."""
+
+    @pytest.mark.parametrize("exc", [
+        http.client.RemoteDisconnected("Remote end closed connection without response"),
+        ConnectionResetError(104, "Connection reset by peer"),
+        ssl.SSLError("EOF occurred in violation of protocol"),
+    ])
+    def test_a_broken_connection_is_a_kling_error(self, monkeypatch, exc):
+        monkeypatch.setattr(kling.urllib.request, "urlopen", _urlopen_raising(exc))
+        with pytest.raises(kling.KlingError) as e:
+            kling.create_image({})
+        assert type(e.value) is kling.KlingError
+
+    def test_a_body_cut_short_is_a_kling_error(self, monkeypatch):
+        monkeypatch.setattr(kling.urllib.request, "urlopen",
+                            lambda req, timeout=None: _Resp(http.client.IncompleteRead(b"{", 10)))
+        with pytest.raises(kling.KlingError) as e:
+            kling.create_video({})
+        assert type(e.value) is kling.KlingError
+
+    def test_a_non_json_success_body_is_a_kling_error(self, monkeypatch):
+        monkeypatch.setattr(kling.urllib.request, "urlopen", lambda req, timeout=None: _Resp(b"<html>oops</html>"))
+        with pytest.raises(kling.KlingError) as e:
+            kling._call("GET", "/v1/images/generations/t")
+        assert type(e.value) is kling.KlingError
+
+
+class TestCreateVerdict:
+    """KlingRejected only for a definite refusal; anything that may have been
+    accepted is a plain KlingError (pipeline: outcome unknown, stop)."""
+
+    @pytest.mark.parametrize("status,body", [
+        (502, "<html>502 Bad Gateway</html>"),
+        (503, '{"code": 5000, "message": "server busy"}'),
+        (500, '{"code": 1201, "message": "odd"}'),
+        (408, '{"code": 1201, "message": "timeout"}'),
+        (429, '{"code": 1302, "message": "too many requests"}'),
+        (400, "<html>bad</html>"),
+    ])
+    def test_an_answer_that_may_hide_an_accepted_task_is_not_a_rejection(self, monkeypatch, status, body):
+        monkeypatch.setattr(kling.urllib.request, "urlopen", _http_error(status, body))
+        with pytest.raises(kling.KlingError) as e:
+            kling.create_video({})
+        assert type(e.value) is kling.KlingError
+
+    def test_no_resource_pack_is_a_rejection(self, monkeypatch):
+        monkeypatch.setattr(kling.urllib.request, "urlopen",
+                            lambda req, timeout=None: _Resp(b'{"code": 1102, "message": "no resource pack"}'))
+        with pytest.raises(kling.KlingRejected, match="1102"):
+            kling.create_video({})
+
+    def test_a_4xx_with_a_kling_code_is_a_rejection(self, monkeypatch):
+        monkeypatch.setattr(kling.urllib.request, "urlopen", _http_error(400, '{"code": 1201, "message": "bad"}'))
+        with pytest.raises(kling.KlingRejected, match="1201"):
+            kling.create_image({})
+
+    def test_a_server_side_kling_code_is_not_a_rejection(self, monkeypatch):
+        monkeypatch.setattr(kling.urllib.request, "urlopen",
+                            lambda req, timeout=None: _Resp(b'{"code": 5001, "message": "internal"}'))
+        with pytest.raises(kling.KlingError) as e:
+            kling.create_image({})
+        assert type(e.value) is kling.KlingError
+
+    def test_success_without_a_task_id_is_not_a_rejection(self, monkeypatch):
+        monkeypatch.setattr(kling.urllib.request, "urlopen", lambda req, timeout=None: _Resp(b'{"code": 0, "data": {}}'))
+        with pytest.raises(kling.KlingError) as e:
+            kling.create_image({})
+        assert type(e.value) is kling.KlingError
+
+    def test_a_task_id_is_returned(self, monkeypatch):
+        monkeypatch.setattr(kling.urllib.request, "urlopen",
+                            lambda req, timeout=None: _Resp(b'{"code": 0, "data": {"task_id": "T1"}}'))
+        assert kling.create_image({}) == "T1"

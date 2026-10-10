@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import http.client
 import json
 import socket
 import time
@@ -35,36 +36,73 @@ def _cfg() -> tuple[str, str]:
     return kv["KLING_API_KEY"], kv["KLING_BASE_URL"].rstrip("/")
 
 
-def _call(method: str, path: str, body: dict | None = None) -> dict:
+def _exchange(method: str, path: str, body: dict | None = None) -> tuple[int | None, dict, bool]:
+    """(HTTP error status or None, Kling's JSON answer, raw). An HTTP error
+    without a JSON body comes back raw as {"code": status, "message": ...}.
+    Anything else that goes wrong on the wire or in the body (a disconnect,
+    a reset, TLS, a cut-short or non-JSON body) is a KlingError."""
     key, base = _cfg()
     req = urllib.request.Request(base + path, method=method,
                                  data=json.dumps(body).encode() if body is not None else None)
     req.add_header("Authorization", f"Bearer {key}")
     req.add_header("Content-Type", "application/json")
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            return json.loads(r.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        body_text = e.read().decode("utf-8", "replace")
         try:
-            return json.loads(body_text or "{}")
-        except (json.JSONDecodeError, ValueError):
-            return {"code": e.code, "message": body_text[:200]}
-    except urllib.error.URLError as e:
-        raise KlingError(f"network error: {e.reason}")
+            with urllib.request.urlopen(req, timeout=60) as r:
+                status, res = None, json.loads(r.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            body_text = e.read().decode("utf-8", "replace")
+            try:
+                status, res = e.code, json.loads(body_text or "{}")
+            except ValueError:
+                res = None
+            if not isinstance(res, dict):
+                return e.code, {"code": e.code, "message": body_text[:200]}, True
+    except urllib.error.URLError as e:      # before OSError: URLError is one
+        raise KlingError(f"network error: {e.reason}") from e
     except socket.timeout as e:
-        raise KlingError(f"request timeout: {e}")
+        raise KlingError(f"request timeout: {e}") from e
+    except (http.client.HTTPException, OSError) as e:   # RemoteDisconnected, IncompleteRead, reset, SSL
+        raise KlingError(f"connection error: {type(e).__name__}: {e}") from e
+    except ValueError as e:                 # JSONDecodeError, UnicodeDecodeError
+        raise KlingError(f"unreadable answer: {e}") from e
+    if not isinstance(res, dict):
+        raise KlingError(f"unexpected answer: {type(res).__name__}")
+    return status, res, False
+
+
+def _call(method: str, path: str, body: dict | None = None) -> dict:
+    return _exchange(method, path, body)[1]
 
 
 def b64(path: Path) -> str:
     return base64.b64encode(Path(path).read_bytes()).decode("ascii")
 
 
+def _refused(status: int | None, res: dict, raw: bool) -> bool:
+    """A definite refusal, never charged: an HTTP 4xx (not 408 / 429) with a
+    JSON body, or a Kling client-side code 1000-4999. A 5xx, 408, 429, a
+    non-JSON error page or a Kling server code (>= 5000) may hide an
+    accepted task."""
+    code = res.get("code")
+    if status is not None:
+        if status >= 500 or status in (408, 429) or raw:
+            return False
+        return not (isinstance(code, int) and code >= 5000)
+    return isinstance(code, int) and 1000 <= code <= 4999
+
+
 def _create(kind: str, body: dict) -> str:
-    res = _call("POST", _PATHS[kind], body)
-    if res.get("code") != 0:  # a rejected create is never charged
-        raise KlingRejected(f"create {kind} failed: code={res.get('code')} {res.get('message')}")
-    return res["data"]["task_id"]
+    status, res, raw = _exchange("POST", _PATHS[kind], body)
+    what = f"create {kind} failed: code={res.get('code')} {res.get('message')}"
+    if res.get("code") != 0 or status is not None:
+        if _refused(status, res, raw):
+            raise KlingRejected(what)            # a rejected create is never charged
+        raise KlingError(what)
+    task_id = (res.get("data") or {}).get("task_id") if isinstance(res.get("data"), dict) else None
+    if not task_id:
+        raise KlingError(f"create {kind}: no task_id in the answer")
+    return task_id
 
 
 def create_image(body: dict) -> str:

@@ -1,4 +1,7 @@
+import http.client
+import io
 import json
+import urllib.error
 
 import pytest
 
@@ -180,3 +183,35 @@ def test_a_prop_that_cannot_be_composed_fails_the_step(rig, monkeypatch):
     monkeypatch.setattr(props, "compose_prop", no_subject)
     with pytest.raises(StepFailed, match="道具图生成失败.*no subject"):
         real_prop_ref(rig.env.props / "bowl-cutout.png", rig.env.props / "bowl-cutout.png", "bowl", r.dir / "o.png")
+
+
+def _real_create(rig, monkeypatch, urlopen):
+    """The rig's Kling, but creates go through the real wrapper over urlopen."""
+    monkeypatch.setattr(kling, "_cfg", lambda: ("test-key", "https://example.invalid"))
+    monkeypatch.setattr(kling.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(rig.fk, "create_image", lambda body: (rig.fk.created.append(("image", body)),
+                                                              kling.create_image(body))[1])
+
+
+def test_a_disconnect_on_create_is_an_unknown_outcome(rig, monkeypatch):
+    def urlopen(req, timeout=None):
+        raise http.client.RemoteDisconnected("Remote end closed connection without response")
+
+    _real_create(rig, monkeypatch, urlopen)
+    r = _ready(rig)
+    with pytest.raises(StepFailed, match="可灵建任务结果未知"):
+        step_ref(r, "front")
+    assert len(rig.fk.created) == 1
+    assert r.state.data["steps"]["ref:front"]["pending_create"]["attempt"] == 1
+
+
+def test_a_bad_gateway_on_create_is_an_unknown_outcome(rig, monkeypatch):
+    def urlopen(req, timeout=None):
+        raise urllib.error.HTTPError("https://example.invalid", 502, "Bad Gateway", {},
+                                     io.BytesIO(b"<html>502 Bad Gateway</html>"))
+
+    _real_create(rig, monkeypatch, urlopen)
+    r = _ready(rig)
+    with pytest.raises(StepFailed, match="可灵建任务结果未知"):
+        step_ref(r, "front")
+    assert len(rig.fk.created) == 1
