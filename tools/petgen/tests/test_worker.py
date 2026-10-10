@@ -106,6 +106,19 @@ def test_a_refused_photo_twice_fails_with_a_readable_reason(w):
     assert "参考图 front" in reason and "code=1301 图片审核未通过" in reason
 
 
+def test_units_paid_in_a_failing_step_are_still_reported(w):
+    w.knobs["gate_fail"].update({"image-1", "image-2"})    # two paid stills, both rejected by the gate
+    worker = w.make(claim())
+    assert worker.tick() == "failed"
+    [(_, stage, _)] = w.srv.failed
+    assert stage == "ref:front"
+    total = {"image_units": 0, "video_units": 0, "cents": 0}
+    for *_, cost in w.srv.progress_calls:
+        for k in total:
+            total[k] += cost[k]
+    assert total == {"image_units": 16, "video_units": 0, "cents": 160}
+
+
 def test_a_crash_is_reported_with_its_stage_and_the_worker_carries_on(w, monkeypatch):
     def boom(raw, final, workdir, action):
         raise RuntimeError("ffmpeg exploded")
@@ -297,3 +310,33 @@ def test_a_stop_before_the_claim_takes_no_job(w):
     w.fk.units_left = lambda kind: (w.stop.set(), 1000.0)[1]
     assert worker.tick() == "stopped"
     assert len(w.srv.jobs) == 1 and w.srv.failed == []
+
+
+def test_a_rejected_finish_fails_the_job_instead_of_cycling(w, monkeypatch):
+    worker = w.make(claim())
+
+    def refused(job_id, walk_facing, files):
+        raise ServerError("jobs/12/finish: HTTP 422 missing sleep.mp4", 422)
+
+    monkeypatch.setattr(w.srv, "finish", refused)
+    assert worker.tick() == "failed"
+    assert w.srv.failed == [(12, "upload", "服务器拒绝：jobs/12/finish: HTTP 422 missing sleep.mp4")]
+
+
+@pytest.mark.parametrize("status", [None, 500, 503, 408, 429])
+def test_a_transient_upload_error_drops_the_job(w, monkeypatch, status):
+    worker = w.make(claim())
+
+    def flaky(job_id, files):
+        raise ServerError(f"jobs/12/upload-urls: HTTP {status}", status)
+
+    monkeypatch.setattr(w.srv, "upload_urls", flaky)
+    assert worker.tick() == "dropped"
+    assert w.srv.failed == []
+
+
+def test_the_reported_balance_is_floored_like_the_pause_decision(w):
+    w.fk.balance = {"image": 1000.7, "video": 27.9}
+    worker = w.make()
+    assert worker.tick() == "paused"
+    assert w.srv.statuses == [(True, LOW_BALANCE, {"image": 1000, "video": 27})]

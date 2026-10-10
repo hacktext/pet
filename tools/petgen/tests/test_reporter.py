@@ -169,3 +169,41 @@ def test_close_waits_for_an_in_flight_heartbeat():
     n = len(s.calls)
     time.sleep(0.15)
     assert len(s.calls) == n
+
+
+def test_close_sends_the_pending_cost_once_with_the_last_stage():
+    s = Srv()
+    r = Reporter(s, 12, threading.Event(), interval=3600)
+    r.begin("ref:front", "refs", 0, 3, "front")
+    r.cost(8, 0, 80)                               # paid, then the step failed: no end()
+    r.close()
+    r.close()
+    assert s.calls[1:] == [{"job": 12, "stage": "refs", "done": 0, "total": 3, "message": "front",
+                            "cost": {"image_units": 8, "video_units": 0, "cents": 80}}]
+    r.end("ref:front", "refs", 1, 3, "front")
+    assert len(s.calls) == 2
+
+
+def test_close_flushes_even_after_an_abort_and_swallows_errors():
+    s = Srv()
+    r = Reporter(s, 12, threading.Event(), interval=3600)
+    s.abort = True
+    with pytest.raises(JobAborted):
+        r.begin("video:walk", "video", 1, 5, "walk")
+    r.cost(0, 4, 400)
+    r.close()
+    assert s.calls[-1]["cost"] == {"image_units": 0, "video_units": 4, "cents": 400}
+    s2 = Srv()
+    r2 = Reporter(s2, 12, threading.Event(), interval=3600)
+    r2.cost(0, 4, 400)
+    s2.raises = RuntimeError("down")
+    r2.close()                                     # must not raise
+    assert s2.calls == []
+
+
+def test_close_sends_nothing_when_no_cost_is_pending():
+    s = Srv()
+    r = Reporter(s, 12, threading.Event(), interval=3600)
+    r.end("upload", "upload", 1, 1, "upload")      # e.g. after finish: no progress may follow it
+    r.close()
+    assert len(s.calls) == 1

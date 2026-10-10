@@ -4,12 +4,13 @@ repeat (spec 2026-10-10 5.2). One job at a time.
 Nothing here may crash the loop: a balance check, claim or status call that
 fails in any way is logged and waited out. A job that fails is reported with
 the step it failed in; a job the server took back (409 abort) is dropped
-silently; a network failure while uploading or finishing drops the job too,
+silently; a network / 5xx failure while uploading or finishing drops the job too,
 for the server's reaper to hand back -- state.json lets the re-claim resume
 without paying Kling again, so it is never deleted."""
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
 from pathlib import Path
@@ -19,6 +20,7 @@ from petgen.jobstate import Job, JobState
 from petgen.pipeline import BudgetExceeded, Env, JobAborted, StepFailed, StopRequested, run_job
 from petgen.reporter import HEARTBEAT, Reporter
 from petgen.server import ServerAbort, ServerError
+from petgen.server import _transient as transient_server_error
 
 log = logging.getLogger("petgen.worker")
 IMAGE_NEED = 8 * 4       # four stills' worth (spec 4.5)
@@ -92,7 +94,7 @@ class Worker:
         if (paused, reason) == self._last_status and now - self._status_at < STATUS_EVERY:
             return
         try:
-            self.server.status(paused, reason, {k: round(v) for k, v in balance.items()})
+            self.server.status(paused, reason, {k: math.floor(v) for k, v in balance.items()})
         except Exception as e:  # noqa: BLE001
             log.warning("worker/status not sent: %s", e)
             return
@@ -128,6 +130,9 @@ class Worker:
             log.info("job %s was changed on the server; dropped", job.id)
             return "aborted"
         except ServerError as e:
+            if not transient_server_error(e):     # 4xx: retrying the same upload cannot help; settle the job
+                self._fail(job.id, rep.step, f"服务器拒绝：{e}")
+                return "failed"
             log.warning("job %s dropped, the server's reaper will hand it back: %s", job.id, e)
             return "dropped"
         except (StepFailed, BudgetExceeded) as e:

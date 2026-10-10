@@ -42,9 +42,17 @@ class Reporter:
         return self
 
     def close(self) -> None:
-        self._halt.set()
+        """Send the cost still pending -- units paid in a step that then
+        failed get no end() report -- once, with the last stage, then stop.
+        The server adds cost even when it answers abort, so this flushes
+        regardless. Nothing is sent after close() returns."""
         with self._send_lock:                  # an in-flight heartbeat finishes; no later one starts
-            pass
+            if not self._halt.is_set():
+                with self._lock:
+                    pending = any(self._rounded_cost().values())
+                if pending:
+                    self._send_locked()
+                self._halt.set()
         if self._thread is not None:
             self._thread.join(timeout=5)
 
@@ -78,26 +86,33 @@ class Reporter:
             if self._clock() - self._sent_at >= self._interval:
                 self._send()
 
+    def _rounded_cost(self) -> dict:
+        image, video, cents = self._pending
+        return {"image_units": round(image), "video_units": round(video), "cents": int(cents)}
+
     def _send(self) -> None:
         with self._send_lock:
             if self._halt.is_set():
                 return
-            with self._lock:
-                args = self._report_args
-                image, video, cents = self._pending
-            cost = {"image_units": round(image), "video_units": round(video), "cents": int(cents)}
-            try:
-                abort = self._server.progress(self._job_id, *args, cost)
-            except ServerAbort:
-                abort = True
-            except Exception as e:             # never let the heartbeat thread die; cost stays pending
-                log.warning("progress for job %s not sent, kept for the next one: %s", self._job_id, e)
-                return
-            with self._lock:
-                # The server added the increment; keep what rounding left behind and anything added meanwhile.
-                self._pending[0] -= cost["image_units"]
-                self._pending[1] -= cost["video_units"]
-                self._pending[2] -= cost["cents"]
-                self._sent_at = self._clock()
-                if abort:
-                    self.aborted = True
+            self._send_locked()
+
+    def _send_locked(self) -> None:
+        """One progress call; the caller holds _send_lock."""
+        with self._lock:
+            args = self._report_args
+            cost = self._rounded_cost()
+        try:
+            abort = self._server.progress(self._job_id, *args, cost)
+        except ServerAbort:
+            abort = True
+        except Exception as e:                 # never let the heartbeat thread die; cost stays pending
+            log.warning("progress for job %s not sent, kept for the next one: %s", self._job_id, e)
+            return
+        with self._lock:
+            # The server added the increment; keep what rounding left behind and anything added meanwhile.
+            self._pending[0] -= cost["image_units"]
+            self._pending[1] -= cost["video_units"]
+            self._pending[2] -= cost["cents"]
+            self._sent_at = self._clock()
+            if abort:
+                self.aborted = True
