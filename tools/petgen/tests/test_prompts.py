@@ -1,8 +1,29 @@
+import json
+from pathlib import Path
+
 import pytest
 
 from petgen.package import ACTIONS
-from petgen.prompts import (BRIGHT, PETS, POSE_ASPECT, PROPS, REF_POSE_FOR_ACTION, action_prompt, pose_prompt,
-                            source_prompt)
+from petgen.prompts import (BRIGHT, PETS, POSE_ASPECT, PROPS, REF_POSE_FOR_ACTION, SPECIES_NOUN, action_prompt,
+                            custom_action_prompt, custom_pose_prompt, pose_prompt, source_prompt)
+
+SNAPSHOT = Path(__file__).parent / "data" / "builtin_prompts.json"
+
+
+def _all_builtin_prompts() -> dict:
+    snap = {}
+    for pet in PETS:
+        snap[f"source/{pet}"] = source_prompt(pet)
+        for pose in POSE_ASPECT:
+            for bright in (False, True):
+                snap[f"pose/{pet}/{pose}/{int(bright)}"] = pose_prompt(pet, pose, bright=bright)
+        for action in ACTIONS:
+            snap[f"action/{pet}/{action}"] = action_prompt(pet, action)
+    return snap
+
+
+def test_builtin_prompts_are_unchanged_by_the_custom_refactor():
+    assert _all_builtin_prompts() == json.loads(SNAPSHOT.read_text(encoding="utf-8"))
 
 
 def test_three_pets_with_pet_json_fields():
@@ -70,3 +91,30 @@ def test_bright_pose_prompt_adds_the_lighting_and_keeps_the_rest():
     bright = pose_prompt("gold", "stand", bright=True)
     assert BRIGHT not in base
     assert bright == base + BRIGHT
+
+
+def test_custom_pose_prompt_names_the_species_and_is_bright_by_default():
+    dog = custom_pose_prompt("dog", "front")
+    assert dog.startswith("参考图中这只狗的全身照片，保持它的脸、毛色和花纹完全一样。正面朝向镜头")
+    assert "舌头" in dog and dog.endswith(BRIGHT)
+    assert "。。" not in dog
+    cat = custom_pose_prompt("cat", "lie", bright=False)
+    assert "这只猫" in cat and "趴卧" in cat and BRIGHT not in cat
+
+
+def test_custom_action_prompt_uses_the_species_text_and_the_fixed_camera():
+    feed = custom_action_prompt("cat", "feed")
+    assert feed.startswith("这只猫面朝镜头") and "猫粮" in feed and "镜头完全固定" in feed
+    assert custom_action_prompt("dog", "walk").startswith("这只狗原地踏步行走")
+
+
+def test_a_redo_hint_is_appended_and_a_blank_one_is_ignored():
+    base = custom_action_prompt("dog", "play")
+    assert custom_action_prompt("dog", "play", "尾巴摆慢一点") == base + "补充要求：尾巴摆慢一点"
+    assert custom_action_prompt("dog", "play", "   ") == base
+
+
+def test_only_dogs_and_cats_have_custom_prompts():
+    assert set(SPECIES_NOUN) == {"dog", "cat"}
+    with pytest.raises(KeyError):
+        custom_pose_prompt("other", "front")

@@ -100,13 +100,16 @@ PROPS = {
 }
 
 
+SPECIES_NOUN = {"dog": "狗", "cat": "猫"}
+
+
 def _it(pet: str) -> str:
     return f"这只{PETS[pet]['breed']}"
 
 
-def _pick(text: str | dict, pet: str) -> str:
+def _by_species(text: str | dict, species: str) -> str:
     """A prompt that differs by species is a {species: text} dict."""
-    return text[PETS[pet]["species"]] if isinstance(text, dict) else text
+    return text[species] if isinstance(text, dict) else text
 
 
 def source_prompt(pet: str) -> str:
@@ -122,10 +125,10 @@ def source_prompt(pet: str) -> str:
 BRIGHT = "明亮柔和的高调影棚光，整体曝光充足，毛色鲜亮饱满，每一缕毛丝都清晰可见，焦点清晰。"
 
 
-def pose_prompt(pet: str, pose: str, bright: bool = False) -> str:
-    p = PETS[pet]
-    base = (f"参考图中这只{p['breed']}的全身照片，保持它的脸、毛色和花纹完全一样。{p['features']}。"
-            + _pick(POSES[pose], pet) +
+def _pose_text(noun: str, features: str, species: str, pose: str, bright: bool) -> str:
+    feat = f"{features}。" if features else ""
+    base = (f"参考图中这只{noun}的全身照片，保持它的脸、毛色和花纹完全一样。{feat}"
+            + _by_species(POSES[pose], species) +
             "它只占画面中间大约一半的宽度，四周留出大片空白，尾巴尖离画面边缘很远。"
             "背景是浅灰色的无缝影棚背景纸，颜色均匀中性，没有任何物体，画面没有边框。"
             "柔和的大面积漫射光，几乎没有投影，身下没有明显的影子。"
@@ -133,5 +136,27 @@ def pose_prompt(pet: str, pose: str, bright: bool = False) -> str:
     return base + BRIGHT if bright else base
 
 
+def pose_prompt(pet: str, pose: str, bright: bool = False) -> str:
+    p = PETS[pet]
+    return _pose_text(p["breed"], p["features"], p["species"], pose, bright)
+
+
+def custom_pose_prompt(species: str, pose: str, bright: bool = True) -> str:
+    """A customer's pet has no breed or features on file: the reference photo
+    carries its looks. The production recipe is bright (HANDOFF 4)."""
+    return _pose_text(SPECIES_NOUN[species], "", species, pose, bright)
+
+
+def _action_text(it: str, species: str, action: str) -> str:
+    return _by_species(_ACTIONS[action], species).format(it=it) + _TAIL
+
+
 def action_prompt(pet: str, action: str) -> str:
-    return _pick(_ACTIONS[action], pet).format(it=_it(pet)) + _TAIL
+    return _action_text(_it(pet), PETS[pet]["species"], action)
+
+
+def custom_action_prompt(species: str, action: str, hint: str = "") -> str:
+    """hint: the reviewer's one-line note from a redo, appended verbatim."""
+    text = _action_text(f"这只{SPECIES_NOUN[species]}", species, action)
+    hint = hint.strip()
+    return text + f"补充要求：{hint}" if hint else text
