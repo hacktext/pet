@@ -8,7 +8,7 @@ from PIL import Image
 
 from petgen.config import Prices
 from petgen.download import DownloadError
-from petgen.kling import KlingTaskFailed
+from petgen.kling import KlingError, KlingTaskFailed
 from petgen.pipeline import Env, JobAborted, StopRequested
 
 
@@ -46,6 +46,7 @@ class FakeKling:
         self.crash_wait: set[str] = set()        # wait() dies once: the worker was killed
         self.crash_download: set[str] = set()    # download() dies once
         self.download_errors = 0                 # this many downloads raise DownloadError
+        self.wait_errors = 0                     # this many waits raise a plain KlingError (gave up polling)
         self.balance = {"image": 1000.0, "video": 100.0}
         self.balance_error: Exception | None = None
         self.deduction = {"image": "8", "video": "4"}
@@ -69,6 +70,9 @@ class FakeKling:
         if task_id in self.crash_wait:
             self.crash_wait.discard(task_id)
             raise RuntimeError("worker killed while waiting")
+        if self.wait_errors:
+            self.wait_errors -= 1
+            raise KlingError(f"{kind} task {task_id} error: connection error: RemoteDisconnected")
         if task_id in self.fail_task:
             raise KlingTaskFailed(f"{kind} task {task_id} failed: 内容审核未通过")
         key = "images" if kind == "image" else "videos"
@@ -187,12 +191,22 @@ def fake_fetch(url, dest):
     return dest
 
 
+class Sleeps:
+    """Env.sleep that records instead of sleeping."""
+
+    def __init__(self):
+        self.calls: list[float] = []
+
+    def __call__(self, seconds):
+        self.calls.append(seconds)
+
+
 def make_env(tmp_path, kling, uploader, prices=None) -> Env:
     props = Path(tmp_path) / "props"
     for kind in ("bowl", "ball"):
         _png(props / f"{kind}-cutout.png", (200, 0, 0, 255))
     return Env(work=Path(tmp_path) / "work", props=props, prices=prices or Prices(10.0, 100.0),
-               uploader=uploader, kling=kling, fetch=fake_fetch)
+               uploader=uploader, kling=kling, fetch=fake_fetch, sleep=Sleeps())
 
 
 class FakeServer(FakeUploader):

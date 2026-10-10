@@ -14,6 +14,33 @@ def mock_cfg(monkeypatch):
     monkeypatch.setattr(kling, "_cfg", lambda: ("test-key", "https://example.invalid"))
 
 
+class _Clock:
+    """time.monotonic and time.sleep over one fake timeline."""
+
+    def __init__(self):
+        self.t = 0.0
+        self.slept = []
+
+    def __call__(self):
+        return self.t
+
+    def sleep(self, s):
+        self.slept.append(s)
+        self.t += s
+
+
+def _replies(*items):
+    """A _call stand-in answering items in order; an exception item is raised."""
+    items = list(items)
+
+    def call(*a, **k):
+        r = items.pop(0)
+        if isinstance(r, BaseException):
+            raise r
+        return r
+    return call
+
+
 class TestWait:
     def test_returns_data_on_succeed(self, monkeypatch):
         """wait() returns the data dict when poll says task_status is 'succeed'."""
@@ -26,21 +53,24 @@ class TestWait:
         result = kling.wait("image", "task-123")
         assert result == {"task_status": "succeed", "result": "test"}
 
-    def test_raises_on_error_code(self, monkeypatch):
-        """wait() raises KlingError immediately if poll returns non-zero code."""
+    def test_an_error_code_while_polling_gives_up_after_ten_minutes(self, monkeypatch):
+        """A poll answer with code != 0 is retried; KlingError only once the
+        errors have lasted more than POLL_GIVE_UP seconds."""
         monkeypatch.setattr(kling, "_call", lambda *a, **k: {
             "code": 1201,
             "message": "bad request"
         })
-        monkeypatch.setattr(kling.time, "sleep", lambda x: None)
+        clock = _Clock()
 
         with pytest.raises(kling.KlingError) as exc_info:
-            kling.wait("image", "task-123")
+            kling.wait("image", "task-123", every=10.0, clock=clock, sleep=clock.sleep)
 
+        assert type(exc_info.value) is kling.KlingError
         assert "image" in str(exc_info.value)
         assert "task-123" in str(exc_info.value)
         assert "1201" in str(exc_info.value)
         assert "bad request" in str(exc_info.value)
+        assert kling.POLL_GIVE_UP < clock.t <= kling.POLL_GIVE_UP + 10.0
 
     def test_raises_on_failed_status(self, monkeypatch):
         """wait() raises KlingError when task_status is 'failed'."""
@@ -282,3 +312,52 @@ class TestCreateVerdict:
         monkeypatch.setattr(kling.urllib.request, "urlopen",
                             lambda req, timeout=None: _Resp(b'{"code": 0, "data": {"task_id": "T1"}}'))
         assert kling.create_image({}) == "T1"
+
+
+class TestPollBlips:
+    """A paid task is never given up over a short outage while polling."""
+
+    def test_connection_errors_while_polling_are_waited_out(self, monkeypatch):
+        monkeypatch.setattr(kling, "_call", _replies(
+            kling.KlingError("connection error: RemoteDisconnected"),
+            {"code": 502, "message": "<html>Bad Gateway</html>"},
+            {"code": 0, "data": {"task_status": "succeed", "x": 1}}))
+        clock = _Clock()
+        assert kling.wait("video", "t", every=10.0, clock=clock, sleep=clock.sleep)["x"] == 1
+        assert clock.slept == [10.0, 10.0]
+
+    def test_a_good_poll_restarts_the_outage_window(self, monkeypatch):
+        bad = kling.KlingError("connection error: ConnectionResetError")
+        # 50 errors (500 s), one good poll, 50 errors more: never 10 minutes in a row
+        monkeypatch.setattr(kling, "_call", _replies(
+            *[bad] * 50, {"code": 0, "data": {"task_status": "processing"}}, *[bad] * 50,
+            {"code": 0, "data": {"task_status": "succeed"}}))
+        clock = _Clock()
+        assert kling.wait("video", "t", every=10.0, clock=clock, sleep=clock.sleep)["task_status"] == "succeed"
+
+    def test_a_long_outage_gives_up_with_a_plain_kling_error(self, monkeypatch):
+        def down(*a, **k):
+            raise kling.KlingError("connection error: SSLError")
+        monkeypatch.setattr(kling, "_call", down)
+        clock = _Clock()
+        with pytest.raises(kling.KlingError, match="SSLError") as e:
+            kling.wait("video", "t", every=10.0, clock=clock, sleep=clock.sleep)
+        assert type(e.value) is kling.KlingError
+        assert kling.POLL_GIVE_UP < clock.t <= kling.POLL_GIVE_UP + 10.0
+
+    def test_errors_do_not_use_up_the_poll_limit(self, monkeypatch):
+        bad = kling.KlingError("connection error: x")
+        monkeypatch.setattr(kling, "_call", _replies(
+            bad, bad, bad, {"code": 0, "data": {"task_status": "processing"}},
+            {"code": 0, "data": {"task_status": "succeed"}}))
+        clock = _Clock()
+        assert kling.wait("image", "t", every=1.0, limit=2, clock=clock, sleep=clock.sleep)["task_status"] == "succeed"
+
+    def test_a_failed_task_is_still_final_at_once(self, monkeypatch):
+        monkeypatch.setattr(kling, "_call", _replies(
+            kling.KlingError("connection error: x"),
+            {"code": 0, "data": {"task_status": "failed", "task_status_msg": "审核"}}))
+        clock = _Clock()
+        with pytest.raises(kling.KlingTaskFailed):
+            kling.wait("image", "t", every=1.0, clock=clock, sleep=clock.sleep)
+        assert clock.slept == [1.0]

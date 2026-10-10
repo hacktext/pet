@@ -16,6 +16,7 @@ from petgen.download import fetch
 
 _PATHS = {"image": "/v1/images/generations", "video": "/v1/videos/image2video"}
 _PACK_NAMES = {"image": ("图像", "图片"), "video": ("视频",)}
+POLL_GIVE_UP = 600.0     # seconds of failing polls in a row before wait() gives up
 
 
 class KlingError(Exception):
@@ -114,22 +115,40 @@ def create_video(body: dict) -> str:
 
 
 def wait(kind: str, task_id: str, every: float = 8.0, limit: int = 120,
-         on_poll: Callable[[], None] | None = None) -> dict:
+         on_poll: Callable[[], None] | None = None, *,
+         clock: Callable[[], float] | None = None, sleep: Callable[[float], None] | None = None) -> dict:
     """Poll until the task ends. on_poll runs before every poll -- the
-    worker's abort check. A poll error is a plain KlingError: the task may
-    still be running, so its id stays worth keeping."""
-    for _ in range(limit):
+    worker's abort check. A poll that fails (no answer, a 5xx, a code != 0)
+    is a blip: the task is paid for and may well still be running, so it is
+    polled again; only errors lasting more than POLL_GIVE_UP seconds in a row
+    end the wait, with a plain KlingError -- the task's id stays worth
+    keeping. Errors do not count towards limit."""
+    clock = clock or time.monotonic
+    sleep = sleep or time.sleep
+    polls, failing_since = 0, None
+    while polls < limit:
         if on_poll is not None:
             on_poll()
-        res = _call("GET", f"{_PATHS[kind]}/{task_id}")
-        if res.get("code") != 0:
-            raise KlingError(f"{kind} task {task_id} error: code={res.get('code')} {res.get('message')}")
+        try:
+            res = _call("GET", f"{_PATHS[kind]}/{task_id}")
+            if res.get("code") != 0:
+                raise KlingError(f"{kind} task {task_id} error: code={res.get('code')} {res.get('message')}")
+        except KlingError as e:
+            now = clock()
+            if failing_since is None:
+                failing_since = now
+            if now - failing_since > POLL_GIVE_UP:
+                raise KlingError(f"{kind} task {task_id}: polls failing for {now - failing_since:.0f}s: {e}") from e
+            sleep(every)
+            continue
+        failing_since = None
+        polls += 1
         d = res.get("data") or {}
         if d.get("task_status") == "succeed":
             return d
         if d.get("task_status") == "failed":
             raise KlingTaskFailed(f"{kind} task {task_id} failed: {d.get('task_status_msg')}")
-        time.sleep(every)
+        sleep(every)
     raise KlingError(f"{kind} task {task_id} still running after {every * limit:.0f}s")
 
 

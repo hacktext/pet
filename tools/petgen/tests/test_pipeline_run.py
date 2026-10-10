@@ -227,3 +227,19 @@ def test_a_stop_request_ends_between_steps(rig):
 def test_cat_jobs_use_cat_prompts(rig):
     run_job(rig.job(species="cat"), rig.env, rig.prog)
     assert all("这只猫" in b["prompt"] for _, b in rig.fk.created)
+
+
+def test_a_clip_poll_blip_backs_off_and_resumes_the_paid_task(rig):
+    real_wait = rig.fk.wait
+
+    def wait(kind, task_id, **kw):
+        if task_id == "video-4" and rig.fk.waited.count("video-4") == 0:
+            rig.fk.waited.append(task_id)
+            raise KlingError("video task video-4 error: connection error: ConnectionResetError")
+        return real_wait(kind, task_id, **kw)
+
+    rig.fk.wait = wait
+    run_job(rig.job(), rig.env, rig.prog)
+    assert [k for k, _ in rig.fk.created] == ["image"] * 3 + ["video"] * 5
+    assert rig.fk.waited.count("video-4") == 2
+    assert rig.env.sleep.calls == [30.0]

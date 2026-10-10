@@ -7,7 +7,7 @@ import pytest
 
 from petgen import kling, props
 from petgen.kling import KlingError, KlingRejected, KlingTaskFailed
-from petgen.pipeline import MAX_GENERATIONS, BudgetExceeded, StepFailed, step_fetch, step_propref, step_ref
+from petgen.pipeline import MAX_GENERATIONS, MAX_LOOPS, RETRY_WAIT, BudgetExceeded, StepFailed, step_fetch, step_propref, step_ref
 from petgen.pipeline import prop_ref as real_prop_ref   # bound before the rig swaps in the fake
 from petgen.prompts import BRIGHT
 
@@ -118,6 +118,7 @@ def test_dropped_downloads_are_retried_without_paying(rig):
     r = _ready(rig)
     step_ref(r, "front")
     assert len(rig.fk.created) == 1 and r.state.done("ref:front")
+    assert rig.env.sleep.calls == [RETRY_WAIT, RETRY_WAIT]      # backed off before each re-download
 
 
 def test_propref_puts_the_props_on_the_front_still(rig):
@@ -215,3 +216,28 @@ def test_a_bad_gateway_on_create_is_an_unknown_outcome(rig, monkeypatch):
     with pytest.raises(StepFailed, match="可灵建任务结果未知"):
         step_ref(r, "front")
     assert len(rig.fk.created) == 1
+
+
+def test_a_poll_that_gives_up_backs_off_and_resumes_the_same_task(rig):
+    rig.fk.wait_errors = 2
+    r = _ready(rig)
+    step_ref(r, "front")
+    assert len(rig.fk.created) == 1 and rig.fk.waited == ["image-1"] * 3
+    assert rig.env.sleep.calls == [RETRY_WAIT, RETRY_WAIT]
+    assert r.state.done("ref:front")
+
+
+def test_a_rejected_create_is_retried_without_backing_off(rig):
+    rig.fk.reject = [KlingRejected("create image failed: code=1301 x")]
+    step_ref(_ready(rig), "front")
+    assert rig.env.sleep.calls == []
+
+
+def test_a_task_that_keeps_failing_to_poll_fails_the_step_only_after_backing_off(rig):
+    rig.fk.wait_errors = 99
+    r = _ready(rig)
+    with pytest.raises(StepFailed, match="RemoteDisconnected"):
+        step_ref(r, "front")
+    assert len(rig.fk.created) == 1
+    assert rig.env.sleep.calls == [RETRY_WAIT] * MAX_LOOPS
+    assert r.state.data["steps"]["ref:front"]["task"]["id"] == "image-1"   # kept for a later re-claim

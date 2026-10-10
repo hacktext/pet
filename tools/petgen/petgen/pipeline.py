@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Protocol
@@ -26,6 +27,7 @@ VIDEO_UNITS = 4        # one 5 s pro clip
 VIDEO_MODE = "pro"
 MAX_GENERATIONS = 2    # a step pays for its first try and one retry, never more
 MAX_LOOPS = 5          # plus free re-polls / re-downloads of a task already paid for
+RETRY_WAIT = 30.0      # seconds before re-polling / re-downloading a task already paid for
 
 
 class StepFailed(Exception):
@@ -65,6 +67,7 @@ class Env:
     uploader: Uploader
     kling: object = kling_module                       # create_image / create_video / wait / download / units_left
     fetch: Callable[[str, Path], Path] = http_fetch    # the user's photos from signed URLs
+    sleep: Callable[[float], None] = time.sleep         # the back-off before resuming a paid task
 
 
 class Run:
@@ -172,6 +175,15 @@ def prop_ref(cutout: Path, prop: Path, kind: str, out: Path) -> dict:
     return {"pass": s.passed, "floating": s.floating, "blob_core": s.blob_core}
 
 
+def _retry(run: Run, st: dict, e: Exception) -> str:
+    """After a transient KlingError / DownloadError: when a paid task is
+    kept, wait before the next re-poll / re-download instead of burning
+    every loop at once on the same outage."""
+    if st.get("task") is not None:
+        run.env.sleep(RETRY_WAIT)
+    return str(e)
+
+
 def step_fetch(run: Run) -> None:
     for url, dest in zip(run.job.photos, run.photo_paths()):
         if not dest.exists():
@@ -204,7 +216,7 @@ def step_ref(run: Run, pose: str) -> None:
             try:
                 generate(run, key, "image", body, raw)
             except (KlingError, DownloadError) as e:
-                last = str(e)
+                last = _retry(run, st, e)
                 continue
         verdict = gate(raw, run.dir, f"ref-{pose}")
         if verdict["pass"]:
@@ -266,7 +278,7 @@ def step_video(run: Run, action: str) -> None:
             try:
                 generate(run, key, "video", body, raw)
             except (KlingError, DownloadError) as e:
-                last = str(e)
+                last = _retry(run, st, e)
                 continue
         qa = finish_and_qa(raw, final, run.dir, action)
         if qa["pass"] or st["attempts"] >= MAX_GENERATIONS:
