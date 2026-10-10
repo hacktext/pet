@@ -1,6 +1,8 @@
 """pet.json and cover.png for a built-in pet folder (spec 4.1)."""
 from __future__ import annotations
 
+import json
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -18,6 +20,12 @@ def pet_json(pet: str, walk_facing: str = "right") -> dict:
     return {"schema": 1, "id": f"builtin-{pet}", "name": p["name"], "species": p["species"],
             "origin": "builtin", "blurb": p["blurb"], "cover": "cover.png", "actions": list(ACTIONS),
             "walkFacing": walk_facing}
+
+
+def custom_pet_json(pet_id: str, name: str, species: str, actions, walk_facing: str) -> dict:
+    """pet.json for a customer's pet (spec 2026-10-10 5.1 step 6)."""
+    return {"schema": 1, "id": pet_id, "name": name, "species": species, "origin": "custom", "blurb": "",
+            "cover": "cover.png", "actions": list(actions), "walkFacing": walk_facing}
 
 
 def walk_facing(video: Path) -> str:
@@ -46,3 +54,13 @@ def make_cover(cutout: Image.Image) -> Image.Image:
     canvas.paste(cutout, (pad, pad))
     canvas.thumbnail((COVER_MAX, COVER_MAX), Image.LANCZOS)
     return canvas
+
+
+def write_pet_dir(out: Path, clips: dict[str, Path], cutout: Path, meta: dict) -> Path:
+    """A pet folder: <action>.mp4 per clip, cover.png from the cutout, pet.json = meta."""
+    out.mkdir(parents=True, exist_ok=True)
+    for action, clip in clips.items():
+        shutil.copy2(clip, out / f"{action}.mp4")
+    make_cover(Image.open(cutout).convert("RGBA")).save(out / "cover.png")
+    (out / "pet.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return out

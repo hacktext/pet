@@ -9,8 +9,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[3]
-ENV = REPO / "secrets" / "kling.env"
+from petgen.config import read_env, secrets_dir
+
+
 _PATHS = {"image": "/v1/images/generations", "video": "/v1/videos/image2video"}
 
 
@@ -19,12 +20,7 @@ class KlingError(Exception):
 
 
 def _cfg() -> tuple[str, str]:
-    kv = {}
-    for line in ENV.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, v = line.split("=", 1)
-            kv[k.strip()] = v.strip()
+    kv = read_env(secrets_dir() / "kling.env")
     return kv["KLING_API_KEY"], kv["KLING_BASE_URL"].rstrip("/")
 
 

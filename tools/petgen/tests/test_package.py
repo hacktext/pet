@@ -1,9 +1,11 @@
+import json
 import subprocess
 
 import numpy as np
 from PIL import Image
 
-from petgen.package import COVER_MAX, chosen_facing, make_cover, pet_json, walk_facing
+from petgen.package import (COVER_MAX, chosen_facing, custom_pet_json, make_cover, pet_json, walk_facing,
+                            write_pet_dir)
 
 
 def test_pet_json_matches_spec_schema():
@@ -62,3 +64,21 @@ def test_chosen_facing_detects_when_no_override(tmp_path):
                     "-r", "24", "-i", "-", "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p", str(v)],
                    input=f.tobytes(), check=True)
     assert chosen_facing(None, v) == "left"
+
+
+def test_custom_pet_json_matches_the_delivery_contract():
+    assert custom_pet_json("custom-12", "豆豆", "dog", ("stand", "walk"), "left") == {
+        "schema": 1, "id": "custom-12", "name": "豆豆", "species": "dog", "origin": "custom", "blurb": "",
+        "cover": "cover.png", "actions": ["stand", "walk"], "walkFacing": "left",
+    }
+
+
+def test_write_pet_dir_copies_clips_and_writes_cover_and_json(tmp_path):
+    clip = tmp_path / "stand-final.mp4"
+    clip.write_bytes(b"clip")
+    cut = tmp_path / "cut.png"
+    Image.new("RGBA", (120, 80), (200, 150, 100, 255)).save(cut)
+    out = write_pet_dir(tmp_path / "out", {"stand": clip}, cut, {"id": "x"})
+    assert (out / "stand.mp4").read_bytes() == b"clip"
+    assert Image.open(out / "cover.png").mode == "RGBA"
+    assert json.loads((out / "pet.json").read_text(encoding="utf-8")) == {"id": "x"}
