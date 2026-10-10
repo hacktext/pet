@@ -193,3 +193,33 @@ def make_env(tmp_path, kling, uploader, prices=None) -> Env:
         _png(props / f"{kind}-cutout.png", (200, 0, 0, 255))
     return Env(work=Path(tmp_path) / "work", props=props, prices=prices or Prices(10.0, 100.0),
                uploader=uploader, kling=kling, fetch=fake_fetch)
+
+
+class FakeServer(FakeUploader):
+    """The PHP internal worker API in memory."""
+
+    def __init__(self, jobs=()):
+        super().__init__()
+        self.jobs = list(jobs)
+        self.progress_calls: list[tuple] = []     # (job_id, stage, done, total, message, cost)
+        self.failed: list[tuple] = []             # (job_id, stage, reason)
+        self.statuses: list[tuple] = []           # (paused, reason, balance)
+        self.abort_at = None                      # (stage, message) that answers abort
+        self.on_progress = None
+
+    def claim(self):
+        return {"job": self.jobs.pop(0) if self.jobs else None}
+
+    def progress(self, job_id, stage, done, total, message, cost):
+        self.progress_calls.append((job_id, stage, done, total, message, dict(cost)))
+        self.events.append(("progress", stage, message))
+        if self.on_progress is not None:
+            self.on_progress(stage, message)
+        return (stage, message) == self.abort_at
+
+    def fail(self, job_id, stage, reason):
+        self.failed.append((job_id, stage, reason))
+        self.events.append(("fail", stage))
+
+    def status(self, paused, reason, balance):
+        self.statuses.append((paused, reason, dict(balance)))
