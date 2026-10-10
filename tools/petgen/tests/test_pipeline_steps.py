@@ -1,8 +1,11 @@
+import json
+
 import pytest
 
-from petgen import kling
-from petgen.kling import KlingRejected, KlingTaskFailed
-from petgen.pipeline import BudgetExceeded, StepFailed, step_fetch, step_propref, step_ref
+from petgen import kling, props
+from petgen.kling import KlingError, KlingRejected, KlingTaskFailed
+from petgen.pipeline import MAX_GENERATIONS, BudgetExceeded, StepFailed, step_fetch, step_propref, step_ref
+from petgen.pipeline import prop_ref as real_prop_ref   # bound before the rig swaps in the fake
 from petgen.prompts import BRIGHT
 
 
@@ -128,3 +131,52 @@ def test_a_prop_that_fails_its_gate_needs_a_person(rig):
     step_ref(r, "front")
     with pytest.raises(StepFailed, match="道具图 front-ball"):
         step_propref(r)
+
+
+def test_a_create_with_an_unknown_outcome_stops_without_retrying(rig):
+    rig.fk.reject = [KlingError("network error: timed out")]
+    r = _ready(rig)
+    with pytest.raises(StepFailed, match="可灵建任务结果未知.*network error: timed out"):
+        step_ref(r, "front")
+    assert len(rig.fk.created) == 1
+    saved = json.loads((r.dir / "state.json").read_text(encoding="utf-8"))
+    assert saved["steps"]["ref:front"]["pending_create"]["attempt"] == 1
+
+
+def test_a_restart_after_an_unknown_create_stops_before_paying(rig):
+    rig.fk.reject = [KlingError("network error: timed out")]
+    with pytest.raises(StepFailed):
+        step_ref(_ready(rig), "front")
+    rig.fk.created.clear()
+    with pytest.raises(StepFailed, match="可灵建任务结果未知.*network error: timed out"):
+        step_ref(rig.run(), "front")
+    assert rig.fk.created == []
+
+
+def test_a_rejected_create_is_not_an_unknown_outcome(rig):
+    rig.fk.reject = [KlingRejected("create image failed: code=1301 x")]
+    r = _ready(rig)
+    step_ref(r, "front")
+    assert len(rig.fk.created) == 2 and "pending_create" not in r.state.data["steps"]["ref:front"]
+
+
+def test_a_restart_with_both_tries_used_fails_without_paying(rig):
+    r = _ready(rig)
+    r.state.step("ref:front").update(attempts=MAX_GENERATIONS, task=None)
+    r.state.save()
+    with pytest.raises(StepFailed, match="参考图 front"):
+        step_ref(rig.run(), "front")
+    assert rig.fk.created == []
+
+
+def test_a_prop_that_cannot_be_composed_fails_the_step(rig, monkeypatch):
+    r = _ready(rig)
+    with pytest.raises(StepFailed, match="道具图生成失败.*ref-front-cutout.png"):
+        real_prop_ref(r.dir / "ref-front-cutout.png", rig.env.props / "bowl-cutout.png", "bowl", r.dir / "o.png")
+
+    def no_subject(*a):
+        raise ValueError("empty alpha: no subject")
+
+    monkeypatch.setattr(props, "compose_prop", no_subject)
+    with pytest.raises(StepFailed, match="道具图生成失败.*no subject"):
+        real_prop_ref(rig.env.props / "bowl-cutout.png", rig.env.props / "bowl-cutout.png", "bowl", r.dir / "o.png")

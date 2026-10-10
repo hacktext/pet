@@ -15,7 +15,7 @@ from petgen.config import Prices
 from petgen.download import DownloadError
 from petgen.download import fetch as http_fetch
 from petgen.jobstate import Job, JobState
-from petgen.kling import KlingError, KlingTaskFailed
+from petgen.kling import KlingError, KlingRejected, KlingTaskFailed
 from petgen.prompts import POSE_ASPECT, custom_pose_prompt
 from petgen.props import PROP_REFS
 
@@ -90,19 +90,35 @@ class Run:
         self.progress.cost(image, video, cents)
 
 
+def _unknown_create(error: str) -> StepFailed:
+    return StepFailed(f"可灵建任务结果未知，为避免重复扣费已停止：{error}"[:255])
+
+
 def generate(run: Run, key: str, kind: str, make_body: Callable[[], dict], dest: Path) -> None:
     """One Kling result at dest. Raises KlingRejected / KlingTaskFailed (no
     task left: the caller may pay for a retry) or KlingError / DownloadError
     (transient: the task is kept and the next call only re-polls or
-    re-downloads)."""
+    re-downloads). A create that fails without an answer from Kling (network
+    error, timeout) may still have been accepted and charged: it is marked
+    in state.json and the step stops for good -- now and after any restart --
+    rather than risk paying twice."""
     st = run.state.step(key)
+    if st.get("pending_create"):
+        raise _unknown_create(st["pending_create"]["error"])
     if st.get("task") is None:
         run.guard_budget(kind)
         body = make_body()
         st["attempts"] += 1              # counted before the call: a refused create still uses up the try
         run.state.save()
         create = run.env.kling.create_image if kind == "image" else run.env.kling.create_video
-        task_id = create(body)
+        try:
+            task_id = create(body)
+        except KlingRejected:
+            raise                        # code != 0: refused, nothing charged
+        except KlingError as e:
+            st["pending_create"] = {"attempt": st["attempts"], "error": str(e)}
+            run.state.save()
+            raise _unknown_create(str(e)) from e
         st["task"] = {"id": task_id, "url": None, "charged": False}
         run.state.save()
     task = st["task"]
@@ -143,9 +159,14 @@ def gate(raw: Path, out_dir: Path, stem: str) -> dict:
 
 
 def prop_ref(cutout: Path, prop: Path, kind: str, out: Path) -> dict:
+    """The prop pasted on the front still and scored. A missing or unreadable
+    cutout, or one with no subject to place the prop by, fails the step."""
+    from petgen import props
     from petgen.keycheck import score_file
-    from petgen.props import compose_prop
-    s = score_file(compose_prop(cutout, prop, kind, out))
+    try:
+        s = score_file(props.compose_prop(cutout, prop, kind, out))
+    except (OSError, ValueError) as e:
+        raise StepFailed(f"道具图生成失败：{e}"[:255]) from e
     return {"pass": s.passed, "floating": s.floating, "blob_core": s.blob_core}
 
 
