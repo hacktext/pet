@@ -95,6 +95,9 @@ class Run:
         self.progress.cost(image, video, cents)
 
 
+INTERRUPTED_CREATE = "建任务中被中断"
+
+
 def _unknown_create(error: str) -> StepFailed:
     return StepFailed(f"可灵建任务结果未知，为避免重复扣费已停止：{error}"[:255])
 
@@ -104,7 +107,8 @@ def generate(run: Run, key: str, kind: str, make_body: Callable[[], dict], dest:
     task left: the caller may pay for a retry) or KlingError / DownloadError
     (transient: the task is kept and the next call only re-polls or
     re-downloads). A create that fails without an answer from Kling (network
-    error, timeout) may still have been accepted and charged: it is marked
+    error, timeout, or a crash / kill inside the call) may still have been
+    accepted and charged: it is marked (before the call, cleared on an answer)
     in state.json and the step stops for good -- now and after any restart --
     rather than risk paying twice."""
     st = run.state.step(key)
@@ -114,16 +118,22 @@ def generate(run: Run, key: str, kind: str, make_body: Callable[[], dict], dest:
         run.guard_budget(kind)
         body = make_body()
         st["attempts"] += 1              # counted before the call: a refused create still uses up the try
+        # In flight until answered: a crash or a kill inside the call leaves this
+        # mark, and the restart stops on it instead of paying a second time.
+        st["pending_create"] = {"attempt": st["attempts"], "error": INTERRUPTED_CREATE}
         run.state.save()
         create = run.env.kling.create_image if kind == "image" else run.env.kling.create_video
         try:
             task_id = create(body)
         except KlingRejected:
-            raise                        # code != 0: refused, nothing charged
+            st.pop("pending_create", None)   # a definite refusal: nothing charged
+            run.state.save()
+            raise
         except KlingError as e:
             st["pending_create"] = {"attempt": st["attempts"], "error": str(e)}
             run.state.save()
             raise _unknown_create(str(e)) from e
+        st.pop("pending_create", None)
         st["task"] = {"id": task_id, "url": None, "charged": False}
         run.state.save()
     task = st["task"]

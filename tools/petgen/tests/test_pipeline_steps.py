@@ -241,3 +241,35 @@ def test_a_task_that_keeps_failing_to_poll_fails_the_step_only_after_backing_off
     assert len(rig.fk.created) == 1
     assert rig.env.sleep.calls == [RETRY_WAIT] * MAX_LOOPS
     assert r.state.data["steps"]["ref:front"]["task"]["id"] == "image-1"   # kept for a later re-claim
+
+
+def test_a_crash_inside_create_is_an_unknown_outcome_after_a_restart(rig, monkeypatch):
+    real = rig.fk.create_image
+
+    def killed(body):
+        rig.fk.created.append(("image", body))
+        raise KeyboardInterrupt                  # the request may have reached Kling
+
+    monkeypatch.setattr(rig.fk, "create_image", killed)
+    with pytest.raises(KeyboardInterrupt):
+        step_ref(_ready(rig), "front")
+    monkeypatch.setattr(rig.fk, "create_image", real)
+    with pytest.raises(StepFailed, match="可灵建任务结果未知.*建任务中被中断"):
+        step_ref(rig.run(), "front")
+    assert len(rig.fk.created) == 1
+
+
+def test_a_successful_create_leaves_no_pending_mark(rig):
+    r = _ready(rig)
+    seen = []
+    real = rig.fk.create_image
+
+    def spy(body):
+        saved = json.loads((r.dir / "state.json").read_text(encoding="utf-8"))
+        seen.append(saved["steps"]["ref:front"].get("pending_create"))
+        return real(body)
+
+    rig.fk.create_image = spy
+    step_ref(r, "front")
+    assert seen == [{"attempt": 1, "error": "建任务中被中断"}]   # on disk while the call was in flight
+    assert "pending_create" not in r.state.data["steps"]["ref:front"]
