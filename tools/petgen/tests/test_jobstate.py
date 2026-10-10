@@ -139,3 +139,13 @@ def test_hints_can_be_cleared_after_a_finished_upload(tmp_path):
     job2 = Job.from_claim(claim(redo={"actions": ["walk"], "refs": False, "hint": ""}))
     apply_redo(t, job2, d)
     assert t.data["hints"] == {"walk": ""}
+
+
+def test_finish_done_forgets_the_redo_and_its_hints(tmp_path):
+    job = Job.from_claim(claim(redo={"actions": ["play"], "refs": False, "hint": "慢一点"}))
+    d, s = _finished(tmp_path, job)
+    apply_redo(s, job, d)
+    s.finish_done()
+    assert s.data["hints"] == {} and s.data["redo_seen"] is None
+    apply_redo(s, job, d)                     # the same redo again later is a new request
+    assert not s.done("video:play")

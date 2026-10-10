@@ -117,6 +117,12 @@ class JobState:
         leaks into a later redo of another action."""
         self.data["hints"] = {}
 
+    def finish_done(self) -> None:
+        """The server accepted jobs/:id/finish and cleared its redo: forget
+        the applied redo and its hints (the caller saves)."""
+        self.clear_hints()
+        self.data["redo_seen"] = None
+
 
 def apply_redo(state: JobState, job: Job, d: Path) -> None:
     redo = job.redo

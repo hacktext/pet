@@ -6,6 +6,8 @@ before downloading: a crash or a dropped download (an IncompleteRead once
 lost a paid clip) resumes the paid task instead of paying again."""
 from __future__ import annotations
 
+import hashlib
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Protocol
@@ -14,9 +16,9 @@ from petgen import kling as kling_module
 from petgen.config import Prices
 from petgen.download import DownloadError
 from petgen.download import fetch as http_fetch
-from petgen.jobstate import Job, JobState
+from petgen.jobstate import Job, JobState, apply_redo
 from petgen.kling import KlingError, KlingRejected, KlingTaskFailed
-from petgen.prompts import POSE_ASPECT, custom_pose_prompt
+from petgen.prompts import POSE_ASPECT, REF_POSE_FOR_ACTION, custom_action_prompt, custom_pose_prompt
 from petgen.props import PROP_REFS
 
 IMAGE_UNITS = 8        # one kling-v3 still (HANDOFF 4)
@@ -227,3 +229,141 @@ def step_propref(run: Run) -> None:
         scores[stem] = s
     run.state.step("propref").update(done=True, scores=scores)
     run.state.save()
+
+
+def finish_and_qa(raw: Path, final: Path, workdir: Path, action: str) -> dict:
+    """Grade the raw clip with the pet's one gamma (solved from stand.mp4 and
+    saved to grade.json, so every action looks alike), then QA it."""
+    from petgen.finish import finish_clip, pet_gamma
+    from petgen.qa import qa_clip
+    finish_clip(raw, final, pet_gamma(workdir))
+    return qa_clip(final, workdir, action)
+
+
+def step_video(run: Run, action: str) -> None:
+    """A 5 s pro clip from the action's green reference still, first frame =
+    last frame. A clip that fails QA is paid for once more; a second miss is
+    kept, marked qa.pass = false, for the reviewer to decide on."""
+    key = f"video:{action}"
+    st = run.state.step(key)
+    raw, final = run.dir / f"{action}.mp4", run.dir / f"{action}-final.mp4"
+    ref = run.dir / f"ref-{REF_POSE_FOR_ACTION[action]}-green.png"
+    last = "未知原因"
+    for _ in range(MAX_LOOPS):
+        if not raw.exists():
+            if st["task"] is None and st["attempts"] >= MAX_GENERATIONS:
+                break
+
+            def body() -> dict:
+                n = run.state.next_seq(action)          # never reused: Kling rejects a repeated external_task_id
+                img = kling_module.b64(ref)
+                hint = run.state.data["hints"].get(action, "")
+                return {"model_name": "kling-v3", "image": img, "image_tail": img,
+                        "prompt": custom_action_prompt(run.job.species, action, hint),
+                        "duration": "5", "mode": VIDEO_MODE,
+                        "external_task_id": f"aipet-{run.job.id}-{action}-{n}"}
+
+            try:
+                generate(run, key, "video", body, raw)
+            except (KlingError, DownloadError) as e:
+                last = str(e)
+                continue
+        qa = finish_and_qa(raw, final, run.dir, action)
+        if qa["pass"] or st["attempts"] >= MAX_GENERATIONS:
+            st.update(done=True, qa=qa)                 # a second miss goes to review marked; a person decides
+            run.state.save()
+            return
+        last = "成片质检未通过"
+        raw.unlink()
+        final.unlink(missing_ok=True)
+        if action == "stand":
+            (run.dir / "grade.json").unlink(missing_ok=True)   # the next stand sets the grade afresh
+    raise StepFailed(f"动作 {action} 未能生成：{last}"[:255])
+
+
+def guess_facing(video: Path) -> str:
+    from petgen.package import walk_facing
+    return walk_facing(video)
+
+
+def step_package(run: Run) -> None:
+    """The pet folder in a fresh <dir>/out/ -- a clip left over from an
+    earlier package (a plan with more actions) must never be uploaded."""
+    from petgen.package import custom_pet_json, write_pet_dir
+    out = run.dir / "out"
+    if out.exists():
+        shutil.rmtree(out)
+    facing = guess_facing(run.dir / "walk-final.mp4") if "walk" in run.job.actions else "right"
+    meta = custom_pet_json(run.job.pet_id, run.job.name, run.job.species, run.job.actions, facing)
+    write_pet_dir(out, {a: run.dir / f"{a}-final.mp4" for a in run.job.actions},
+                  run.dir / "ref-front-cutout.png", meta)
+    refs = out / "refs"
+    refs.mkdir()
+    for pose in run.job.poses():
+        shutil.copy2(run.dir / f"ref-{pose}-green.png", refs / f"{pose}.png")
+    run.state.step("package").update(done=True, walk_facing=facing)
+    run.state.save()
+
+
+CONTENT_TYPES = {".json": "application/json", ".png": "image/png", ".mp4": "video/mp4", ".jpg": "image/jpeg"}
+
+
+def manifest(run: Run) -> list[dict]:
+    """Every file under out/, with what upload-urls and finish need; 'local' is the file itself."""
+    steps = run.state.data["steps"]
+    qa = {f"{a}.mp4": steps[f"video:{a}"].get("qa") for a in run.job.actions}
+    qa.update({f"refs/{p}.png": steps[f"ref:{p}"].get("score") for p in run.job.poses()})
+    out = run.dir / "out"
+    files = []
+    for f in sorted(p for p in out.rglob("*") if p.is_file()):
+        rel = f.relative_to(out).as_posix()
+        data = f.read_bytes()
+        files.append({"path": rel, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+                      "content_type": CONTENT_TYPES[f.suffix], "qa": qa.get(rel),
+                      "deliverable": not rel.startswith("refs/"), "local": f})
+    return files
+
+
+def step_upload(run: Run) -> None:
+    """Upload and report every file every time: the server checks that the
+    union of all finishes holds pet.json, cover.png and each clip."""
+    files = manifest(run)
+    up = run.env.uploader
+    urls = up.upload_urls(run.job.id, [{"path": f["path"], "bytes": f["bytes"], "content_type": f["content_type"]}
+                                       for f in files])
+    for f in files:
+        run.progress.poll()
+        up.put(urls[f["path"]], f["local"], f["content_type"])
+    up.finish(run.job.id, run.state.data["steps"]["package"]["walk_facing"],
+              [{k: f[k] for k in ("path", "bytes", "sha256", "qa", "deliverable")} for f in files])
+    run.state.step("upload")["done"] = True
+    run.state.finish_done()                     # the server cleared the redo with the finish
+    run.state.save()
+
+
+SERVER_STAGES = {"fetch": "fetch", "ref": "refs", "propref": "propref", "video": "video",
+                 "package": "package", "upload": "upload"}
+_LABELS = {"fetch": "下载照片", "propref": "合成道具图", "package": "打包", "upload": "上传成品"}
+_STEPS = {"fetch": step_fetch, "ref": step_ref, "propref": step_propref, "video": step_video,
+          "package": step_package, "upload": step_upload}
+
+
+def run_job(job: Job, env: Env, progress: Progress) -> Run:
+    """Apply the job's redo once, then every step not yet done. The upload
+    step ends with jobs/:id/finish, after which the job is the server's
+    again -- no progress follows it."""
+    run = Run(job, env, progress)
+    apply_redo(run.state, job, run.dir)
+    steps = job.steps()
+    for step in steps:
+        if run.state.done(step):
+            continue
+        kind, _, arg = step.partition(":")
+        same = [s for s in steps if s.partition(":")[0] == kind]
+        done = sum(run.state.done(s) for s in same)
+        stage, message = SERVER_STAGES[kind], arg or _LABELS[kind]
+        progress.begin(step, stage, done, len(same), message)
+        _STEPS[kind](run, *([arg] if arg else []))
+        if kind != "upload":
+            progress.end(step, stage, done + 1, len(same), message)
+    return run
