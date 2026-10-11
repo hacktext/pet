@@ -42,6 +42,7 @@ dependencies:
   ffi: ^2.2.0
   alpha_video:
     path: ../../packages/alpha_video
+  image: ^4.12.0
 
 dev_dependencies:
   flutter_test:
