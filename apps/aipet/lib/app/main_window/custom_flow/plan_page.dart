@@ -12,12 +12,16 @@ class PlanPage extends StatefulWidget {
     required this.deps,
     required this.request,
     required this.onOrder,
+    this.onAlreadyPaid,
   });
 
   final CustomDeps deps;
   final CustomRequestInfo request;
   final void Function(BuildContext context, CustomPlan plan, PayOrder order)
   onOrder;
+
+  /// The server says the request is paid already: carry on as if it just was.
+  final void Function(BuildContext context)? onAlreadyPaid;
 
   @override
   State<PlanPage> createState() => _PlanPageState();
@@ -36,7 +40,12 @@ class _PlanPageState extends State<PlanPage> {
   Future<void> _create() async {
     final plan = _m.selected;
     final o = await _m.createOrder();
-    if (o != null && plan != null && mounted) widget.onOrder(context, plan, o);
+    if (!mounted) return;
+    if (o != null && plan != null) {
+      widget.onOrder(context, plan, o);
+    } else if (_m.alreadyPaid) {
+      widget.onAlreadyPaid?.call(context);
+    }
   }
 
   @override

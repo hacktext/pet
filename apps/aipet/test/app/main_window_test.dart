@@ -286,6 +286,61 @@ void main() {
     expect(find.text('退出程序'), findsOneWidget);
   });
 
+  testWidgets('closing the 去支付 flow without paying asks the list again', (tester) async {
+    api.reply = (r) => switch (r.url.path) {
+          '/api/aipet/custom/requests' =>
+            FakeHttp.ok([{'id': 1, 'name': '小白', 'species': 'girl', 'status': 'pending_payment'}]),
+          '/api/aipet/custom/plans' => FakeHttp.ok([plan('standard', '标准版', 3900)]),
+          _ => FakeHttp.ok([]),
+        };
+    await open(tester);
+    await signIn(tester);
+    model.setTab(1);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('去支付'));
+    await tester.pumpAndSettle();
+    expect(find.text('选择宠物版本'), findsOneWidget);
+    final asked = api.to('/api/aipet/custom/requests').length;
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(api.to('/api/aipet/custom/requests').length, greaterThan(asked));
+  });
+
+  testWidgets('去支付 preselects the own plan of the order', (tester) async {
+    api.reply = (r) => switch (r.url.path) {
+          '/api/aipet/custom/requests' => FakeHttp.ok([
+              {'id': 1, 'name': '小白', 'species': 'girl', 'status': 'pending_payment', 'plan_code': 'pro'}
+            ]),
+          '/api/aipet/custom/plans' => FakeHttp.ok([plan('standard', '标准版', 3900), plan('pro', '高级Pro版', 5900)]),
+          _ => FakeHttp.ok([]),
+        };
+    await open(tester);
+    await signIn(tester);
+    model.setTab(1);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('去支付'));
+    await tester.pumpAndSettle();
+    expect(find.text('已选 高级Pro版'), findsOneWidget);
+  });
+
+  testWidgets('我的定制 thumbnails decode at thumbnail size and rows build lazily', (tester) async {
+    api.reply = (r) => r.url.path.endsWith('/requests')
+        ? FakeHttp.ok([
+            for (var i = 1; i <= 50; i++)
+              {'id': i, 'name': '宠物$i', 'species': 'dog', 'status': 'done', 'cover_url': 'https://x/c$i.png'},
+          ])
+        : FakeHttp.ok([]);
+    await open(tester);
+    await signIn(tester);
+    model.setTab(1);
+    await tester.pump();
+    await tester.pump();
+    final img = tester.widgetList<Image>(find.byType(Image)).first;
+    expect(img.image, isA<ResizeImage>());
+    expect((img.image as ResizeImage).width, 96);
+    expect(find.text('宠物50'), findsNothing, reason: 'rows far down are not built');
+  });
+
   testWidgets('form 下一步 goes on to the plans', (tester) async {
     api.reply = (r) => switch (r.url.path) {
           '/api/aipet/custom/upload-tickets' => FakeHttp.ok([

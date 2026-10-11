@@ -7,6 +7,9 @@ import '../../../services/custom_service.dart';
 
 /// The server's code for a missing or rejected token.
 const _authCode = 1003;
+
+/// CUSTOM_ALREADY_PAID: ordering again for a request that is already paid.
+const _alreadyPaidCode = 5011;
 const _loginAgain = '登录已过期，请重新登录';
 
 /// The WeChat QR and its order: asks every [pollEvery] whether it is paid,
@@ -84,6 +87,11 @@ class PayModel extends ChangeNotifier {
         _paid = true;
         _timer?.cancel();
         notifyListeners();
+      } else if (s == PayStatus.refunded) {
+        _expiring = false;
+        _timer?.cancel();
+        _message = '订单已退款';
+        notifyListeners();
       } else if (s == PayStatus.expired || s == PayStatus.failed || _expiring) {
         _expire();
       }
@@ -126,7 +134,14 @@ class PayModel extends ChangeNotifier {
       _expired = false;
       start();
     } on CustomFailure catch (f) {
-      _message = f.code == _authCode ? _loginAgain : f.message;
+      if (f.code == _alreadyPaidCode) {
+        // The QR was paid after all (e.g. at the boundary); go on as paid.
+        _paid = true;
+        _expired = false;
+        _timer?.cancel();
+      } else {
+        _message = f.code == _authCode ? _loginAgain : f.message;
+      }
     } finally {
       _refreshing = false;
     }

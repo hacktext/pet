@@ -113,7 +113,8 @@ class MainWindowModel extends ChangeNotifier {
   Future<void> loadCustoms() async {
     final c = custom;
     final ask = ++_customsAsk;
-    if (c == null || !_account.signedIn) {
+    // Mid sign-out (login expired) there is no one to ask for.
+    if (c == null || !_account.signedIn || _expiring) {
       _customs = const [];
       notifyListeners();
       return;

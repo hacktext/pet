@@ -218,7 +218,7 @@ class _MinePage extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
             sliver: SliverToBoxAdapter(child: _AccountCard(model: model)),
           ),
-          if (model.account.signedIn && model.customs.isNotEmpty) SliverToBoxAdapter(child: _CustomList(model: model)),
+          if (model.account.signedIn && model.customs.isNotEmpty) _CustomList(model: model),
           if (pets.isEmpty)
             const SliverFillRemaining(
               hasScrollBody: false,
@@ -250,12 +250,14 @@ void openCustomFlow(BuildContext context, MainWindowModel model) {
     model.requireLogin();
     return;
   }
-  Navigator.of(context).push(MaterialPageRoute<void>(
-    builder: (_) => CustomFormPage(
-      deps: deps,
-      onSubmitted: (ctx, request) => openPlans(ctx, model, request),
-    ),
-  ));
+  Navigator.of(context)
+      .push(MaterialPageRoute<void>(
+        builder: (_) => CustomFormPage(
+          deps: deps,
+          onSubmitted: (ctx, request) => openPlans(ctx, model, request),
+        ),
+      ))
+      .then((_) => model.loadCustoms()); // however the flow closed
 }
 
 /// The plans for [request], then its QR; once paid, 定制已提交, whose button
@@ -263,10 +265,17 @@ void openCustomFlow(BuildContext context, MainWindowModel model) {
 void openPlans(BuildContext context, MainWindowModel model, CustomRequestInfo request) {
   final deps = model.custom;
   if (deps == null) return;
-  Navigator.of(context).push(MaterialPageRoute<void>(
+  Widget submitted() => SubmittedPage(onDone: (doneCtx) {
+        Navigator.of(doneCtx).popUntil((r) => r.isFirst);
+        model.setTab(1);
+      });
+  Navigator.of(context)
+      .push(MaterialPageRoute<void>(
     builder: (_) => PlanPage(
       deps: deps,
       request: request,
+      onAlreadyPaid: (ctx) =>
+          Navigator.of(ctx).pushReplacement(MaterialPageRoute<void>(builder: (_) => submitted())),
       onOrder: (ctx, plan, order) => Navigator.of(ctx).push(MaterialPageRoute<void>(
         builder: (_) => PayPage(
           deps: deps,
@@ -274,60 +283,71 @@ void openPlans(BuildContext context, MainWindowModel model, CustomRequestInfo re
           plan: plan,
           order: order,
           onPaid: (payCtx) => Navigator.of(payCtx).pushReplacement(MaterialPageRoute<void>(
-            builder: (_) => SubmittedPage(onDone: (doneCtx) {
-              Navigator.of(doneCtx).popUntil((r) => r.isFirst);
-              model.setTab(1);
-            }),
+            builder: (_) => submitted(),
           )),
         ),
       )),
     ),
-  ));
+  ))
+      .then((_) => model.loadCustoms());
 }
 
 /// 我的定制: each order's first photo, name, category, plan and progress;
-/// one still awaiting payment offers 去支付.
+/// one still awaiting payment offers 去支付. A sliver, so up to 50 rows build
+/// only as they scroll into view.
 class _CustomList extends StatelessWidget {
   const _CustomList({required this.model});
 
   final MainWindowModel model;
 
   @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('我的定制', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 8),
-          for (final r in model.customs)
-            Card(
-              color: AppColors.card,
-              child: ListTile(
-                leading: ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: SizedBox(
-                    width: 48,
-                    height: 48,
-                    child: r.coverUrl == null
-                        ? const Icon(Icons.pets, color: AppColors.accent)
-                        : Image.network(r.coverUrl!,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) => const Icon(Icons.pets, color: AppColors.accent)),
-                  ),
+  Widget build(BuildContext context) {
+    final rows = model.customs;
+    return SliverPadding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      sliver: SliverList.builder(
+        itemCount: rows.length + 1,
+        itemBuilder: (context, i) {
+          if (i == 0) {
+            return const Padding(
+              padding: EdgeInsets.only(bottom: 8),
+              child: Text('我的定制', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            );
+          }
+          final r = rows[i - 1];
+          return Card(
+            color: AppColors.card,
+            child: ListTile(
+              leading: ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: SizedBox(
+                  width: 48,
+                  height: 48,
+                  child: r.coverUrl == null
+                      ? const Icon(Icons.pets, color: AppColors.accent)
+                      : Image.network(r.coverUrl!,
+                          fit: BoxFit.cover,
+                          cacheWidth: 96,
+                          cacheHeight: 96,
+                          errorBuilder: (_, _, _) => const Icon(Icons.pets, color: AppColors.accent)),
                 ),
-                title: Text(r.name),
-                subtitle: Text([speciesLabel(r.species), ?r.planName].join(' · ')),
-                trailing: r.status.awaitingPayment
-                    ? Row(mainAxisSize: MainAxisSize.min, children: [
-                        Text(r.status.label, style: const TextStyle(color: AppColors.textMuted)),
-                        const SizedBox(width: 8),
-                        FilledButton(onPressed: () => openPlans(context, model, r), child: const Text('去支付')),
-                      ])
-                    : Text(r.status.label,
-                        style: const TextStyle(color: AppColors.accent, fontWeight: FontWeight.w700)),
               ),
+              title: Text(r.name),
+              subtitle: Text([speciesLabel(r.species), ?r.planName].join(' · ')),
+              trailing: r.status.awaitingPayment
+                  ? Row(mainAxisSize: MainAxisSize.min, children: [
+                      Text(r.status.label, style: const TextStyle(color: AppColors.textMuted)),
+                      const SizedBox(width: 8),
+                      FilledButton(onPressed: () => openPlans(context, model, r), child: const Text('去支付')),
+                    ])
+                  : Text(r.status.label,
+                      style: const TextStyle(color: AppColors.accent, fontWeight: FontWeight.w700)),
             ),
-        ]),
-      );
+          );
+        },
+      ),
+    );
+  }
 }
 
 /// Sign in with a phone number and an SMS code, or -- signed in -- the

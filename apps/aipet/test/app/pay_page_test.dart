@@ -215,6 +215,46 @@ void main() {
     expect(http.to(orders), hasLength(1));
   });
 
+  test('re-ordering a QR that was in fact paid (5011) counts as paid', () async {
+    final m = model(o: const PayOrder(orderNo: 'PX1', amountCents: 3900, codeUrl: 'x', expiresIn: Duration(seconds: 1)));
+    http.reply = (_) => FakeHttp.fail(5011, '这个定制已经支付过了');
+    await m.refresh();
+    expect(m.paid, isTrue);
+    m.dispose();
+  });
+
+  testWidgets('pay, expire, refresh gets 5011: the submitted page is shown', (tester) async {
+    const short = PayOrder(orderNo: 'PX1', amountCents: 3900, codeUrl: 'x', expiresIn: Duration(seconds: 3));
+    await tester.pumpWidget(MaterialApp(
+        home: Builder(
+            builder: (ctx) => PayPage(
+                deps: deps(),
+                request: request,
+                plan: plan,
+                order: short,
+                onPaid: (c) => Navigator.of(c).pushReplacement(
+                    MaterialPageRoute<void>(builder: (_) => SubmittedPage(onDone: (_) {})))))));
+    await tester.pump(const Duration(seconds: 4));
+    await tester.pump();
+    http.reply = (_) => FakeHttp.fail(5011, '这个定制已经支付过了');
+    await tester.tap(find.text('二维码已过期，点击刷新'));
+    await tester.pump();
+    await tester.pumpAndSettle();
+    expect(find.text('定制已提交'), findsOneWidget);
+  });
+
+  test('a refunded order ends polling and says so', () async {
+    status = 'refunded';
+    final m = model(every: const Duration(milliseconds: 10))..start();
+    await until(() => m.message != null);
+    expect(m.message, '订单已退款');
+    expect(m.paid, isFalse);
+    final n = http.sent.length;
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(http.sent.length, n, reason: 'polling stopped');
+    m.dispose();
+  });
+
   testWidgets('submitted page says what happens next', (tester) async {
     var done = 0;
     await tester.pumpWidget(MaterialApp(home: SubmittedPage(onDone: (_) => done++)));

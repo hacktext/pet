@@ -14,6 +14,7 @@ class PlanModel extends ChangeNotifier {
   String? _selected;
   bool _loading = false;
   bool _busy = false;
+  bool _alreadyPaid = false;
   String? _message;
   bool _disposed = false;
 
@@ -21,6 +22,9 @@ class PlanModel extends ChangeNotifier {
   CustomPlan? get selected => _plans.where((p) => p.code == _selected).firstOrNull;
   bool get loading => _loading;
   bool get busy => _busy;
+
+  /// The server says this request is paid already (5011).
+  bool get alreadyPaid => _alreadyPaid;
   String? get message => _message;
 
   @override
@@ -40,7 +44,12 @@ class PlanModel extends ChangeNotifier {
     notifyListeners();
     try {
       _plans = await _service.plans();
-      if (selected == null) _selected = _plans.firstOrNull?.code;
+      if (selected == null) {
+        // The request's own plan first: ordering another one while the first
+        // QR is still payable would make a second order.
+        final own = request.planCode;
+        _selected = _plans.any((p) => p.code == own) ? own : _plans.firstOrNull?.code;
+      }
     } on CustomFailure catch (f) {
       _message = f.message;
     } finally {
@@ -65,6 +74,7 @@ class PlanModel extends ChangeNotifier {
       return await _service.order(request.id, plan.code);
     } on CustomFailure catch (f) {
       _message = f.message;
+      if (f.code == 5011) _alreadyPaid = true;
       // Stay busy while the list reloads so a second tap cannot order a stale plan.
       if (f.code == 5013) {
         await load();

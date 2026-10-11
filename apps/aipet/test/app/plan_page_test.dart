@@ -59,6 +59,43 @@ void main() {
     expect(m.message, '这个定制已经支付过了');
   });
 
+  test('a 5011 on ordering sets alreadyPaid', () async {
+    final m = PlanModel(svc, request);
+    await m.load();
+    expect(m.alreadyPaid, isFalse);
+    http.reply = (_) => FakeHttp.fail(5011, '这个定制已经支付过了');
+    expect(await m.createOrder(), isNull);
+    expect(m.alreadyPaid, isTrue);
+  });
+
+  testWidgets('a 5011 on the page continues to the already-paid callback', (tester) async {
+    tester.view.physicalSize = const Size(420, 1400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    var paid = 0;
+    final deps = CustomDeps(service: svc, uploader: OssUploader(FakeOss()), pick: () async => []);
+    await tester.pumpWidget(MaterialApp(
+        home: PlanPage(deps: deps, request: request, onOrder: (_, _, _) {}, onAlreadyPaid: (_) => paid++)));
+    await tester.pumpAndSettle();
+    http.reply = (_) => FakeHttp.fail(5011, '这个定制已经支付过了');
+    await tester.tap(find.text('创建宠物'));
+    await tester.pumpAndSettle();
+    expect(paid, 1);
+  });
+
+  test('the own plan of the request is preselected when listed, else the first', () async {
+    const own = CustomRequestInfo(
+        id: 5, name: '豆豆', species: Species.cat, status: CustomStatus.pendingPayment, planCode: 'pro');
+    final m = PlanModel(svc, own);
+    await m.load();
+    expect(m.selected!.code, 'pro');
+    const gone = CustomRequestInfo(
+        id: 5, name: '豆豆', species: Species.cat, status: CustomStatus.pendingPayment, planCode: 'old');
+    final g = PlanModel(svc, gone);
+    await g.load();
+    expect(g.selected!.code, 'standard');
+  });
+
   testWidgets('page shows the cards as in the mock and hands back the order', (tester) async {
     tester.view.physicalSize = const Size(420, 1400);
     tester.view.devicePixelRatio = 1.0;
