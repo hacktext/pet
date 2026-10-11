@@ -166,4 +166,40 @@ void main() {
       expect((await main.syncNow()).ok, isFalse);
     });
   });
+
+  test('a ready pet reaches an open library at once and is not kept', () async {
+    final seen = <List<ReadyPet>>[];
+    main.readyPets.listen(seen.add);
+    await pet.pushReady([const ReadyPet(petId: 'custom-7', name: '豆豆')]);
+    expect(seen.single, [const ReadyPet(petId: 'custom-7', name: '豆豆')]);
+    expect(await main.takeReady(), isEmpty);
+  });
+
+  test('with no library listening, ready pets wait until it asks', () async {
+    mainEnd.setHandler(null); // the library window is not running
+    await pet.pushReady([const ReadyPet(petId: 'custom-7', name: '豆豆')]);
+    await pet.pushReady([const ReadyPet(petId: 'custom-8', name: '旺财')]);
+    main.start();
+    expect((await main.takeReady()).map((p) => p.petId), ['custom-7', 'custom-8']);
+    expect(await main.takeReady(), isEmpty);
+  });
+
+  test('refreshCustom reaches the pet window', () async {
+    var refreshes = 0;
+    pet = PetWindowBridge(petEnd,
+        state: () => state,
+        onAdopt: (id) => adoptImpl(id),
+        onMainWindowClosing: () async {},
+        onQuit: () async {},
+        onRefreshCustom: () async => refreshes++)
+      ..start();
+    main.refreshCustom();
+    await Future<void>.delayed(Duration.zero);
+    expect(refreshes, 1);
+  });
+
+  test('a garbled ready list is just empty', () {
+    expect(ReadyPet.listFrom(null), isEmpty);
+    expect(ReadyPet.listFrom({'pets': ['x', {'petId': 1}]}), isEmpty);
+  });
 }

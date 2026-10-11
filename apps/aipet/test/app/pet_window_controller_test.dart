@@ -261,4 +261,15 @@ void main() {
       expect(player.plays, isEmpty);
     });
   });
+
+  test('rescan picks up a pet folder that arrived after boot', () async {
+    await c.boot();
+    expect(c.pets.map((p) => p.id), isNot(contains('custom-7')));
+    writePet(Directory('${tmp.path}\\custom'), id: 'custom-7', origin: 'custom', species: 'cat');
+    var notified = 0;
+    c.addListener(() => notified++);
+    c.rescan();
+    expect(c.pets.map((p) => p.id), contains('custom-7'));
+    expect(notified, 1);
+  });
 }

@@ -22,6 +22,45 @@ abstract final class BridgeMethods {
   static const logout = 'logout';
   static const syncNow = 'syncNow';
   static const accountChanged = 'accountChanged';
+
+  // Delivered custom pets (generation spec 6.1 / 6.2): the pet window tells
+  // the library a pet arrived, the library may ask what arrived while it was
+  // closed, and may ask the pet window to look for deliveries now.
+  static const petsReady = 'petsReady';
+  static const takeReady = 'takeReady';
+  static const refreshCustom = 'refreshCustom';
+}
+
+/// A custom pet that has just been downloaded and installed.
+class ReadyPet {
+  const ReadyPet({required this.petId, required this.name});
+
+  final String petId;
+  final String name;
+
+  Map<String, Object?> toJson() => {'petId': petId, 'name': name};
+
+  static ReadyPet? fromJson(Object? j) {
+    if (j is! Map) return null;
+    final id = j['petId'], name = j['name'];
+    if (id is! String || name is! String) return null;
+    return ReadyPet(petId: id, name: name);
+  }
+
+  /// `{pets: [...]}` as it crosses the channel.
+  static List<ReadyPet> listFrom(Object? j) {
+    final raw = j is Map ? j['pets'] : null;
+    return [for (final v in (raw is List ? raw : const [])) ?ReadyPet.fromJson(v)];
+  }
+
+  @override
+  bool operator ==(Object other) => other is ReadyPet && other.petId == petId && other.name == name;
+
+  @override
+  int get hashCode => Object.hash(petId, name);
+
+  @override
+  String toString() => 'ReadyPet($petId, $name)';
 }
 
 /// What the pet window does for the account card; AccountKeeper in production.
@@ -80,10 +119,17 @@ class PetWindowBridge {
     required this.onMainWindowClosing,
     required this.onQuit,
     this.account,
+    this.onRefreshCustom,
   });
 
   final BridgeTransport _transport;
   final LibraryState Function() state;
+
+  /// The library asked to look for delivered custom pets now; null ignores it.
+  final Future<void> Function()? onRefreshCustom;
+
+  /// Ready pets the library has not received yet (it was not running).
+  final _ready = <ReadyPet>[];
 
   /// Null leaves the library's account card signed out.
   final AccountHandler? account;
@@ -123,6 +169,14 @@ class PetWindowBridge {
         return (account?.view ?? AccountView.signedOut).toJson();
       case BridgeMethods.sendSms || BridgeMethods.login || BridgeMethods.logout || BridgeMethods.syncNow:
         return (await _accountRequest(method, args)).toJson();
+      case BridgeMethods.takeReady:
+        final out = [for (final p in _ready) p.toJson()];
+        _ready.clear();
+        return {'pets': out};
+      case BridgeMethods.refreshCustom:
+        final refresh = onRefreshCustom;
+        if (refresh != null) unawaited(refresh());
+        return null;
       default:
         return null;
     }
@@ -163,6 +217,22 @@ class PetWindowBridge {
       await _transport.invoke(BridgeMethods.stateChanged, s.toJson()).timeout(const Duration(seconds: 3));
     } catch (_) {}
   }
+
+  /// Tells the library [pets] arrived. If it is not there to hear it, they
+  /// wait (in memory) for its takeReady when it next starts.
+  Future<void> pushReady(List<ReadyPet> pets) async {
+    for (final p in pets) {
+      _ready
+        ..removeWhere((x) => x.petId == p.petId)
+        ..add(p);
+    }
+    try {
+      await _transport
+          .invoke(BridgeMethods.petsReady, {'pets': [for (final p in _ready) p.toJson()]})
+          .timeout(const Duration(seconds: 3));
+      _ready.clear();
+    } catch (_) {}
+  }
 }
 
 /// Main-window end.
@@ -183,9 +253,11 @@ class MainWindowBridge {
   final Duration accountTimeout;
   final _states = StreamController<LibraryState>.broadcast();
   final _accounts = StreamController<AccountView>.broadcast();
+  final _readies = StreamController<List<ReadyPet>>.broadcast();
 
   Stream<LibraryState> get states => _states.stream;
   Stream<AccountView> get accounts => _accounts.stream;
+  Stream<List<ReadyPet>> get readyPets => _readies.stream;
 
   void start() => _transport.setHandler((method, args) async {
         if (method == BridgeMethods.stateChanged && !_states.isClosed) {
@@ -194,8 +266,24 @@ class MainWindowBridge {
         if (method == BridgeMethods.accountChanged && !_accounts.isClosed) {
           _accounts.add(AccountView.fromJson(args! as Map<Object?, Object?>));
         }
+        if (method == BridgeMethods.petsReady && !_readies.isClosed) {
+          _readies.add(ReadyPet.listFrom(args));
+        }
         return null;
       });
+
+  /// What arrived while this window was not running; empty when nothing did
+  /// or the pet window does not answer.
+  Future<List<ReadyPet>> takeReady() async {
+    try {
+      return ReadyPet.listFrom(await _transport.invoke(BridgeMethods.takeReady).timeout(ackTimeout));
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Ask the pet window to look for delivered custom pets now. Fire and forget.
+  void refreshCustom() => _transport.invoke(BridgeMethods.refreshCustom).ignore();
 
   /// Null when the pet window does not answer.
   Future<AccountView?> getAccount() async {
@@ -271,5 +359,6 @@ class MainWindowBridge {
   Future<void> dispose() async {
     await _states.close();
     await _accounts.close();
+    await _readies.close();
   }
 }

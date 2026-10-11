@@ -93,6 +93,13 @@ class PetWindowController extends ChangeNotifier {
     await _push(_state);
   }
 
+  /// New pet folders arrived (a custom pet finished downloading): list them.
+  /// Who is adopted or on the desktop does not change.
+  void rescan() {
+    _pets = _library.scan();
+    notifyListeners();
+  }
+
   /// Throws [AdoptError]. The old pet keeps playing until the new one's idle
   /// clip is matted and on screen (spec 6).
   Future<void> adopt(String petId) => _adopt(petId, byUser: true);
