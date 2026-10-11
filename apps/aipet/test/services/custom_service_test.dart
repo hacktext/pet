@@ -71,4 +71,15 @@ void main() {
       'valid_days': 0, 'tags': [], 'features': [], 'feature_count': 0, 'fidelity': 0, 'revisions': 0, 'icon': 'standard'}]);
     expect((await svc.plans()).map((p) => p.code), ['ok']);
   });
+  test('a 1003 (login expired) tells onLoginExpired before failing; other failures do not', () async {
+    var expired = 0;
+    svc = CustomService(ApiClient(http, baseUrl: 'https://example.test', token: () => 't'),
+        onLoginExpired: () => expired++);
+    http.reply = (_) => FakeHttp.fail(1003, 'token invalid', null, 401);
+    await expectLater(svc.list(), throwsA(isA<CustomFailure>().having((f) => f.code, 'code', 1003)));
+    expect(expired, 1);
+    http.reply = (_) => FakeHttp.fail(5011, '已支付');
+    await expectLater(svc.order(1, 'pro'), throwsA(isA<CustomFailure>()));
+    expect(expired, 1);
+  });
 }

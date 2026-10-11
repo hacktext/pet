@@ -1,9 +1,14 @@
 import 'package:flutter/widgets.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../../services/account_store.dart';
+import '../../services/api_client.dart';
 import '../../services/app_paths.dart';
+import '../../services/custom_service.dart';
+import '../../services/oss_uploader.dart';
 import '../../services/pet_library.dart';
 import '../../services/window_bridge.dart';
+import 'custom_flow/custom_deps.dart';
 import 'main_window_app.dart';
 import 'main_window_model.dart';
 
@@ -17,9 +22,19 @@ Future<void> runMainWindow() async {
       await windowManager.focus();
     },
   );
-  final model = MainWindowModel(
+  late final MainWindowModel model;
+  model = MainWindowModel(
     library: PetLibrary(builtinRoot: builtinPetsRoot(), customRoot: customPetsRoot(appDataRoot())),
     bridge: MainWindowBridge(WindowChannelTransport()),
+    custom: CustomDeps(
+      service: CustomService(
+        // Read-only: the pet window is account.json's one writer.
+        ApiClient(IoHttpTransport(), token: AccountStore(appDataRoot()).readToken),
+        onLoginExpired: () => model.loginExpired(),
+      ),
+      uploader: OssUploader(IoMultipartTransport()),
+      pick: pickPhotosFromDisk,
+    ),
   );
   windowManager.addListener(_CloseToHide(model));
   runApp(MainWindowApp(model: model));

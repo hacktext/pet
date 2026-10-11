@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 
 import '../../domain/account_view.dart';
+import '../../domain/custom_order.dart';
 import '../../domain/library_state.dart';
 import '../../domain/pet.dart';
+import 'custom_flow/custom_form_page.dart';
+import 'custom_flow/pay_page.dart';
+import 'custom_flow/plan_page.dart';
+import 'custom_flow/submitted_page.dart';
 import 'main_window_model.dart';
 import 'pet_card.dart';
 import 'theme.dart';
@@ -18,6 +23,7 @@ class MainWindowApp extends StatefulWidget {
 
 class _MainWindowAppState extends State<MainWindowApp> {
   final _messenger = GlobalKey<ScaffoldMessengerState>();
+  final _navigator = GlobalKey<NavigatorState>();
 
   @override
   void initState() {
@@ -32,6 +38,7 @@ class _MainWindowAppState extends State<MainWindowApp> {
   }
 
   void _showMessage() {
+    if (widget.model.takeCloseFlow()) _navigator.currentState?.popUntil((r) => r.isFirst);
     final m = widget.model.takeMessage();
     if (m != null) _messenger.currentState?.showSnackBar(SnackBar(content: Text(m)));
   }
@@ -44,6 +51,7 @@ class _MainWindowAppState extends State<MainWindowApp> {
       title: 'aipet',
       theme: buildAppTheme(),
       scaffoldMessengerKey: _messenger,
+      navigatorKey: _navigator,
       home: ListenableBuilder(
         listenable: model,
         builder: (context, _) => Scaffold(
@@ -94,7 +102,8 @@ class _PlazaPage extends StatelessWidget {
     return CustomScrollView(slivers: [
       SliverPadding(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-        sliver: SliverToBoxAdapter(child: _Banner(group: model.group)),
+        sliver: SliverToBoxAdapter(
+            child: _Banner(group: model.group, onCustom: () => openCustomFlow(context, model))),
       ),
       SliverPadding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
@@ -165,9 +174,10 @@ class _GroupSwitch extends StatelessWidget {
 }
 
 class _Banner extends StatelessWidget {
-  const _Banner({required this.group});
+  const _Banner({required this.group, required this.onCustom});
 
   final Group group;
+  final VoidCallback onCustom;
 
   @override
   Widget build(BuildContext context) {
@@ -186,16 +196,7 @@ class _Banner extends StatelessWidget {
             Text(subtitle, style: const TextStyle(fontSize: 12, color: AppColors.textMuted)),
           ]),
         ),
-        FilledButton(
-          onPressed: () => showDialog<void>(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              content: const Text('即将开放，敬请期待'),
-              actions: [TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('知道了'))],
-            ),
-          ),
-          child: const Text('立即定制'),
-        ),
+        FilledButton(onPressed: onCustom, child: const Text('立即定制')),
       ]),
     );
   }
@@ -209,12 +210,26 @@ class _MinePage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final pets = model.minePets;
+    // One scroll for the whole page: up to 50 orders must not overflow it.
     return Column(children: [
-      Padding(padding: const EdgeInsets.fromLTRB(16, 16, 16, 0), child: _AccountCard(model: model)),
       Expanded(
-        child: pets.isEmpty
-            ? const Center(child: Text('还没有领养小伙伴，去广场看看吧', style: TextStyle(color: AppColors.textMuted)))
-            : CustomScrollView(slivers: [_PetGrid(model: model, pets: pets)]),
+        child: CustomScrollView(slivers: [
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+            sliver: SliverToBoxAdapter(child: _AccountCard(model: model)),
+          ),
+          if (model.account.signedIn && model.customs.isNotEmpty) SliverToBoxAdapter(child: _CustomList(model: model)),
+          if (pets.isEmpty)
+            const SliverFillRemaining(
+              hasScrollBody: false,
+              child: Padding(
+                padding: EdgeInsets.all(32),
+                child: Center(child: Text('还没有领养小伙伴，去广场看看吧', style: TextStyle(color: AppColors.textMuted))),
+              ),
+            )
+          else
+            _PetGrid(model: model, pets: pets),
+        ]),
       ),
       Padding(
         padding: const EdgeInsets.all(16),
@@ -225,6 +240,94 @@ class _MinePage extends StatelessWidget {
       ),
     ]);
   }
+}
+
+/// 立即定制 → form → plans → pay → submitted (custom order spec 3).
+void openCustomFlow(BuildContext context, MainWindowModel model) {
+  final deps = model.custom;
+  if (deps == null) return;
+  if (!model.account.signedIn) {
+    model.requireLogin();
+    return;
+  }
+  Navigator.of(context).push(MaterialPageRoute<void>(
+    builder: (_) => CustomFormPage(
+      deps: deps,
+      onSubmitted: (ctx, request) => openPlans(ctx, model, request),
+    ),
+  ));
+}
+
+/// The plans for [request], then its QR; once paid, 定制已提交, whose button
+/// closes the flow onto 我的.
+void openPlans(BuildContext context, MainWindowModel model, CustomRequestInfo request) {
+  final deps = model.custom;
+  if (deps == null) return;
+  Navigator.of(context).push(MaterialPageRoute<void>(
+    builder: (_) => PlanPage(
+      deps: deps,
+      request: request,
+      onOrder: (ctx, plan, order) => Navigator.of(ctx).push(MaterialPageRoute<void>(
+        builder: (_) => PayPage(
+          deps: deps,
+          request: request,
+          plan: plan,
+          order: order,
+          onPaid: (payCtx) => Navigator.of(payCtx).pushReplacement(MaterialPageRoute<void>(
+            builder: (_) => SubmittedPage(onDone: (doneCtx) {
+              Navigator.of(doneCtx).popUntil((r) => r.isFirst);
+              model.setTab(1);
+            }),
+          )),
+        ),
+      )),
+    ),
+  ));
+}
+
+/// 我的定制: each order's first photo, name, category, plan and progress;
+/// one still awaiting payment offers 去支付.
+class _CustomList extends StatelessWidget {
+  const _CustomList({required this.model});
+
+  final MainWindowModel model;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('我的定制', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 8),
+          for (final r in model.customs)
+            Card(
+              color: AppColors.card,
+              child: ListTile(
+                leading: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: SizedBox(
+                    width: 48,
+                    height: 48,
+                    child: r.coverUrl == null
+                        ? const Icon(Icons.pets, color: AppColors.accent)
+                        : Image.network(r.coverUrl!,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) => const Icon(Icons.pets, color: AppColors.accent)),
+                  ),
+                ),
+                title: Text(r.name),
+                subtitle: Text([speciesLabel(r.species), ?r.planName].join(' · ')),
+                trailing: r.status.awaitingPayment
+                    ? Row(mainAxisSize: MainAxisSize.min, children: [
+                        Text(r.status.label, style: const TextStyle(color: AppColors.textMuted)),
+                        const SizedBox(width: 8),
+                        FilledButton(onPressed: () => openPlans(context, model, r), child: const Text('去支付')),
+                      ])
+                    : Text(r.status.label,
+                        style: const TextStyle(color: AppColors.accent, fontWeight: FontWeight.w700)),
+              ),
+            ),
+        ]),
+      );
 }
 
 /// Sign in with a phone number and an SMS code, or -- signed in -- the

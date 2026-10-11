@@ -74,6 +74,18 @@ class AccountStore {
     }
   }
 
+  /// The token for the library window, which only reads (the pet window is the
+  /// one writer): null on anything unexpected, and the file is left alone.
+  String? readToken() {
+    try {
+      final j = jsonDecode(file.readAsStringSync());
+      final t = j is Map ? j['token'] : null;
+      return t is String && t.isNotEmpty ? t : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   void save(Account a) => writeJsonAtomic(file, {'schema': 1, 'token': a.token, 'user': a.user.toJson()});
 
   void clear() {

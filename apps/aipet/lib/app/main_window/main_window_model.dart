@@ -3,15 +3,21 @@ import 'dart:async';
 import 'package:flutter/foundation.dart' hide Category;
 
 import '../../domain/account_view.dart';
+import '../../domain/custom_order.dart';
 import '../../domain/library_state.dart';
 import '../../domain/pet.dart';
+import '../../services/custom_service.dart';
 import '../../services/pet_library.dart';
 import '../../services/window_bridge.dart';
+import 'custom_flow/custom_deps.dart';
 
 /// Main-window state. Reads pet folders itself (read-only); everything about
 /// who is adopted or on the desktop comes from the pet window (spec 4.3).
 class MainWindowModel extends ChangeNotifier {
-  MainWindowModel({required this._library, required this._bridge});
+  MainWindowModel({required this._library, required this._bridge, this.custom});
+
+  /// The custom-pet flow's services; null leaves 立即定制 doing nothing.
+  final CustomDeps? custom;
 
   final PetLibrary _library;
   final MainWindowBridge _bridge;
@@ -23,6 +29,8 @@ class MainWindowModel extends ChangeNotifier {
   Category _category = Category.allPets;
   int _tab = 0;
   String? _message;
+  bool _closeFlow = false;
+  List<CustomRequestInfo> _customs = const [];
 
   AccountView _account = AccountView.signedOut;
   bool _accountBusy = false;
@@ -48,6 +56,9 @@ class MainWindowModel extends ChangeNotifier {
   /// Seconds until another code may be asked for; 0 when it may now.
   int get codeWait => _codeWait;
 
+  /// 我的定制, newest first; empty when signed out or not loaded yet.
+  List<CustomRequestInfo> get customs => _customs;
+
   CardStatus statusOf(Pet p) => cardStatusFor(petId: p.id, complete: p.isComplete, state: _state);
 
   Future<void> start() async {
@@ -72,6 +83,7 @@ class MainWindowModel extends ChangeNotifier {
       accountPushed = true;
       _account = a;
       notifyListeners();
+      unawaited(loadCustoms());
     });
     final a = await _bridge.getAccount();
     if (a != null && !accountPushed) _account = a;
@@ -93,6 +105,43 @@ class MainWindowModel extends ChangeNotifier {
   void setTab(int i) {
     _tab = i;
     notifyListeners();
+    if (i == 1) unawaited(loadCustoms());
+  }
+
+  Future<void> loadCustoms() async {
+    final c = custom;
+    if (c == null || !_account.signedIn) {
+      _customs = const [];
+      notifyListeners();
+      return;
+    }
+    try {
+      _customs = await c.service.list();
+    } on CustomFailure {
+      // Keep what was shown; the next visit to 我的 asks again.
+    }
+    notifyListeners();
+  }
+
+  /// 立即定制 while signed out.
+  void requireLogin() {
+    _tab = 1;
+    _say('请先登录后再定制');
+  }
+
+  /// The server no longer takes the token: whatever custom page is open
+  /// closes and 我的 says why, where the user can sign in again.
+  void loginExpired() {
+    _tab = 1;
+    _closeFlow = true;
+    _say('登录已过期，请重新登录');
+  }
+
+  /// Whether the custom pages are to close; reading it clears it.
+  bool takeCloseFlow() {
+    final c = _closeFlow;
+    _closeFlow = false;
+    return c;
   }
 
   Future<void> adopt(String petId) async {

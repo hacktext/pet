@@ -48,4 +48,13 @@ void main() {
     expect(Account.fromLogin({'token': 't'}), isNull);
     expect(Account.fromLogin('nope'), isNull);
   });
+  test('readToken only reads: a bad file stays where it is', () {
+    expect(store.readToken(), isNull);
+    store.save(const Account(token: '1|abc', user: AccountUser(id: 1, name: 'n', phoneMasked: '138****0000')));
+    expect(store.readToken(), '1|abc');
+    store.file.writeAsStringSync('{broken');
+    expect(store.readToken(), isNull);
+    expect(store.file.existsSync(), isTrue);
+    expect(File('${store.file.path}.bad').existsSync(), isFalse);
+  });
 }
