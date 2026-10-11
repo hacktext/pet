@@ -86,4 +86,12 @@ void main() {
     expect(PetLibrary.byId(pets, 'builtin-gold')?.id, 'builtin-gold');
     expect(PetLibrary.byId(pets, 'nope'), isNull);
   });
+
+  test('dot folders (a download in progress, a pet being replaced) are not pets', () {
+    writePet(custom, id: 'custom-7', origin: 'custom');
+    writePet(Directory('${custom.path}\\.downloading'), id: 'custom-8', origin: 'custom');
+    // A complete, valid pet folder moved aside while its replacement goes in.
+    writePet(custom, id: 'custom-9', origin: 'custom').renameSync('${custom.path}\\.old-custom-9');
+    expect(lib.scan().map((p) => p.id), ['custom-7']);
+  });
 }

@@ -4,8 +4,9 @@ import 'dart:io';
 import '../domain/pet.dart';
 
 /// Every pet folder the app can see: read-only built-ins shipped with the app,
-/// then custom pets downloaded into %APPDATA% (sub-project C). Both engines may
-/// scan; neither writes here.
+/// then custom pets downloaded into %APPDATA% (generation spec 6.1). Both
+/// engines may scan; only the pet window's CustomDownloader writes customRoot,
+/// and its work in progress lives in dot-folders this skips.
 class PetLibrary {
   PetLibrary({required this.builtinRoot, required this.customRoot});
 
@@ -38,7 +39,8 @@ class PetLibrary {
     final List<Directory> dirs;
     try {
       if (!root.existsSync()) return const [];
-      dirs = root.listSync().whereType<Directory>().toList()..sort((a, b) => a.path.compareTo(b.path));
+      dirs = root.listSync().whereType<Directory>().where((d) => !_isDotFolder(d)).toList()
+        ..sort((a, b) => a.path.compareTo(b.path));
     } catch (e) {
       developer.log('cannot list ${root.path}: $e', name: 'aipet.library');
       return const [];
@@ -56,5 +58,11 @@ class PetLibrary {
       }
     }
     return out;
+  }
+
+  /// `.downloading`, `.old-<id>`: a download in progress or a folder on its way out.
+  static bool _isDotFolder(Directory d) {
+    final p = d.path;
+    return p.substring(p.lastIndexOf(Platform.pathSeparator) + 1).startsWith('.');
   }
 }
