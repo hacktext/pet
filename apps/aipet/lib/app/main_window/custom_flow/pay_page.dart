@@ -79,10 +79,12 @@ class _PayPageState extends State<PayPage> {
                           width: 220,
                           height: 220,
                           child: Center(
-                            child: TextButton(onPressed: _m.refresh, child: const Text('二维码已过期，点击刷新')),
+                            child: _m.refreshing
+                                ? const CircularProgressIndicator()
+                                : TextButton(onPressed: _m.refresh, child: const Text('二维码已过期，点击刷新')),
                           ),
                         )
-                      : QrImageView(data: _m.order.codeUrl, size: 220),
+                      : Semantics(label: '微信支付二维码', child: QrImageView(data: _m.order.codeUrl, size: 220)),
                 ),
               ),
               const SizedBox(height: 12),

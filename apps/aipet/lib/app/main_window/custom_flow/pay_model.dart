@@ -37,6 +37,7 @@ class PayModel extends ChangeNotifier {
   bool _paid = false;
   bool _expired = false;
   bool _asking = false;
+  bool _expiring = false; // the countdown ran out; the last status check is out
   bool _refreshing = false;
   bool _disposed = false;
   String? _message;
@@ -44,6 +45,7 @@ class PayModel extends ChangeNotifier {
   PayOrder get order => _order;
   bool get paid => _paid;
   bool get expired => _expired;
+  bool get refreshing => _refreshing;
   String? get message => _message;
   Duration get left => _left.isNegative ? Duration.zero : _left;
 
@@ -58,32 +60,43 @@ class PayModel extends ChangeNotifier {
   }
 
   Future<void> _tick() async {
-    if (_disposed || _paid || _expired) return;
+    if (_disposed || _paid || _expired || _expiring) return;
     _left -= pollEvery;
     if (_left <= Duration.zero) {
-      _expire();
+      // One last look before giving up: someone who paid at the boundary
+      // must not be shown 「二维码已过期」.
+      _expiring = true;
+      if (!_asking) await _poll();
       return;
     }
     notifyListeners(); // the countdown
-    if (_asking) return;
+    if (!_asking) await _poll();
+  }
+
+  Future<void> _poll() async {
     _asking = true;
     final asked = _order.orderNo;
     try {
       final s = await _service.status(asked);
       if (_disposed || asked != _order.orderNo) return; // a newer QR took over
       if (s == PayStatus.paid) {
+        _expiring = false;
         _paid = true;
         _timer?.cancel();
         notifyListeners();
-      } else if (s == PayStatus.expired || s == PayStatus.failed) {
+      } else if (s == PayStatus.expired || s == PayStatus.failed || _expiring) {
         _expire();
       }
     } on CustomFailure catch (f) {
-      if (f.code == _authCode && !_disposed) {
+      if (_disposed || asked != _order.orderNo) return;
+      if (f.code == _authCode) {
         // Polling on would only fail the same way until the QR expires.
         _timer?.cancel();
+        _expiring = false;
         _message = _loginAgain;
         notifyListeners();
+      } else if (_expiring) {
+        _expire();
       }
       // Any other missed poll is not an answer; the next tick asks again.
     } finally {
@@ -92,6 +105,7 @@ class PayModel extends ChangeNotifier {
   }
 
   void _expire() {
+    _expiring = false;
     _expired = true;
     _timer?.cancel();
     notifyListeners();
@@ -107,6 +121,7 @@ class PayModel extends ChangeNotifier {
       final o = await _service.order(requestId, planCode);
       if (_disposed) return;
       _order = o;
+      _expiring = false;
       _left = o.expiresIn;
       _expired = false;
       start();
