@@ -23,6 +23,10 @@ class MainWindowModel extends ChangeNotifier {
   final MainWindowBridge _bridge;
   StreamSubscription<LibraryState>? _sub;
   StreamSubscription<AccountView>? _accountSub;
+  StreamSubscription<List<ReadyPet>>? _readySub;
+  ReadyPet? _ready;
+  final _announced = <String>{}; // a pet is announced once; resends are not news
+  bool _disposed = false;
 
   List<Pet> _pets = const [];
   LibraryState _state = LibraryState.empty;
@@ -61,11 +65,16 @@ class MainWindowModel extends ChangeNotifier {
   /// 我的定制, newest first; empty when signed out or not loaded yet.
   List<CustomRequestInfo> get customs => _customs;
 
+  /// A custom pet that just arrived (generation spec 6.2): 你的「…」做好了.
+  ReadyPet? get readyPet => _ready;
+
   CardStatus statusOf(Pet p) => cardStatusFor(petId: p.id, complete: p.isComplete, state: _state);
 
   Future<void> start() async {
     _pets = _library.scan();
     _bridge.start();
+    // Before any await: the stream is broadcast and drops what nobody hears.
+    _readySub = _bridge.readyPets.listen(_petsArrived);
     var pushed = false;
     _sub = _bridge.states.listen((s) {
       pushed = true;
@@ -89,7 +98,38 @@ class MainWindowModel extends ChangeNotifier {
     });
     final a = await _bridge.getAccount();
     if (a != null && !accountPushed) _account = a;
+    // What arrived while this window was closed (may overlap a live push).
+    final waiting = await _bridge.takeReady();
+    if (_disposed) return;
+    _petsArrived(waiting);
     notifyListeners();
+  }
+
+  void _petsArrived(List<ReadyPet> ready) {
+    if (_disposed) return;
+    final fresh = [
+      for (final r in ready)
+        if (_announced.add(r.petId)) r,
+    ];
+    if (fresh.isEmpty) return;
+    _pets = _library.scan();
+    _ready = fresh.last;
+    notifyListeners();
+    unawaited(loadCustoms());
+  }
+
+  void dismissReady() {
+    _ready = null;
+    notifyListeners();
+  }
+
+  /// 换它陪我: the library's usual switch.
+  Future<void> adoptReady() async {
+    final r = _ready;
+    if (r == null) return;
+    _ready = null;
+    notifyListeners();
+    await adopt(r.petId);
   }
 
   /// Switching group starts over at its 全部.
@@ -262,8 +302,10 @@ class MainWindowModel extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     _sub?.cancel();
     _accountSub?.cancel();
+    _readySub?.cancel();
     _stopCodeWait();
     _bridge.dispose();
     super.dispose();

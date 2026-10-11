@@ -4,6 +4,7 @@ import '../../domain/account_view.dart';
 import '../../domain/custom_order.dart';
 import '../../domain/library_state.dart';
 import '../../domain/pet.dart';
+import '../../services/window_bridge.dart';
 import 'custom_flow/custom_form_page.dart';
 import 'custom_flow/pay_page.dart';
 import 'custom_flow/plan_page.dart';
@@ -55,7 +56,13 @@ class _MainWindowAppState extends State<MainWindowApp> {
       home: ListenableBuilder(
         listenable: model,
         builder: (context, _) => Scaffold(
-          body: SafeArea(child: model.tab == 0 ? _PlazaPage(model: model) : _MinePage(model: model)),
+          body: SafeArea(
+            child: Column(children: [
+              if (model.readyPet case final ready?)
+                _ReadyBanner(pet: ready, onAdopt: model.adoptReady, onDismiss: model.dismissReady),
+              Expanded(child: model.tab == 0 ? _PlazaPage(model: model) : _MinePage(model: model)),
+            ]),
+          ),
           bottomNavigationBar: NavigationBar(
             selectedIndex: model.tab,
             onDestinationSelected: model.setTab,
@@ -458,4 +465,30 @@ class _AccountCardState extends State<_AccountCard> {
       ]),
     );
   }
+}
+
+/// 你的「豆豆」做好了 [换它陪我] [×] (generation spec 6.2).
+class _ReadyBanner extends StatelessWidget {
+  const _ReadyBanner({required this.pet, required this.onAdopt, required this.onDismiss});
+
+  final ReadyPet pet;
+  final VoidCallback onAdopt;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+        padding: const EdgeInsets.fromLTRB(16, 8, 4, 8),
+        decoration: BoxDecoration(color: AppColors.accentSoft, borderRadius: BorderRadius.circular(20)),
+        child: Row(children: [
+          const Icon(Icons.celebration, color: AppColors.accent),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text('你的「${pet.name}」做好了',
+                style: const TextStyle(fontWeight: FontWeight.w700, color: AppColors.text)),
+          ),
+          FilledButton(onPressed: onAdopt, child: const Text('换它陪我')),
+          IconButton(tooltip: '知道了', onPressed: onDismiss, icon: const Icon(Icons.close)),
+        ]),
+      );
 }

@@ -483,4 +483,63 @@ void main() {
     await Future<void>.delayed(Duration.zero);
     expect(model.customs.single.name, '豆豆');
   });
+
+  testWidgets('a custom pet finished downloading: 做好了, and 换它陪我 puts it on the desktop', (tester) async {
+    adoptImpl = adoptingSucceeds();
+    await open(tester);
+    writePet(Directory('${tmp.path}\\custom'), id: 'custom-7', origin: 'custom', species: 'cat', name: '豆豆');
+    await petSide.pushReady([const ReadyPet(petId: 'custom-7', name: '豆豆')]);
+    await tester.pump();
+    expect(find.text('你的「豆豆」做好了'), findsOneWidget);
+    expect(model.plazaPets.map((p) => p.id), contains('custom-7')); // rescanned: in the plaza like the others
+    await tester.tap(find.text('换它陪我'));
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('你的「豆豆」做好了'), findsNothing);
+    expect(model.statusOf(model.plazaPets.firstWhere((p) => p.id == 'custom-7')), CardStatus.companion);
+  });
+
+  testWidgets('pets that finished while the library was closed are announced when it opens', (tester) async {
+    writePet(Directory('${tmp.path}\\custom'), id: 'custom-7', origin: 'custom', species: 'cat', name: '豆豆');
+    await petSide.pushReady([const ReadyPet(petId: 'custom-7', name: '豆豆')]); // nobody listening yet
+    await open(tester);
+    await tester.pump();
+    expect(find.text('你的「豆豆」做好了'), findsOneWidget);
+    await tester.tap(find.byTooltip('知道了'));
+    await tester.pump();
+    expect(find.text('你的「豆豆」做好了'), findsNothing);
+  });
+
+  testWidgets('the same pet arriving twice is announced once, even after it was dismissed', (tester) async {
+    await open(tester);
+    writePet(Directory('${tmp.path}\\custom'), id: 'custom-7', origin: 'custom', species: 'cat', name: '豆豆');
+    const ready = ReadyPet(petId: 'custom-7', name: '豆豆');
+    await petSide.pushReady([ready]);
+    await petSide.pushReady([ready]); // a resend
+    await tester.pump();
+    expect(find.text('你的「豆豆」做好了'), findsOneWidget);
+    await tester.tap(find.byTooltip('知道了'));
+    await tester.pump();
+    await petSide.pushReady([ready]); // a late resend
+    await tester.pump();
+    expect(find.text('你的「豆豆」做好了'), findsNothing);
+  });
+
+  test('a push during startup and the same pet from takeReady show one banner', () async {
+    writePet(Directory('${tmp.path}\\custom'), id: 'custom-7', origin: 'custom', species: 'cat', name: '豆豆');
+    const ready = ReadyPet(petId: 'custom-7', name: '豆豆');
+    await petSide.pushReady([ready]); // held for takeReady
+    var shown = 0;
+    String? last;
+    model.addListener(() {
+      final r = model.readyPet?.petId;
+      if (r != null && r != last) shown++;
+      last = r;
+    });
+    final starting = model.start();
+    await petSide.pushReady([ready]); // also live, while start is awaiting
+    await starting;
+    expect(model.readyPet, ready);
+    expect(shown, 1);
+  });
 }
