@@ -11,10 +11,23 @@ import '../../services/pet_library.dart';
 import '../../services/window_bridge.dart';
 import 'custom_flow/custom_deps.dart';
 
+/// 我的定制 asks again this often while something is generating and the page
+/// is on screen (generation spec 6.2).
+const kCustomPollInterval = Duration(seconds: 30);
+
 /// Main-window state. Reads pet folders itself (read-only); everything about
 /// who is adopted or on the desktop comes from the pet window (spec 4.3).
 class MainWindowModel extends ChangeNotifier {
-  MainWindowModel({required this._library, required this._bridge, this.custom});
+  MainWindowModel({
+    required this._library,
+    required this._bridge,
+    this.custom,
+    this.customPollInterval = kCustomPollInterval,
+  });
+
+  final Duration customPollInterval;
+  Timer? _customPoll;
+  bool _visible = true;
 
   /// The custom-pet flow's services; null leaves 立即定制 doing nothing.
   final CustomDeps? custom;
@@ -146,6 +159,7 @@ class MainWindowModel extends ChangeNotifier {
 
   void setTab(int i) {
     _tab = i;
+    _updateCustomPoll();
     notifyListeners();
     if (i == 1) unawaited(loadCustoms());
   }
@@ -156,19 +170,51 @@ class MainWindowModel extends ChangeNotifier {
     // Mid sign-out (login expired) there is no one to ask for.
     if (c == null || !_account.signedIn || _expiring) {
       _customs = const [];
+      _updateCustomPoll();
       notifyListeners();
       return;
     }
     try {
       final list = await c.service.list();
       // A newer request, or a sign-out, came while this one was out.
-      if (ask != _customsAsk || !_account.signedIn) return;
+      if (_disposed || ask != _customsAsk || !_account.signedIn) return;
       _customs = list;
+      // Delivered but not here (yet, or the user deleted it): the pet window
+      // is the one that downloads; this window never writes pets/.
+      if (list.any(_deliveredButMissing)) _bridge.refreshCustom();
     } on CustomFailure {
       // Keep what was shown; the next visit to 我的 asks again.
-      if (ask != _customsAsk) return;
+      if (_disposed || ask != _customsAsk) return;
     }
+    _updateCustomPoll();
     notifyListeners();
+  }
+
+  bool _deliveredButMissing(CustomRequestInfo r) =>
+      r.status == CustomStatus.delivered &&
+      r.petId != null &&
+      !(PetLibrary.byId(_pets, r.petId!)?.isComplete ?? false);
+
+  /// The library window is on screen (false while × has hidden it or it is
+  /// minimized): 我的定制 only refreshes when someone can see it.
+  void setVisible(bool visible) {
+    if (_visible == visible) return;
+    _visible = visible;
+    _updateCustomPoll();
+  }
+
+  void _updateCustomPoll() {
+    final want = !_disposed &&
+        _visible &&
+        _tab == 1 &&
+        _account.signedIn &&
+        _customs.any((r) => r.status == CustomStatus.generating);
+    if (want) {
+      _customPoll ??= Timer.periodic(customPollInterval, (_) => unawaited(loadCustoms()));
+    } else {
+      _customPoll?.cancel();
+      _customPoll = null;
+    }
   }
 
   /// 立即定制 while signed out.
@@ -243,6 +289,7 @@ class MainWindowModel extends ChangeNotifier {
     _accountError = null;
     _customsAsk++;
     _customs = const [];
+    _updateCustomPoll();
     notifyListeners();
   }
 
@@ -303,6 +350,8 @@ class MainWindowModel extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _customPoll?.cancel();
+    _customPoll = null;
     _sub?.cancel();
     _accountSub?.cancel();
     _readySub?.cancel();

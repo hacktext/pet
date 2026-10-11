@@ -343,12 +343,15 @@ class _CustomList extends StatelessWidget {
               subtitle: Text([speciesLabel(r.species), ?r.planName].join(' · ')),
               trailing: r.status.awaitingPayment
                   ? Row(mainAxisSize: MainAxisSize.min, children: [
-                      Text(r.status.label, style: const TextStyle(color: AppColors.textMuted)),
+                      Text(r.statusText, style: const TextStyle(color: AppColors.textMuted)),
                       const SizedBox(width: 8),
                       FilledButton(onPressed: () => openPlans(context, model, r), child: const Text('去支付')),
                     ])
-                  : Text(r.status.label,
-                      style: const TextStyle(color: AppColors.accent, fontWeight: FontWeight.w700)),
+                  : Text(r.statusText,
+                      style: TextStyle(
+                        color: r.status == CustomStatus.failed ? Colors.redAccent : AppColors.accent,
+                        fontWeight: FontWeight.w700,
+                      )),
             ),
           );
         },

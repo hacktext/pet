@@ -42,7 +42,8 @@ Future<void> runMainWindow() async {
 }
 
 /// × hides the library instead of destroying it; the pet window first gets
-/// the chance to end the app when nobody is on the desktop (spec 3.3).
+/// the chance to end the app when nobody is on the desktop (spec 3.3). Also
+/// tells the model whether anyone can see it (我的定制 refreshes only then).
 class _CloseToHide with WindowListener {
   _CloseToHide(this.model);
 
@@ -50,7 +51,17 @@ class _CloseToHide with WindowListener {
 
   @override
   void onWindowClose() async {
+    model.setVisible(false);
     await model.closing();
     await windowManager.hide();
   }
+
+  @override
+  void onWindowFocus() => model.setVisible(true);
+
+  @override
+  void onWindowMinimize() => model.setVisible(false);
+
+  @override
+  void onWindowRestore() => model.setVisible(true);
 }

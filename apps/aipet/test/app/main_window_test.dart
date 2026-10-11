@@ -31,6 +31,7 @@ void main() {
   late FakeAccount accountSide;
   late List<PickedFile> picks;
   var quits = 0;
+  var refreshes = 0;
 
   setUp(() {
     api = FakeHttp();
@@ -45,12 +46,14 @@ void main() {
     petEnd = pe;
     petState = LibraryState.empty;
     quits = 0;
+    refreshes = 0;
     adoptImpl = (id) async {};
     petSide = PetWindowBridge(petEnd,
         state: () => petState,
         onAdopt: (id) => adoptImpl(id),
         onMainWindowClosing: () async {},
         onQuit: () async => quits++,
+        onRefreshCustom: () async => refreshes++,
         account: accountSide)
       ..start();
     model = MainWindowModel(
@@ -240,25 +243,96 @@ void main() {
     expect(find.text('定制你的专属宠物'), findsOneWidget);
   });
 
-  testWidgets('我的定制 lists requests with their status; 待支付 offers 去支付', (tester) async {
+  testWidgets('我的定制: every stage in words; 待支付 offers 去支付', (tester) async {
     api.reply = (r) => r.url.path.endsWith('/requests')
         ? FakeHttp.ok([
-            {'id': 2, 'name': '豆豆', 'species': 'cat', 'plan_name': '标准版', 'status': 'generating'},
-            {'id': 1, 'name': '小白', 'species': 'girl', 'status': 'pending_payment'},
+            {'id': 5, 'name': '豆豆', 'species': 'cat', 'plan_name': '标准版', 'status': 'generating',
+              'stage': 'video', 'stage_done': 3, 'stage_total': 7},
+            {'id': 4, 'name': '旺财', 'species': 'dog', 'status': 'review'},
+            {'id': 3, 'name': '咪咪', 'species': 'cat', 'status': 'failed', 'fail_reason': 'refs: gate'},
+            {'id': 2, 'name': '小黑', 'species': 'dog', 'status': 'paid'},
+            {'id': 1, 'name': '小白', 'species': 'cat', 'status': 'pending_payment'},
+          ])
+        : FakeHttp.ok([]);
+    await open(tester);
+    tester.view.physicalSize = const Size(420, 1600); // the whole list on screen
+    await signIn(tester);
+    try {
+      model.setTab(1);
+      await tester.pumpAndSettle();
+      expect(find.text('我的定制'), findsOneWidget);
+      expect(find.text('猫猫 · 标准版'), findsOneWidget);
+      for (final t in ['生成中（动作 3/7）', '审核中', '生成失败（我们会联系你处理或退款）', '待生成', '待支付', '去支付']) {
+        expect(find.text(t), findsOneWidget, reason: t);
+      }
+      expect(find.text('refs: gate'), findsNothing);
+    } finally {
+      model.setTab(0); // stops the 30 s refresh before the timer check
+    }
+  });
+
+  testWidgets('while something is generating and 我的 is on screen, 我的定制 refreshes every 30 s', (tester) async {
+    var status = 'generating';
+    api.reply = (r) => r.url.path.endsWith('/requests')
+        ? FakeHttp.ok([
+            {'id': 5, 'name': '豆豆', 'species': 'cat', 'status': status, 'stage': 'video', 'stage_done': 1, 'stage_total': 7},
           ])
         : FakeHttp.ok([]);
     await open(tester);
     await signIn(tester);
-    model.setTab(1);
-    await tester.pumpAndSettle();
-    expect(find.text('我的定制'), findsOneWidget);
-    expect(find.text('豆豆'), findsOneWidget);
-    expect(find.text('猫猫 · 标准版'), findsOneWidget);
-    expect(find.text('小白'), findsOneWidget);
-    expect(find.text('女生'), findsOneWidget);
-    expect(find.text('生成中'), findsOneWidget);
-    expect(find.text('待支付'), findsOneWidget);
-    expect(find.text('去支付'), findsOneWidget);
+    int asks() => api.to('/api/aipet/custom/requests').length;
+    try {
+      model.setTab(1);
+      await tester.pump();
+      await tester.pump();
+      var n = asks();
+      await tester.pump(const Duration(seconds: 30));
+      expect(asks(), ++n);
+      expect(find.text('生成中（动作 1/7）'), findsOneWidget);
+
+      model.setVisible(false); // × hid the library
+      await tester.pump(const Duration(seconds: 60));
+      expect(asks(), n);
+      model.setVisible(true);
+      await tester.pump(const Duration(seconds: 30));
+      expect(asks(), ++n);
+
+      model.setTab(0); // 广场: no refreshing
+      await tester.pump(const Duration(seconds: 60));
+      expect(asks(), n);
+      model.setTab(1); // coming back loads once
+      await tester.pump();
+      expect(asks(), ++n);
+
+      status = 'review';
+      await tester.pump(const Duration(seconds: 30));
+      await tester.pump();
+      expect(asks(), ++n);
+      expect(find.text('审核中'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 60));
+      expect(asks(), n); // nothing generating any more
+    } finally {
+      model.setTab(0);
+    }
+  });
+
+  testWidgets('a delivered pet this computer lacks asks the pet window to fetch it', (tester) async {
+    api.reply = (r) => r.url.path.endsWith('/requests')
+        ? FakeHttp.ok([
+            {'id': 9, 'name': '豆豆', 'species': 'cat', 'status': 'delivered', 'pet_id': 'custom-9'},
+          ])
+        : FakeHttp.ok([]);
+    await open(tester);
+    await signIn(tester);
+    await tester.pump();
+    await tester.pump();
+    expect(refreshes, 1);
+    writePet(Directory('${tmp.path}\\custom'), id: 'custom-9', origin: 'custom', species: 'cat', name: '豆豆');
+    await petSide.pushReady([const ReadyPet(petId: 'custom-9', name: '豆豆')]);
+    await tester.pump();
+    await tester.pump();
+    expect(api.to('/api/aipet/custom/requests'), hasLength(2)); // reloaded when it arrived
+    expect(refreshes, 1); // and nothing is missing now
   });
 
   testWidgets('signed out, 我的 shows no 我的定制 and asks the server nothing', (tester) async {
