@@ -36,6 +36,7 @@ class PlanModel extends ChangeNotifier {
 
   Future<void> load() async {
     _loading = true;
+    _message = null;
     notifyListeners();
     try {
       _plans = await _service.plans();
@@ -65,7 +66,10 @@ class PlanModel extends ChangeNotifier {
     } on CustomFailure catch (f) {
       _message = f.message;
       // Stay busy while the list reloads so a second tap cannot order a stale plan.
-      if (f.code == 5013) await load();
+      if (f.code == 5013) {
+        await load();
+        _message = f.message; // a failed reload must not hide why the plan went away
+      }
       return null;
     } finally {
       _busy = false;

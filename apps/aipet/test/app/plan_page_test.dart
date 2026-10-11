@@ -53,6 +53,7 @@ void main() {
     expect(m.message, '该套餐已下架');
     expect(m.plans.map((p) => p.code), ['pro']);
     expect(m.selected!.code, 'pro');
+    expect(m.busy, isFalse);
     http.reply = (_) => FakeHttp.fail(5011, '这个定制已经支付过了');
     expect(await m.createOrder(), isNull);
     expect(m.message, '这个定制已经支付过了');
@@ -91,6 +92,7 @@ void main() {
     expect(b, isNull);
     gate.complete(FakeHttp.ok({'order_no': 'PX2', 'amount_cents': 3900, 'code_url': 'weixin://x', 'expires_in': 900}));
     expect((await a)!.orderNo, 'PX2');
+    expect(m.plans.first.features, ['站立', '行走']);
     expect(http.to('/api/aipet/custom/requests/5/order'), hasLength(1));
   });
 
@@ -115,5 +117,62 @@ void main() {
     expect(find.byIcon(Icons.check), findsWidgets);
     expect(find.bySemanticsLabel('微信支付，已选择'), findsOneWidget);
     expect(tester.widget<OutlinedButton>(find.widgetWithText(OutlinedButton, '支付宝（即将上线）')).onPressed, isNull);
+  });
+
+  test('a failed reload after a withdrawn plan keeps the withdrawn message', () async {
+    final m = PlanModel(svc, request);
+    await m.load();
+    http.reply = (r) => r.url.path.endsWith('/plans') ? FakeHttp.fail(5000, '网络错误') : FakeHttp.fail(5013, '该套餐已下架');
+    expect(await m.createOrder(), isNull);
+    expect(m.message, '该套餐已下架');
+    expect(m.busy, isFalse);
+  });
+
+  test('features come through verbatim, including appended items', () async {
+    http.reply = (_) => FakeHttp.ok([
+          {...plan('pro', '高级Pro版', 5900), 'features': ['卖萌', '更多动作（后续追加）']}
+        ]);
+    final m = PlanModel(svc, request);
+    await m.load();
+    expect(m.plans.single.features, ['卖萌', '更多动作（后续追加）']);
+  });
+
+  test('validText and yuan', () {
+    expect(CustomPlan.fromJson(plan('pro', 'P', 5900))!.validText, '永久解锁');
+    expect(CustomPlan.fromJson(plan('s', 'S', 3900, days: 365))!.validText, '解锁一年');
+    expect(yuan(1), '¥0.01');
+    expect(yuan(3950), '¥39.50');
+  });
+
+  testWidgets('empty list shows text and retry; failed load then retry shows plans', (tester) async {
+    tester.view.physicalSize = const Size(420, 1400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    http.reply = (_) => FakeHttp.ok([]);
+    final deps = CustomDeps(service: svc, uploader: OssUploader(FakeOss()), pick: () async => []);
+    await tester.pumpWidget(MaterialApp(home: PlanPage(deps: deps, request: request, onOrder: (_, _, _) {})));
+    await tester.pumpAndSettle();
+    expect(find.text('暂无可选套餐'), findsOneWidget);
+    http.reply = (_) => FakeHttp.fail(5000, '网络错误');
+    await tester.tap(find.text('重试'));
+    await tester.pumpAndSettle();
+    expect(find.text('网络错误'), findsWidgets);
+    http.reply = (_) => FakeHttp.ok([plan('standard', '标准版', 3900, days: 365)]);
+    await tester.tap(find.text('重试'));
+    await tester.pumpAndSettle();
+    expect(find.text('标准版'), findsWidgets);
+    expect(find.text('重试'), findsNothing);
+    expect(find.text('网络错误'), findsNothing);
+  });
+
+  testWidgets('plan card is announced as a selectable button', (tester) async {
+    tester.view.physicalSize = const Size(420, 1400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final deps = CustomDeps(service: svc, uploader: OssUploader(FakeOss()), pick: () async => []);
+    await tester.pumpWidget(MaterialApp(home: PlanPage(deps: deps, request: request, onOrder: (_, _, _) {})));
+    await tester.pumpAndSettle();
+    expect(find.byWidgetPredicate((w) => w is Semantics && w.properties.button == true && w.properties.selected == true),
+        findsOneWidget);
   });
 }
