@@ -175,7 +175,11 @@ class PetWindowBridge {
         return {'pets': out};
       case BridgeMethods.refreshCustom:
         final refresh = onRefreshCustom;
-        if (refresh != null) unawaited(refresh());
+        if (refresh != null) {
+          unawaited(refresh().catchError((Object e) {
+            developer.log('refreshCustom failed: $e', name: 'aipet.custom');
+          }));
+        }
         return null;
       default:
         return null;
@@ -226,11 +230,12 @@ class PetWindowBridge {
         ..removeWhere((x) => x.petId == p.petId)
         ..add(p);
     }
+    final sent = List<ReadyPet>.of(_ready); // later overlapping pushes add to _ready meanwhile
     try {
       await _transport
-          .invoke(BridgeMethods.petsReady, {'pets': [for (final p in _ready) p.toJson()]})
+          .invoke(BridgeMethods.petsReady, {'pets': [for (final p in sent) p.toJson()]})
           .timeout(const Duration(seconds: 3));
-      _ready.clear();
+      _ready.removeWhere(sent.contains);
     } catch (_) {}
   }
 }
@@ -267,7 +272,8 @@ class MainWindowBridge {
           _accounts.add(AccountView.fromJson(args! as Map<Object?, Object?>));
         }
         if (method == BridgeMethods.petsReady && !_readies.isClosed) {
-          _readies.add(ReadyPet.listFrom(args));
+          final pets = ReadyPet.listFrom(args);
+          if (pets.isNotEmpty) _readies.add(pets);
         }
         return null;
       });

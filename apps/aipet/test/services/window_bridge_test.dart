@@ -8,6 +8,18 @@ import 'package:flutter_test/flutter_test.dart';
 import '../support/fake_account.dart';
 import '../support/fake_transport.dart';
 
+class _ScriptedTransport implements BridgeTransport {
+  _ScriptedTransport(this._onInvoke);
+  final Future<Object?> Function(String, Object?) _onInvoke;
+  BridgeHandler? handler;
+
+  @override
+  Future<Object?> invoke(String method, [Object? args]) => _onInvoke(method, args);
+
+  @override
+  void setHandler(BridgeHandler? h) => handler = h;
+}
+
 void main() {
   late FakeTransport petEnd, mainEnd;
   late LibraryState state;
@@ -196,6 +208,60 @@ void main() {
     main.refreshCustom();
     await Future<void>.delayed(Duration.zero);
     expect(refreshes, 1);
+  });
+
+  test('overlapping pushes: a failed later push is not wiped by an earlier success', () async {
+    final first = Completer<void>();
+    var calls = 0;
+    final t = _ScriptedTransport((m, a) async {
+      if (++calls == 1) {
+        await first.future;
+        return null;
+      }
+      throw StateError('library gone');
+    });
+    final p = PetWindowBridge(t,
+        state: () => state, onAdopt: (id) async {}, onMainWindowClosing: () async {}, onQuit: () async {})
+      ..start();
+    final a = p.pushReady([const ReadyPet(petId: 'custom-1', name: 'a')]);
+    await Future<void>.delayed(Duration.zero);
+    await p.pushReady([const ReadyPet(petId: 'custom-2', name: 'b')]); // fails
+    first.complete();
+    await a; // succeeds
+    final r = await t.handler!('takeReady', null) as Map;
+    expect((r['pets'] as List).map((x) => (x as Map)['petId']), ['custom-2']);
+  });
+
+  test('a ready list with some garbage keeps the valid pets', () {
+    expect(
+        ReadyPet.listFrom({
+          'pets': [
+            'x',
+            {'petId': 'custom-7', 'name': '豆豆'},
+            {'petId': 1},
+          ]
+        }),
+        [const ReadyPet(petId: 'custom-7', name: '豆豆')]);
+  });
+
+  test('an empty ready list is not emitted', () async {
+    final seen = <List<ReadyPet>>[];
+    main.readyPets.listen(seen.add);
+    await petEnd.invoke(BridgeMethods.petsReady, {'pets': <Object?>[]});
+    await Future<void>.delayed(Duration.zero);
+    expect(seen, isEmpty);
+  });
+
+  test('a throwing onRefreshCustom does not escape', () async {
+    pet = PetWindowBridge(petEnd,
+        state: () => state,
+        onAdopt: (id) => adoptImpl(id),
+        onMainWindowClosing: () async {},
+        onQuit: () async {},
+        onRefreshCustom: () async => throw StateError('boom'))
+      ..start();
+    main.refreshCustom();
+    await Future<void>.delayed(Duration.zero);
   });
 
   test('a garbled ready list is just empty', () {
