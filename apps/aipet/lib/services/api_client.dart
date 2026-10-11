@@ -132,6 +132,25 @@ class ApiClient {
   Future<ApiResult> putSync(int baseVersion, Map<String, Object?> doc) =>
       _call('PUT', '/api/aipet/sync', {'base_version': baseVersion, 'data': doc});
 
+  // Custom pets (custom order spec 4.4); all need a token.
+
+  Future<ApiResult> customPlans() => _call('GET', '/api/aipet/custom/plans');
+
+  Future<ApiResult> uploadTickets(int count) =>
+      _call('POST', '/api/aipet/custom/upload-tickets', {'count': count});
+
+  Future<ApiResult> createCustomRequest(
+          {required String name, required String species, required List<String> photoKeys}) =>
+      _call('POST', '/api/aipet/custom/requests', {'name': name, 'species': species, 'photo_keys': photoKeys});
+
+  Future<ApiResult> customOrder(int requestId, String planCode) =>
+      _call('POST', '/api/aipet/custom/requests/$requestId/order', {'plan_code': planCode});
+
+  Future<ApiResult> customOrderStatus(String orderNo) =>
+      _call('GET', '/api/aipet/custom/orders/${Uri.encodeComponent(orderNo)}');
+
+  Future<ApiResult> customRequests() => _call('GET', '/api/aipet/custom/requests');
+
   Future<ApiResult> _call(String method, String path, [Object? body]) async {
     final HttpReply reply;
     String? token;
