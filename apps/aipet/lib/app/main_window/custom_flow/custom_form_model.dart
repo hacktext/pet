@@ -32,6 +32,8 @@ class CustomFormModel extends ChangeNotifier {
   Category _category = Category.cat;
   final List<FormPhoto> _photos = [];
   bool _busy = false;
+  bool _adding = false;
+  bool _disposed = false;
   String? _progress;
   String? _message;
 
@@ -44,7 +46,7 @@ class CustomFormModel extends ChangeNotifier {
   Group get group => _category.group;
   Category get category => _category;
   List<FormPhoto> get photos => List.unmodifiable(_photos);
-  bool get busy => _busy;
+  bool get busy => _busy || _adding;
 
   /// 正在上传 2/3 while uploading.
   String? get progress => _progress;
@@ -52,7 +54,18 @@ class CustomFormModel extends ChangeNotifier {
   /// The last thing to tell the user; null when there is nothing.
   String? get message => _message;
 
-  bool get canSubmit => !_busy && nameLength >= 1 && nameLength <= kNameMax && _photos.isNotEmpty;
+  bool get canSubmit => !busy && nameLength >= 1 && nameLength <= kNameMax && _photos.isNotEmpty;
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+
+  @override
+  void notifyListeners() {
+    if (!_disposed) super.notifyListeners();
+  }
 
   void setName(String v) {
     _name = v;
@@ -75,25 +88,37 @@ class CustomFormModel extends ChangeNotifier {
   }
 
   Future<void> addPhotos() async {
-    if (_busy) return;
+    if (busy) return;
     _message = null;
-    final room = kMaxPhotos - _photos.length;
-    if (room <= 0) {
+    if (_photos.length >= kMaxPhotos) {
       _message = '最多 $kMaxPhotos 张照片';
       notifyListeners();
       return;
     }
-    final picked = await _deps.pick();
-    if (picked.length > room) _message = '最多 $kMaxPhotos 张照片';
-    for (final f in picked.take(room)) {
-      try {
-        _photos.add(FormPhoto(f.name, await _deps.prep(f.bytes)));
-      } catch (_) {
-        // PhotoPrepError, or anything else that kept the file from becoming a JPEG.
-        _message = '无法读取图片：${f.name}';
-      }
-    }
+    _adding = true;
     notifyListeners();
+    try {
+      final List<PickedFile> picked;
+      try {
+        picked = await _deps.pick();
+      } catch (_) {
+        _message = '无法读取所选文件';
+        return;
+      }
+      if (picked.length > kMaxPhotos - _photos.length) _message = '最多 $kMaxPhotos 张照片';
+      for (final f in picked) {
+        if (_photos.length >= kMaxPhotos) break;
+        try {
+          _photos.add(FormPhoto(f.name, await _deps.prep(f.bytes)));
+        } catch (_) {
+          // PhotoPrepError, or anything else that kept the file from becoming a JPEG.
+          _message = '无法读取图片：${f.name}';
+        }
+      }
+    } finally {
+      _adding = false;
+      notifyListeners();
+    }
   }
 
   void removePhoto(int i) {
@@ -119,6 +144,7 @@ class CustomFormModel extends ChangeNotifier {
           final p = missing[i];
           final n = _photos.indexOf(p) + 1;
           _progress = '正在上传 $n/${_photos.length}';
+          p.failed = false;
           notifyListeners();
           try {
             await _deps.uploader.upload(tickets[i], p.jpeg);

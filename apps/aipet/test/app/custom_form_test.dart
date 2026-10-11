@@ -137,6 +137,50 @@ void main() {
     expect(m.categoryError, isNull);
   });
 
+  test('two overlapping addPhotos never exceed 3; no submit while adding', () async {
+    final m = model()..setName('豆豆');
+    picks = [for (var i = 1; i <= 3; i++) PickedFile('p$i.jpg', [i])];
+    final a = m.addPhotos();
+    expect(m.busy, isTrue);
+    expect(m.canSubmit, isFalse);
+    final b = m.addPhotos();
+    await Future.wait([a, b]);
+    expect(m.photos, hasLength(3));
+    expect(await (() async { m.removePhoto(0); return m.photos.length; })(), 2);
+    picks = [for (var i = 4; i <= 6; i++) PickedFile('p$i.jpg', [i])];
+    final c = m.addPhotos();
+    expect(await m.submit(), isNull);
+    expect(http.to('/api/aipet/custom/requests'), isEmpty);
+    await c;
+    expect(m.photos, hasLength(3));
+  });
+
+  test('a double submit without awaiting posts once', () async {
+    final m = model()..setName('豆豆');
+    picks = [const PickedFile('a.jpg', [1])];
+    await m.addPhotos();
+    final r = await Future.wait([m.submit(), m.submit()]);
+    expect(r.where((e) => e != null), hasLength(1));
+    expect(http.to('/api/aipet/custom/requests'), hasLength(1));
+  });
+
+  test('a picker that throws gives a message, not an error', () async {
+    deps = CustomDeps(
+        service: deps.service, uploader: deps.uploader, pick: () async => throw Exception('x'), prep: deps.prep);
+    final m = model();
+    await m.addPhotos();
+    expect(m.message, '无法读取所选文件');
+    expect(m.busy, isFalse);
+  });
+
+  test('a model disposed mid-add does not notify afterwards', () async {
+    final m = model();
+    picks = [const PickedFile('a.jpg', [1])];
+    final f = m.addPhotos();
+    m.dispose();
+    await f;
+  });
+
   testWidgets('page: counter, chips, disabled button until ready, submitted callback', (tester) async {
     // Tall enough that the ListView builds 下一步 too.
     tester.view.physicalSize = const Size(420, 1600);
