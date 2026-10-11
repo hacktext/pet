@@ -5,6 +5,7 @@
 list(APPEND FLUTTER_PLUGIN_LIST
   alpha_video
   desktop_multi_window
+  file_selector_windows
   screen_retriever_windows
   tray_manager
   window_manager
