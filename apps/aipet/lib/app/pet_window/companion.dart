@@ -1,9 +1,13 @@
 import 'dart:async';
 import 'dart:developer' as developer;
+import 'dart:io';
 import 'dart:math';
 
+import '../../domain/pet.dart';
 import '../../domain/pet_stats.dart';
 import '../../services/hud_bridge.dart';
+import '../../services/voice_player.dart';
+import '../../services/voice_store.dart';
 import '../../services/window_bridge.dart';
 import 'hud_presenter.dart';
 import 'pet_window_controller.dart';
@@ -21,8 +25,12 @@ class Companion {
     required this.walker,
     required this.mover,
     required BridgeTransport hudTransport,
+    required this.voices,
+    required this.voicePlayer,
     Random? random,
     this.userWalk = const Duration(seconds: 20),
+    this.onInteract,
+    this.onVoiceChosen,
   }) : _random = random ?? Random() {
     presenter = HudPresenter(show: () => unawaited(_showHud()), hide: () => unawaited(hud.hide()));
     hud = PetHudBridge(
@@ -43,8 +51,17 @@ class Companion {
   final StatsKeeper stats;
   final WalkDriver walker;
   final WindowMover mover;
+  final VoiceStore voices;
+  final VoicePlayer voicePlayer;
   final Duration userWalk;
   final Random _random;
+
+  /// The user did something with the pet (telemetry's `interact`): [kind] is
+  /// the action key from the panel or the menu, or `drag`.
+  final void Function(String petId, String kind)? onInteract;
+
+  /// The user picked another voice for the pet: a voice id or [kVoiceOff].
+  final void Function(String petId, String voice)? onVoiceChosen;
   late final HudPresenter presenter;
   late final PetHudBridge hud;
 
@@ -64,6 +81,7 @@ class Companion {
     final pet = pets.currentPet;
     final s = stats.current;
     if (pet == null || s == null) return null;
+    final buttons = hudButtonsFor(pet.species, pet.actions);
     return HudView(
       name: pet.name,
       cover: pet.coverFile.path,
@@ -73,7 +91,8 @@ class Companion {
       intimacy: s.intimacy.round(),
       satiety: s.satiety.round(),
       health: s.health.round(),
-      enabled: {for (final b in kHudButtons) if (pet.actions.contains(b)) b},
+      buttons: buttons,
+      enabled: {for (final b in buttons) if (pet.actions.contains(b)) b},
     );
   }
 
@@ -87,10 +106,47 @@ class Companion {
     final pet = pets.currentPet;
     if (pet == null || !pet.actions.contains(key)) return;
     stats.interact(key);
-    if (key == 'walk') return _walk(userWalk);
+    onInteract?.call(pet.id, key);
+    if (key == 'walk') {
+      voicePlayer.stop();
+      return _walk(userWalk);
+    }
     _walkGen++;
     walker.stop();
     await pets.playAction(key);
+    if (!_disposed && pets.currentPet == pet) _speak(pet, key);
+  }
+
+  /// The current pet's voices; empty for one that does not speak.
+  List<PetVoice> get availableVoices => pets.currentPet?.voices ?? const [];
+
+  /// The voice the current pet speaks in: the one chosen for it, else its
+  /// first; null when it has none or was set to 静音.
+  String? get currentVoice {
+    final pet = pets.currentPet;
+    if (pet == null || pet.voices.isEmpty) return null;
+    final chosen = voices.choice(pet.id);
+    if (chosen == kVoiceOff) return null;
+    return pet.voices.any((v) => v.id == chosen) ? chosen : pet.voices.first.id;
+  }
+
+  /// From the right-click menu: a voice id, or null for 静音.
+  void chooseVoice(String? voice) {
+    final pet = pets.currentPet;
+    if (_disposed || pet == null) return;
+    final before = voices.choice(pet.id);
+    voices.choose(pet.id, voice ?? kVoiceOff);
+    if (before != (voice ?? kVoiceOff)) onVoiceChosen?.call(pet.id, voice ?? kVoiceOff);
+    if (voice == null) voicePlayer.stop();
+  }
+
+  /// One of the lines for [action] in the current voice; an action with none
+  /// cuts off whatever was still being said.
+  void _speak(Pet pet, String action) {
+    final voice = currentVoice;
+    final lines = voice == null ? const <File>[] : pet.voiceLines(voice, action);
+    if (lines.isEmpty) return voicePlayer.stop();
+    voicePlayer.play(lines[_random.nextInt(lines.length)]);
   }
 
   Future<void> _walk(Duration length) async {
@@ -128,6 +184,8 @@ class Companion {
   void petExit() => presenter.petExit();
 
   void dragStarted() {
+    final pet = pets.currentPet;
+    if (!_disposed && pet != null) onInteract?.call(pet.id, 'drag');
     _dragging = true;
     _walkGen++;
     walker.stop();
@@ -153,6 +211,7 @@ class Companion {
   /// must not ask for a panel we have just taken away.
   Future<void> shutdown() async {
     _disposed = true;
+    voicePlayer.stop();
     presenter.dispose();
     _walkGen++;
     walker.stop();
@@ -167,6 +226,7 @@ class Companion {
     if (id != _petId) {
       _petId = id;
       stats.select(id);
+      voicePlayer.stop(); // the last pet's line does not carry over
       // Adopting goes through the controller, not through us, so a walk can
       // still be sliding the window while the new pet stands on screen. The
       // parked _walk wakes into its own superseded branch.
@@ -233,6 +293,7 @@ class Companion {
 
   void dispose() {
     _disposed = true;
+    voicePlayer.stop();
     _walkGen++;
     walker.stop();
     _roam?.cancel();

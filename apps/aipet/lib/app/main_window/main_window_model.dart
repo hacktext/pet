@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart' hide Category;
 
+import '../../domain/account_view.dart';
 import '../../domain/library_state.dart';
 import '../../domain/pet.dart';
 import '../../services/pet_library.dart';
@@ -15,17 +16,37 @@ class MainWindowModel extends ChangeNotifier {
   final PetLibrary _library;
   final MainWindowBridge _bridge;
   StreamSubscription<LibraryState>? _sub;
+  StreamSubscription<AccountView>? _accountSub;
 
   List<Pet> _pets = const [];
   LibraryState _state = LibraryState.empty;
-  Category _category = Category.all;
+  Category _category = Category.allPets;
   int _tab = 0;
   String? _message;
 
+  AccountView _account = AccountView.signedOut;
+  bool _accountBusy = false;
+  String? _accountError;
+  int _codeWait = 0;
+  Timer? _codeTimer;
+
   Category get category => _category;
+  Group get group => _category.group;
   int get tab => _tab;
   List<Pet> get plazaPets => filterPets(_pets, _category);
   List<Pet> get minePets => adoptedPets(_pets, _state);
+
+  /// The account card on 我的; the pet window holds the account itself.
+  AccountView get account => _account;
+
+  /// A request is out; the card's buttons wait for it.
+  bool get accountBusy => _accountBusy;
+
+  /// The last request's failure, in the server's words where it gave any.
+  String? get accountError => _accountError;
+
+  /// Seconds until another code may be asked for; 0 when it may now.
+  int get codeWait => _codeWait;
 
   CardStatus statusOf(Pet p) => cardStatusFor(petId: p.id, complete: p.isComplete, state: _state);
 
@@ -46,6 +67,21 @@ class MainWindowModel extends ChangeNotifier {
       // The pet window pushes stateChanged whenever something happens; the
       // cards simply start from "nobody adopted" until it does.
     }
+    var accountPushed = false;
+    _accountSub = _bridge.accounts.listen((a) {
+      accountPushed = true;
+      _account = a;
+      notifyListeners();
+    });
+    final a = await _bridge.getAccount();
+    if (a != null && !accountPushed) _account = a;
+    notifyListeners();
+  }
+
+  /// Switching group starts over at its 全部.
+  void setGroup(Group g) {
+    if (g == group) return;
+    _category = g.categories.first;
     notifyListeners();
   }
 
@@ -69,6 +105,81 @@ class MainWindowModel extends ChangeNotifier {
     }
   }
 
+  static final _phonePattern = RegExp(r'^1[3-9]\d{9}$');
+  static final _codePattern = RegExp(r'^\d{6}$');
+
+  Future<void> sendCode(String phone) async {
+    phone = phone.trim();
+    if (_accountBusy || _codeWait > 0) return;
+    if (!_phonePattern.hasMatch(phone)) return _accountFailed('请输入正确的手机号');
+    final r = await _accountRequest(() => _bridge.sendSms(phone));
+    final wait = r.retryAfter;
+    if (wait != null && wait > 0) _startCodeWait(wait);
+    notifyListeners();
+  }
+
+  Future<void> login(String phone, String code) async {
+    phone = phone.trim();
+    code = code.trim();
+    if (_accountBusy) return;
+    if (!_phonePattern.hasMatch(phone)) return _accountFailed('请输入正确的手机号');
+    if (!_codePattern.hasMatch(code)) return _accountFailed('请输入6位验证码');
+    final r = await _accountRequest(() => _bridge.login(phone, code));
+    if (r.ok) {
+      _stopCodeWait();
+      // The pet window has pushed it already, unless the push lost the race.
+      final a = await _bridge.getAccount();
+      if (a != null) _account = a;
+    }
+    notifyListeners();
+  }
+
+  Future<void> logout() async {
+    if (_accountBusy) return;
+    await _accountRequest(_bridge.logout);
+    _account = AccountView.signedOut;
+    _accountError = null;
+    notifyListeners();
+  }
+
+  Future<void> syncNow() async {
+    if (_accountBusy) return;
+    final r = await _accountRequest(_bridge.syncNow);
+    if (r.ok) _say('同步完成');
+    notifyListeners();
+  }
+
+  Future<AccountReply> _accountRequest(Future<AccountReply> Function() call) async {
+    _accountBusy = true;
+    _accountError = null;
+    notifyListeners();
+    final r = await call();
+    _accountBusy = false;
+    _accountError = r.ok ? null : r.message;
+    return r;
+  }
+
+  void _accountFailed(String m) {
+    _accountError = m;
+    notifyListeners();
+  }
+
+  void _startCodeWait(int seconds) {
+    _codeTimer?.cancel();
+    _codeWait = seconds;
+    _codeTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      _codeWait--;
+      if (_codeWait <= 0) _stopCodeWait();
+      notifyListeners();
+    });
+  }
+
+  void _stopCodeWait() {
+    _codeTimer?.cancel();
+    _codeTimer = null;
+    _codeWait = 0;
+  }
+
   /// A one-shot message for a SnackBar; reading it clears it.
   String? takeMessage() {
     final m = _message;
@@ -88,6 +199,8 @@ class MainWindowModel extends ChangeNotifier {
   @override
   void dispose() {
     _sub?.cancel();
+    _accountSub?.cancel();
+    _stopCodeWait();
     _bridge.dispose();
     super.dispose();
   }

@@ -14,7 +14,11 @@ const _window = Size(360, 360);
 void main() {
   late List<PetMenuPick?> picked;
 
-  Future<void> open(WidgetTester t, {List<String> actions = _actions, String? current = 'stand'}) async {
+  Future<void> open(WidgetTester t,
+      {List<String> actions = _actions,
+      String? current = 'stand',
+      List<PetVoice> voices = const [],
+      String? voice}) async {
     t.view.physicalSize = _window;
     t.view.devicePixelRatio = 1.0;
     addTearDown(t.view.reset);
@@ -25,7 +29,12 @@ void main() {
           builder: (ctx) => GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: () async => picked.add(
-                await showPetMenu(ctx, at: const Offset(180, 180), actions: actions, currentAction: current)),
+                await showPetMenu(ctx,
+                    at: const Offset(180, 180),
+                    actions: actions,
+                    currentAction: current,
+                    voices: voices,
+                    currentVoice: voice)),
             child: const SizedBox.expand(),
           ),
         ),
@@ -102,6 +111,33 @@ void main() {
     await open(t);
     await pick(t, find.text('退出'));
     expect(picked, [isA<PetMenuQuit>()]);
+  });
+
+  const voices = [PetVoice(id: 'xiaoya', name: '温柔小雅'), PetVoice(id: 'vivi', name: '元气 Vivi')];
+
+  testWidgets('no 声音 for a pet without voices', (t) async {
+    await open(t);
+    expect(find.text('声音'), findsNothing);
+  });
+
+  testWidgets('声音 lists the voices and 静音, the current one ticked, and reports the pick', (t) async {
+    await open(t, voices: voices, voice: 'vivi');
+    expect(slack(t), 0, reason: 'top level with 声音');
+    await pick(t, find.text('声音'));
+    for (final s in ['温柔小雅', '元气 Vivi', '静音']) {
+      expect(find.text(s), findsOneWidget, reason: s);
+    }
+    expect(find.descendant(of: find.byKey(const Key('pet-menu-voice-vivi')), matching: find.byIcon(Icons.done)),
+        findsOneWidget);
+    await pick(t, find.text('温柔小雅'));
+    expect(picked, [isA<PetMenuVoice>().having((p) => p.voice, 'voice', 'xiaoya')]);
+
+    await open(t, voices: voices, voice: null);
+    await pick(t, find.text('声音'));
+    expect(find.descendant(of: find.byKey(const Key('pet-menu-voice-off')), matching: find.byIcon(Icons.done)),
+        findsOneWidget);
+    await pick(t, find.text('静音'));
+    expect(picked, [isA<PetMenuVoice>().having((p) => p.voice, 'voice', isNull)]);
   });
 
   testWidgets('dismissing either level reports nothing', (t) async {

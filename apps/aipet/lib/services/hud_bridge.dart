@@ -4,6 +4,7 @@ import 'dart:ui';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/foundation.dart';
 
+import '../domain/pet.dart';
 import 'window_bridge.dart';
 
 /// Pet window <-> panel window (spec 2026-09-19 E 3.1). A bidirectional
@@ -20,8 +21,16 @@ abstract final class HudMethods {
   static const hover = 'hudHover';
 }
 
-/// The panel's buttons, in order (spec 3.5).
+/// A dog's or cat's buttons, in order (spec 3.5); greyed out where the pet
+/// lacks the action.
 const kHudButtons = ['stand', 'walk', 'feed', 'play'];
+
+/// The panel's buttons for a pet: an animal's four above, then the rest of
+/// its actions; a character's own actions -- they are not an animal's. Both
+/// in pet.json order.
+List<String> hudButtonsFor(Species species, List<String> actions) => species.isCharacter
+    ? List.unmodifiable(actions)
+    : List.unmodifiable([...kHudButtons, ...actions.where((a) => !kHudButtons.contains(a))]);
 
 /// What the panel shows; numbers already rounded.
 class HudView {
@@ -34,6 +43,7 @@ class HudView {
     required this.intimacy,
     required this.satiety,
     required this.health,
+    required this.buttons,
     required this.enabled,
   });
 
@@ -46,6 +56,7 @@ class HudView {
         intimacy: j['intimacy']! as int,
         satiety: j['satiety']! as int,
         health: j['health']! as int,
+        buttons: [for (final v in j['buttons']! as List<Object?>) v! as String],
         enabled: {for (final v in j['enabled']! as List<Object?>) v! as String},
       );
 
@@ -57,7 +68,8 @@ class HudView {
   final int intimacy;
   final int satiety;
   final int health;
-  final Set<String> enabled; // which of kHudButtons this pet has
+  final List<String> buttons; // shown, in order
+  final Set<String> enabled; // which of [buttons] this pet has
 
   Map<String, Object?> toJson() => {
         'name': name,
@@ -68,7 +80,8 @@ class HudView {
         'intimacy': intimacy,
         'satiety': satiety,
         'health': health,
-        'enabled': [for (final b in kHudButtons) if (enabled.contains(b)) b],
+        'buttons': buttons,
+        'enabled': [for (final b in buttons) if (enabled.contains(b)) b],
       };
 
   @override
@@ -82,11 +95,12 @@ class HudView {
       other.intimacy == intimacy &&
       other.satiety == satiety &&
       other.health == health &&
+      listEquals(other.buttons, buttons) &&
       setEquals(other.enabled, enabled);
 
   @override
   int get hashCode => Object.hash(name, cover, status, companionDays, todayInteractions, intimacy, satiety, health,
-      Object.hashAllUnordered(enabled));
+      Object.hashAll(buttons), Object.hashAllUnordered(enabled));
 }
 
 List<double> _rectToList(Rect r) => [r.left, r.top, r.width, r.height];

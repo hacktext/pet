@@ -16,6 +16,7 @@ const view = HudView(
   intimacy: 57,
   satiety: 100,
   health: 100,
+  buttons: kHudButtons,
   enabled: {'stand', 'walk', 'feed'},
 );
 
@@ -62,6 +63,7 @@ void main() {
       intimacy: 50,
       satiety: 40,
       health: 100,
+      buttons: kHudButtons,
       enabled: {'stand'},
     );
     await t.pump();

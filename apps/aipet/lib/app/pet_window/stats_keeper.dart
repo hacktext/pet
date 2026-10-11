@@ -7,16 +7,22 @@ import '../../services/stats_store.dart';
 
 /// The current pet's stats, kept up to date and saved (spec 2026-09-19 E 3.3).
 class StatsKeeper extends ChangeNotifier {
-  StatsKeeper(this._store, {DateTime Function()? now}) : _now = now ?? DateTime.now {
+  StatsKeeper(this._store, {DateTime Function()? now, this.onSaved}) : _now = now ?? DateTime.now {
     _all = _store.load();
   }
 
   final StatsStore _store;
   final DateTime Function() _now;
+
+  /// After each write of stats.json: a change worth syncing.
+  final void Function()? onSaved;
   late final Map<String, PetStats> _all;
   String? _petId;
 
   PetStats? get current => _petId == null ? null : _all[_petId];
+
+  /// Every pet's stats, as a copy (what sync uploads).
+  Map<String, PetStats> get all => Map.of(_all);
 
   DateTime get now => _now();
 
@@ -45,6 +51,17 @@ class StatsKeeper extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Newer stats from another computer, via sync. The current pet's are
+  /// caught up to now right away, as on select().
+  void applySynced(Map<String, PetStats> newer) {
+    if (newer.isEmpty) return;
+    _all.addAll(newer);
+    final id = _petId;
+    if (id != null && newer.containsKey(id)) _all[id] = advanceStats(_all[id]!, _now());
+    _save();
+    notifyListeners();
+  }
+
   /// Best effort, like settings.json: a failed save must not undo what is on screen.
   void _put(String id, PetStats s, {bool saveUnchanged = true}) {
     final before = _all[id];
@@ -55,11 +72,17 @@ class StatsKeeper extends ChangeNotifier {
     // carries its own updatedAt, so the next launch reloads an older one and
     // advances it to then, landing on the same numbers (spec 3.3).
     if (!saveUnchanged && before != null && _sameOnScreen(before, s)) return;
+    _save();
+  }
+
+  void _save() {
     try {
       _store.save(_all);
     } catch (e) {
       developer.log('stats save failed: $e', name: 'aipet.stats');
+      return;
     }
+    onSaved?.call();
   }
 
   /// Everything the panel shows (numbers as rounded there) plus the dates a

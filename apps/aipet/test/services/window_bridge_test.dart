@@ -1,9 +1,11 @@
 import 'dart:async';
 
+import 'package:aipet/domain/account_view.dart';
 import 'package:aipet/domain/library_state.dart';
 import 'package:aipet/services/window_bridge.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../support/fake_account.dart';
 import '../support/fake_transport.dart';
 
 void main() {
@@ -109,5 +111,59 @@ void main() {
         expectLater(main.adopt('b'), throwsA(isA<BridgeTimeout>().having((e) => e.stage, 'stage', 'ack')));
     await main.dispose();
     await expectation;
+  });
+
+  group('account', () {
+    late FakeAccount account;
+
+    setUp(() {
+      account = FakeAccount();
+      pet = PetWindowBridge(petEnd,
+          state: () => state,
+          onAdopt: (id) => adoptImpl(id),
+          onMainWindowClosing: () async {},
+          onQuit: () async {},
+          account: account)
+        ..start();
+    });
+
+    test('getAccount, and pushes arrive on accounts', () async {
+      account.view = const AccountView(phoneMasked: '138****1234', name: 'n');
+      expect(await main.getAccount(), account.view);
+      final seen = <AccountView>[];
+      main.accounts.listen(seen.add);
+      await pet.pushAccount(AccountView.signedOut);
+      expect(seen, [AccountView.signedOut]);
+    });
+
+    test('requests reach the pet window and its replies come back', () async {
+      final r = await main.sendSms('13800138000');
+      expect(r.ok, isFalse);
+      expect(r.message, '发送太频繁');
+      expect(r.retryAfter, 42);
+      expect((await main.login('13800138000', '123456')).ok, isTrue);
+      expect((await main.syncNow()).ok, isTrue);
+      await main.logout();
+      expect(account.calls, ['sms 13800138000', 'login 13800138000 123456', 'sync', 'logout']);
+    });
+
+    test('a pet window that throws or never answers is a failed reply, not an exception', () async {
+      account.fail = true;
+      expect((await main.login('1', '2')).message, '操作失败，请重试');
+      petEnd.silent = true;
+      final m = MainWindowBridge(mainEnd,
+          ackTimeout: const Duration(milliseconds: 50), accountTimeout: const Duration(milliseconds: 50));
+      expect((await m.syncNow()).message, '操作超时，请重试');
+      expect(await m.getAccount(), isNull);
+      await m.dispose();
+    });
+
+    test('without an account handler the pet window answers signed out', () async {
+      pet = PetWindowBridge(petEnd,
+          state: () => state, onAdopt: (id) async {}, onMainWindowClosing: () async {}, onQuit: () async {})
+        ..start();
+      expect(await main.getAccount(), AccountView.signedOut);
+      expect((await main.syncNow()).ok, isFalse);
+    });
   });
 }

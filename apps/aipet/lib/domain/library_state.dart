@@ -57,22 +57,41 @@ CardStatus cardStatusFor({required String petId, required bool complete, require
   return CardStatus.adoptable;
 }
 
-enum Category {
-  all('全部'),
-  dog('狗狗'),
-  cat('猫猫'),
-  other('其他小宠');
+/// The plaza's top level: animals or characters.
+enum Group {
+  pets('宠物'),
+  people('人物');
 
-  const Category(this.label);
+  const Group(this.label);
   final String label;
+
+  static Group of(Species s) => s.isCharacter ? people : pets;
+
+  /// Its sub-categories, 全部 first.
+  List<Category> get categories => [for (final c in Category.values) if (c.group == this) c];
 }
 
-List<Pet> filterPets(Iterable<Pet> pets, Category c) => switch (c) {
-      Category.all => pets.toList(),
-      Category.dog => pets.where((p) => p.species == Species.dog).toList(),
-      Category.cat => pets.where((p) => p.species == Species.cat).toList(),
-      Category.other => pets.where((p) => p.species == Species.other).toList(),
-    };
+/// A plaza sub-category; a null [species] is its group's 全部.
+enum Category {
+  allPets(Group.pets, '全部'),
+  cat(Group.pets, '猫猫', Species.cat),
+  dog(Group.pets, '狗狗', Species.dog),
+  other(Group.pets, '其他宠物', Species.other),
+  allPeople(Group.people, '全部'),
+  girl(Group.people, '女生', Species.girl),
+  boy(Group.people, '男生', Species.boy),
+  anime(Group.people, '动漫角色', Species.anime);
+
+  const Category(this.group, this.label, [this.species]);
+  final Group group;
+  final String label;
+  final Species? species;
+}
+
+List<Pet> filterPets(Iterable<Pet> pets, Category c) => [
+      for (final p in pets)
+        if (c.species == null ? Group.of(p.species) == c.group : p.species == c.species) p,
+    ];
 
 List<Pet> adoptedPets(Iterable<Pet> pets, LibraryState s) => [
       for (final id in s.adoptedPetIds) ...pets.where((p) => p.id == id),

@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "id": "builtin-xiaoya",
+  "name": "小雅",
+  "species": "girl",
+  "origin": "builtin",
+  "blurb": "黑长直的温柔女孩，会撒娇也会跳舞",
+  "cover": "cover.png",
+  "actions": [
+    "stand",
+    "act_coy",
+    "dance",
+    "talk"
+  ],
+  "voices": [
+    {
+      "id": "xiaoya",
+      "name": "温柔小雅"
+    },
+    {
+      "id": "xuemei",
+      "name": "撒娇学妹"
+    },
+    {
+      "id": "taozi",
+      "name": "甜美桃子"
+    },
+    {
+      "id": "vivi",
+      "name": "元气 Vivi"
+    }
+  ]
+}

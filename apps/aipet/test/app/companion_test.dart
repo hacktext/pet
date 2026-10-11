@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:ui';
@@ -13,11 +14,13 @@ import 'package:aipet/services/hud_bridge.dart';
 import 'package:aipet/services/pet_library.dart';
 import 'package:aipet/services/settings_store.dart';
 import 'package:aipet/services/stats_store.dart';
+import 'package:aipet/services/voice_store.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../support/fake_mover.dart';
 import '../support/fake_player.dart';
 import '../support/fake_transport.dart';
+import '../support/fake_voice_player.dart';
 import '../support/pet_fixtures.dart';
 
 /// Always the shortest idle (3 min) and the shortest roam (8 s).
@@ -52,7 +55,9 @@ void main() {
   late WalkDriver walker;
   late Companion c;
   late List<String> panel;
+  late FakeVoicePlayer voice;
   late FakeTransport panelEnd;
+  late List<String> events; // what the telemetry and sync hooks heard
   Completer<void>? showGate; // when set, the panel takes its time coming up
   Completer<void>? hideGate; // when set, the panel takes its time going away
 
@@ -69,16 +74,18 @@ void main() {
     }
   }
 
-  Future<void> boot({Future<File> Function(File)? ensure, bool twoPets = false}) async {
+  Future<void> boot({Future<File> Function(File)? ensure, bool twoPets = false, bool character = false}) async {
     // Held in a local as well: the step must undo the folder this boot() just
     // made, not whichever one the shared variable points at when it runs.
     final dir = tmp = Directory.systemTemp.createTempSync('companion_');
     teardown.add(() => dir.deleteSync(recursive: true));
     final builtin = Directory('${tmp.path}\\builtin')..createSync();
     writePet(builtin, id: 'builtin-gold', name: '金毛', actions: kSeven);
+    if (character) writeCharacter(builtin);
     if (twoPets) writePet(builtin, id: 'builtin-corgi', name: '柯基', actions: kSeven);
     final appData = Directory('${tmp.path}\\appdata');
-    SettingsStore(appData).save(const LibraryState(currentPetId: 'builtin-gold', adoptedPetIds: ['builtin-gold']));
+    final first = character ? 'builtin-xiaoya' : 'builtin-gold';
+    SettingsStore(appData).save(LibraryState(currentPetId: first, adoptedPetIds: [first]));
     now = DateTime(2026, 9, 19, 9);
     player = FakePlayer();
     mover = GatedMover();
@@ -111,7 +118,19 @@ void main() {
           if (gate != null) await gate.future;
           panel.add('hide');
         }).start();
-    c = Companion(pets: pets, stats: stats, walker: walker, mover: mover, hudTransport: petEnd, random: LowRandom());
+    voice = FakeVoicePlayer();
+    c = Companion(
+        pets: pets,
+        stats: stats,
+        walker: walker,
+        mover: mover,
+        hudTransport: petEnd,
+        voices: VoiceStore(appData),
+        voicePlayer: voice,
+        random: LowRandom(),
+        onInteract: (pet, kind) => events.add('interact $pet $kind'),
+        onVoiceChosen: (pet, v) => events.add('voice $pet $v'));
+    events = [];
     teardown.add(c.dispose);
     await pets.boot();
   }
@@ -149,7 +168,40 @@ void main() {
     expect(v.name, '金毛');
     expect([v.intimacy, v.satiety, v.health, v.companionDays, v.todayInteractions], [50, 50, 100, 1, 0]);
     expect(v.status, '状态很好'); // satiety 50 is not below 50
-    expect(v.enabled, {'stand', 'walk', 'feed', 'play'});
+    expect(v.buttons, ['stand', 'walk', 'feed', 'play', 'sleep', 'lick_paw', 'act_cute']);
+    expect(v.enabled, kSeven.toSet());
+  });
+
+  petTest("a character's action says one of its lines in the chosen voice, the first voice by default", (t) async {
+    await boot(character: true);
+    expect([for (final v in c.availableVoices) v.id], ['xiaoya', 'vivi']);
+    expect(c.currentVoice, 'xiaoya');
+    await c.userAction('act_coy');
+    expect(player.plays.last, 'builtin-xiaoya/act_coy.mp4|once');
+    expect(voice.log.last, 'xiaoya/act_coy-1.wav'); // LowRandom picks the first line
+    c.chooseVoice('vivi');
+    expect(c.currentVoice, 'vivi');
+    await c.userAction('talk');
+    expect(voice.log.last, 'vivi/talk-1.wav');
+  });
+
+  petTest('an action without lines stops the voice; 静音 keeps her quiet', (t) async {
+    await boot(character: true);
+    await c.userAction('act_coy');
+    await c.userAction('stand');
+    expect(voice.log.last, 'stop');
+    c.chooseVoice(null);
+    expect(c.currentVoice, isNull);
+    voice.log.clear();
+    await c.userAction('act_coy');
+    expect(voice.log, ['stop']);
+  });
+
+  petTest('an animal without voices never speaks', (t) async {
+    await boot();
+    await c.userAction('feed');
+    expect(c.availableVoices, isEmpty);
+    expect(voice.log.where((e) => e != 'stop'), isEmpty);
   });
 
   petTest('a button plays the action and counts an interaction; feeding fills the bowl', (t) async {
@@ -421,4 +473,40 @@ void main() {
     expect(walker.walking, isFalse);
     expect(panel.where((p) => p.startsWith('show')), isEmpty);
   });
+
+  petTest('hooks: each action and drag is an interaction; a voice change is reported once', (t) async {
+    await boot(character: true);
+    await c.userAction('act_coy');
+    await c.userAction('nope'); // not one of its actions: nothing happened
+    c.dragStarted();
+    c.dragEnded();
+    c.chooseVoice('vivi');
+    c.chooseVoice('vivi'); // the same again is no change
+    c.chooseVoice(null);
+    expect(events, [
+      'interact builtin-xiaoya act_coy',
+      'interact builtin-xiaoya drag',
+      'voice builtin-xiaoya vivi',
+      'voice builtin-xiaoya off',
+    ]);
+    await run(t, const Duration(seconds: 1));
+  });
+}
+
+/// 小雅 with two voices; xiaoya has act_coy and talk lines, vivi has talk.
+void writeCharacter(Directory builtin) {
+  final dir = writePet(builtin, id: 'builtin-xiaoya', name: '小雅', species: 'girl',
+      actions: const ['stand', 'act_coy', 'talk']);
+  final meta = File('${dir.path}\\pet.json');
+  final j = jsonDecode(meta.readAsStringSync()) as Map<String, Object?>;
+  j['voices'] = [
+    {'id': 'xiaoya', 'name': '温柔小雅'},
+    {'id': 'vivi', 'name': '元气 Vivi'},
+  ];
+  meta.writeAsStringSync(jsonEncode(j));
+  for (final f in ['xiaoya\\act_coy-1.wav', 'xiaoya\\act_coy-2.wav', 'xiaoya\\talk-1.wav', 'vivi\\talk-1.wav']) {
+    File('${dir.path}\\voices\\$f')
+      ..parent.createSync(recursive: true)
+      ..writeAsBytesSync([0]);
+  }
 }

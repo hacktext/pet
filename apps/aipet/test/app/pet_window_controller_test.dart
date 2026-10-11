@@ -18,6 +18,7 @@ void main() {
   late List<LibraryState> pushed;
   late Future<File> Function(File) ensure;
   late PetWindowController c;
+  late List<String> adoptions;
 
   PetWindowController make({Duration prepareTimeout = kPrepareTimeout}) => PetWindowController(
         library: PetLibrary(builtinRoot: builtin, customRoot: Directory('${tmp.path}\\custom')),
@@ -26,6 +27,7 @@ void main() {
         player: player,
         push: (s) async => pushed.add(s),
         prepareTimeout: prepareTimeout,
+        onAdopted: (id, firstTime) => adoptions.add('$id ${firstTime ? 'adopt' : 'switch'}'),
       );
   const short = Duration(milliseconds: 50);
   const failFast = Timeout(Duration(seconds: 5)); // a missing cap must fail, not hang for 30 s
@@ -40,6 +42,7 @@ void main() {
     settings = SettingsStore(appData);
     player = FakePlayer();
     pushed = [];
+    adoptions = [];
     ensure = (f) async => f; // "matting" returns the clip itself, so plays name the action
     c = make();
   });
@@ -216,6 +219,46 @@ void main() {
       await c.boot();
       await c.playAction('backflip');
       expect(player.plays, hasLength(1));
+    });
+  });
+
+  group('telemetry and sync', () {
+    test('onAdopted: a first adoption, then a switch; not for the pet already there or a failure', () async {
+      await c.boot();
+      await c.adopt('builtin-gold');
+      await c.adopt('builtin-ragdoll');
+      await c.adopt('builtin-gold');
+      await c.adopt('builtin-gold');
+      ensure = (f) async => throw Exception('decode failed');
+      await expectLater(c.adopt('builtin-ragdoll'), throwsA(isA<AdoptError>()));
+      expect(adoptions, ['builtin-gold adopt', 'builtin-ragdoll adopt', 'builtin-gold switch']);
+    });
+
+    test("applySynced takes the account's list and puts its pet on the desktop", () async {
+      settings.save(const LibraryState(currentPetId: 'builtin-gold', adoptedPetIds: ['builtin-gold']));
+      await c.boot();
+      pushed.clear();
+      await c.applySynced(const LibraryState(currentPetId: 'builtin-ragdoll', adoptedPetIds: ['builtin-ragdoll']));
+      expect(c.state, const LibraryState(currentPetId: 'builtin-ragdoll', adoptedPetIds: ['builtin-ragdoll']));
+      expect(settings.load(), c.state);
+      expect(player.plays.last, 'builtin-ragdoll/stand.mp4|loop');
+      expect(pushed.last, c.state);
+      expect(adoptions, isEmpty, reason: 'a synced switch is not the user adopting');
+    });
+
+    test('applySynced: a pet this computer cannot show stays listed, the current one stays on', () async {
+      settings.save(const LibraryState(currentPetId: 'builtin-gold', adoptedPetIds: ['builtin-gold']));
+      await c.boot();
+      await c.applySynced(const LibraryState(currentPetId: 'custom-x', adoptedPetIds: ['custom-x']));
+      expect(c.state, const LibraryState(currentPetId: 'builtin-gold', adoptedPetIds: ['custom-x', 'builtin-gold']));
+      expect(player.plays, hasLength(1));
+    });
+
+    test('applySynced with nobody on the desktop on either side only changes the list', () async {
+      await c.boot();
+      await c.applySynced(const LibraryState(adoptedPetIds: ['builtin-gold']));
+      expect(c.state, const LibraryState(adoptedPetIds: ['builtin-gold']));
+      expect(player.plays, isEmpty);
     });
   });
 }

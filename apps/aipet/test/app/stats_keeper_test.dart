@@ -159,4 +159,39 @@ void main() {
     expect(() => k.select('builtin-gold'), returnsNormally);
     expect(k.current, isNotNull); // still on screen even though it was not saved
   });
+
+  test('onSaved fires for every save that reaches the disk, not for a silent tick', () {
+    var saved = 0;
+    final k = StatsKeeper(StatsStore(tmp), now: () => now, onSaved: () => saved++);
+    k.select('builtin-gold');
+    expect(saved, 1);
+    k.interact('play');
+    expect(saved, 2);
+    now = now.add(const Duration(seconds: 30));
+    k.tick();
+    expect(saved, 2);
+  });
+
+  test('all: every pet, as a copy', () {
+    final k = make()..select('builtin-gold');
+    k.select('builtin-corgi');
+    expect(k.all.keys, unorderedEquals(['builtin-gold', 'builtin-corgi']));
+    k.all.clear();
+    expect(k.all, hasLength(2));
+  });
+
+  test('applySynced replaces those pets, catches the current one up to now, and saves', () {
+    final k = make()..select('builtin-gold');
+    var notified = 0;
+    k.addListener(() => notified++);
+    final remote = PetStats.fresh(now.subtract(const Duration(hours: 1))).copyWith(intimacy: 90);
+    k.applySynced({'builtin-gold': remote, 'builtin-corgi': remote});
+    expect(k.current!.intimacy, 90);
+    expect(k.current!.updatedAt, now);
+    expect(k.current!.satiety, lessThan(50));
+    expect(k.all['builtin-corgi'], remote);
+    expect(notified, 1);
+    final again = make();
+    expect(again.all['builtin-corgi'], remote);
+  });
 }

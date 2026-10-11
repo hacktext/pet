@@ -42,7 +42,35 @@ void main() {
     expect(parsePet(jsonEncode(valid()..['walkFacing'] = 'right'), dir).walkFacing, Facing.right);
   });
 
+  test('voices are optional and read in order', () {
+    expect(parsePet(jsonEncode(valid()), dir).voices, isEmpty);
+    final j = valid()
+      ..['voices'] = [
+        {'id': 'xiaoya', 'name': '温柔小雅'},
+        {'id': 'vivi', 'name': '元气 Vivi'},
+      ];
+    final p = parsePet(jsonEncode(j), dir);
+    expect([for (final v in p.voices) '${v.id}:${v.name}'], ['xiaoya:温柔小雅', 'vivi:元气 Vivi']);
+  });
+
+  test("voiceLines are the voice's <action>-<n>.wav files, sorted; none for a missing folder", () {
+    final tmp = Directory.systemTemp.createTempSync('pet_voices_');
+    addTearDown(() => tmp.deleteSync(recursive: true));
+    final p = parsePet(jsonEncode(valid()..['voices'] = [{'id': 'xiaoya', 'name': '温柔小雅'}]), tmp);
+    final d = Directory('${tmp.path}\\voices\\xiaoya')..createSync(recursive: true);
+    for (final f in ['act_coy-2.wav', 'act_coy-1.wav', 'talk-1.wav', 'act_coy_x-1.wav', 'act_coy-1.mp3']) {
+      File('${d.path}\\$f').writeAsBytesSync([0]);
+    }
+    expect([for (final f in p.voiceLines('xiaoya', 'act_coy')) f.uri.pathSegments.last], ['act_coy-1.wav', 'act_coy-2.wav']);
+    expect(p.voiceLines('xiaoya', 'dance'), isEmpty);
+    expect(p.voiceLines('nobody', 'talk'), isEmpty);
+  });
+
   final broken = <String, Map<String, Object?> Function()>{
+    'voices not a list': () => valid()..['voices'] = 'xiaoya',
+    'voice id with a path': () => valid()..['voices'] = [{'id': '..\\x', 'name': 'x'}],
+    'voice without a name': () => valid()..['voices'] = [{'id': 'x'}],
+    'duplicate voice': () => valid()..['voices'] = [{'id': 'x', 'name': 'a'}, {'id': 'x', 'name': 'b'}],
     'not json': () => {},
     'walkFacing up': () => valid()..['walkFacing'] = 'up',
     'schema 2': () => valid()..['schema'] = 2,
@@ -92,6 +120,9 @@ void main() {
     expect(labelFor('stand'), '待机');
     expect(labelFor('lick_paw'), '舔爪子');
     expect(labelFor('act_cute'), '卖萌');
+    expect(labelFor('act_coy'), '撒娇');
+    expect(labelFor('dance'), '跳舞');
+    expect(labelFor('talk'), '说话');
     expect(labelFor('backflip'), 'backflip');
   });
 }

@@ -5,7 +5,6 @@ import argparse
 import json
 import os
 import shutil
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -16,19 +15,26 @@ REPO = HERE.parents[1]
 ASSETS = REPO / "apps" / "aipet" / "assets" / "pets"
 os.environ.setdefault("U2NET_HOME", str(WORK / "u2net"))  # before rembg is imported
 
-from petgen import kling  # noqa: E402
-from petgen.keycheck import FRAME_BLOB_MAX, frame_scores, score_file  # noqa: E402
-from petgen.loopcheck import probe, psnr_series, seam_verdict  # noqa: E402
-from petgen.package import ACTIONS, chosen_facing, make_cover, pet_json  # noqa: E402
+from petgen import kling, volc  # noqa: E402
+from petgen.keycheck import score_file  # noqa: E402
+from petgen.qa import qa_clip  # noqa: E402
+from petgen.package import ACTIONS, chosen_facing, pet_json, write_pet_dir  # noqa: E402
 from petgen.prompts import (PETS, POSE_ASPECT, PROPS, REF_POSE_FOR_ACTION, action_prompt, pose_prompt,  # noqa: E402
                             source_prompt)
 from petgen.finish import finish_clip, frame_rgb, metrics, pet_gamma  # noqa: E402
 
-SPIKE_OUT = Path(r"C:\Users\Administrator\AppData\Local\Temp\claude\c--Users-Administrator-code-aipet"
-                 r"\4fbc451a-51c9-48a5-9f6b-54b7e4f439b7\scratchpad\out")
 # Pre-flight minimum per 5 s clip: std 3 units, pro 4 (measured 2026-09-12).
 VIDEO_UNITS = {"std": 3, "pro": 4}
 PROP_DIR = WORK / "props"
+
+
+def _rel(p: Path, base: Path = HERE) -> Path:
+    """For messages: relative to base when inside it, else as given (--out /
+    --from may point anywhere)."""
+    try:
+        return p.relative_to(base)
+    except ValueError:
+        return p
 
 
 def pet_dir(pet: str, tag: str | None = None) -> Path:
@@ -44,8 +50,7 @@ def _video_task_id(pet: str, action: str, tag: str | None, mode: str) -> str:
 
 
 def _video_units_left() -> float:
-    packs = [p for p in kling.balance() if "视频" in p["resource_pack_name"] and p["status"] == "online"]
-    return sum(float(p["remaining_quantity"]) for p in packs)
+    return kling.units_left("video")
 
 
 def cmd_balance(_a) -> int:
@@ -54,15 +59,19 @@ def cmd_balance(_a) -> int:
     return 0
 
 
-def cmd_import_spike(_a) -> int:
+def cmd_import_spike(a) -> int:
+    spike = a.src or (Path(os.environ["PETGEN_SPIKE_OUT"]) if os.environ.get("PETGEN_SPIKE_OUT") else None)
+    if spike is None:
+        print("pass --from <spike out folder> (or set PETGEN_SPIKE_OUT)")
+        return 1
     missing = 0
     for pet in PETS:
-        pairs = [(SPIKE_OUT / f"src-{pet}.png", pet_dir(pet) / "src.png")]
-        pairs += [(SPIKE_OUT / f"ref-{pet}-{pose}.png", pet_dir(pet) / f"ref-{pose}.png") for pose in POSE_ASPECT]
+        pairs = [(spike / f"src-{pet}.png", pet_dir(pet) / "src.png")]
+        pairs += [(spike / f"ref-{pet}-{pose}.png", pet_dir(pet) / f"ref-{pose}.png") for pose in POSE_ASPECT]
         for src, dst in pairs:
             if src.exists():
                 shutil.copy2(src, dst)
-                print(f"imported {dst.relative_to(HERE)}")
+                print(f"imported {_rel(dst)}")
             else:
                 missing += 1
                 print(f"MISSING {src.name} -> regenerate with the source/pose command")
@@ -164,13 +173,6 @@ def cmd_video(a) -> int:
     return 0
 
 
-def _frame(video: Path, out: Path, last: bool) -> Path:
-    seek = ["-sseof", "-0.05"] if last else []
-    subprocess.run(["ffmpeg", "-v", "error", "-y", *seek, "-i", str(video), "-update", "1", "-frames:v", "1", str(out)],
-                   check=True)
-    return out
-
-
 def cmd_finish(a) -> int:
     d = pet_dir(a.pet, a.tag)
     src = d / f"{a.action}.mp4"
@@ -199,46 +201,104 @@ def cmd_qa(a) -> int:
     if not v.exists():
         print(f"missing {v.relative_to(HERE)}: run finish first")
         return 1
-    fmt = probe(v)
-    fmt_ok = fmt == {"width": 960, "height": 960, "fps": "24/1", "frames": 121}
-    ok_seam, seam, worst_step = seam_verdict(*psnr_series(v, d / f"qa-{a.action}"))
-    first = score_file(_frame(v, d / f"qa-{a.action}-first.png", last=False))
-    last = score_file(_frame(v, d / f"qa-{a.action}-last.png", last=True))
-    worst = max(frame_scores(v))
-    passed = fmt_ok and ok_seam and first.passed and last.passed and worst < FRAME_BLOB_MAX
-    print(json.dumps({"pet": a.pet, "action": a.action, "pass": passed, "format": fmt,
-                      "seam": round(seam, 2), "worst_step": round(worst_step, 2),
-                      "blob_core_first": first.blob_core, "blob_core_last": last.blob_core,
-                      "blob_core_worst": worst}, ensure_ascii=False))
-    return 0 if passed else 1
+    r = qa_clip(v, d, a.action)
+    print(json.dumps({"pet": a.pet, "action": a.action, **r}, ensure_ascii=False))
+    return 0 if r["pass"] else 1
 
 
 def cmd_package(a) -> int:
-    from PIL import Image
     d = pet_dir(a.pet, a.tag)
-    clips = [d / f"{k}-final.mp4" for k in ACTIONS]
-    missing = [c.name for c in clips if not c.exists()]
+    clips = {k: d / f"{k}-final.mp4" for k in ACTIONS}
+    missing = [c.name for c in clips.values() if not c.exists()]
     if missing:
         print(f"missing clips {missing}")
         return 1
-    out = ASSETS / f"builtin-{a.pet}"
-    out.mkdir(parents=True, exist_ok=True)
-    for k, c in zip(ACTIONS, clips):
-        shutil.copy2(c, out / f"{k}.mp4")
-    make_cover(Image.open(d / "ref-front-cutout.png").convert("RGBA")).save(out / "cover.png")
+    out = a.out or ASSETS / f"builtin-{a.pet}"
     facing = chosen_facing(a.facing, d / "walk-final.mp4")
-    (out / "pet.json").write_text(json.dumps(pet_json(a.pet, facing), ensure_ascii=False,
-                                              indent=2) + "\n", encoding="utf-8")
+    write_pet_dir(out, clips, d / "ref-front-cutout.png", pet_json(a.pet, facing))
     print(f"walkFacing {facing}{' (--facing)' if a.facing else ' (detected)'}")
-    print(f"packaged {out.relative_to(REPO)}")
+    print(f"packaged {_rel(out, REPO)}")
     return 0
+
+
+def cmd_voice(a) -> int:
+    """One line of speech; --ref clones the voice in that clip on the fly
+    (say @音频1 in the prompt), --speaker uses a registered voice."""
+    speaker = a.speaker or (None if a.ref else volc.default_speaker())
+    try:
+        r = volc.generate(volc.body(a.prompt, ref=a.ref, speaker=speaker, speech_rate=a.rate), a.out)
+    except (volc.VolcError, ValueError) as e:
+        print(f"FAIL voice: {e}")
+        return 1
+    print(f"voice -> {a.out}: {r.get('duration')} s (billed {r.get('original_duration')} s)")
+    return 0
+
+
+def cmd_worker(a) -> int:
+    """Claim paid custom-pet jobs and make them until stopped. The first
+    Ctrl+C / SIGTERM finishes the step in hand (maybe a paid clip) and
+    leaves the job for the server's reaper; a second one quits at once."""
+    import logging
+    import signal
+    import threading
+    from petgen.config import ConfigError, load_worker_config
+    from petgen.pipeline import Env
+    from petgen.server import Server
+    from petgen.worker import Worker
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    try:
+        cfg = load_worker_config(a.config)
+    except ConfigError as e:
+        print(f"FAIL worker: {e}")
+        return 1
+    work = a.work or WORK
+    props = a.props or work / "props"
+    missing = [f"{k}-cutout.png" for k in ("bowl", "ball") if not (props / f"{k}-cutout.png").exists()]
+    if missing:
+        print(f"FAIL worker: no {', '.join(missing)} in {props}: run `petgen prop bowl` / `petgen prop ball` "
+              f"or copy work/props there")
+        return 1
+    stop = threading.Event()
+
+    def on_signal(_signum, _frame):
+        if stop.is_set():
+            raise KeyboardInterrupt
+        print("stopping after the current step (signal again to quit now)", flush=True)
+        stop.set()
+
+    signal.signal(signal.SIGINT, on_signal)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, on_signal)
+    server = Server(a.server, cfg.key)
+    env = Env(work=work, props=props, prices=cfg.prices, uploader=server)
+    try:
+        return Worker(server, env, stop).run(once=a.once)
+    except KeyboardInterrupt:
+        return 130
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(prog="petgen")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("balance").set_defaults(fn=cmd_balance)
-    sub.add_parser("import-spike").set_defaults(fn=cmd_import_spike)
+    vp = sub.add_parser("voice")
+    vp.add_argument("prompt")
+    vp.add_argument("--out", type=Path, required=True)
+    vp.add_argument("--ref", type=Path, default=None, help="reference clip to clone (<= 30 s, <= 10 MB)")
+    vp.add_argument("--speaker", default=None, help="voice id; defaults to VOLC_SPEAKER_ID")
+    vp.add_argument("--rate", type=int, default=0, help="speech rate, -50 (0.5x) .. 100 (2x)")
+    vp.set_defaults(fn=cmd_voice)
+    wp = sub.add_parser("worker", help="claim paid custom-pet jobs from the server and make them")
+    wp.add_argument("--server", required=True, help="e.g. https://aipei.pixpickai.com")
+    wp.add_argument("--config", type=Path, default=None, help="worker.env; default <secrets>/worker.env")
+    wp.add_argument("--work", type=Path, default=None, help="job folders go to <work>/jobs/<id>; default tools/petgen/work")
+    wp.add_argument("--props", type=Path, default=None, help="bowl-cutout.png / ball-cutout.png; default <work>/props")
+    wp.add_argument("--once", action="store_true", help="exit after one job (manual checks)")
+    wp.set_defaults(fn=cmd_worker)
+    ip = sub.add_parser("import-spike")
+    ip.add_argument("--from", dest="src", type=Path, default=None,
+                    help="the spike's out folder; default $PETGEN_SPIKE_OUT")
+    ip.set_defaults(fn=cmd_import_spike)
     pp = sub.add_parser("prop")
     pp.add_argument("kind", choices=list(PROPS))
     pp.set_defaults(fn=cmd_prop)
@@ -263,6 +323,8 @@ def main() -> int:
             p.add_argument("--gamma", type=float, default=None)
         if name == "package":
             p.add_argument("--facing", choices=["left", "right"], default=None)
+            p.add_argument("--out", type=Path, default=None,
+                           help="pet folder to write; default apps/aipet/assets/pets/builtin-<pet>")
         p.set_defaults(fn=fn)
     a = ap.parse_args()
     return a.fn(a)

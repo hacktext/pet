@@ -19,15 +19,39 @@ const Map<String, String> _labels = {
   'lick_paw': '舔爪子',
   'act_cute': '卖萌',
   'pet_head': '摸摸头',
+  // A character (Species.isCharacter) rather than an animal.
+  'act_coy': '撒娇',
+  'dance': '跳舞',
+  'talk': '说话',
 };
 
 bool isLooping(String key) => kLoopingActions.contains(key);
 
 String labelFor(String key) => _labels[key] ?? key;
 
-enum Species { dog, cat, other }
+/// `other` is any animal that is not a cat or a dog; the last three are
+/// characters, which drive their own HUD buttons.
+enum Species {
+  dog,
+  cat,
+  other,
+  girl,
+  boy,
+  anime;
+
+  bool get isCharacter => this == girl || this == boy || this == anime;
+}
 
 enum PetOrigin { builtin, custom }
+
+/// One voice a character can speak in: `voices/<id>/<action>-<n>.wav` in the
+/// pet's folder.
+class PetVoice {
+  const PetVoice({required this.id, required this.name});
+
+  final String id;
+  final String name;
+}
 
 /// One pet folder (spec 4.1): pet.json + one `<actionKey>.mp4` per action + cover.
 class Pet {
@@ -41,6 +65,7 @@ class Pet {
     required this.cover,
     required this.actions,
     this.walkFacing = Facing.right,
+    this.voices = const [],
   });
 
   final String id;
@@ -56,9 +81,23 @@ class Pet {
   /// the other way (spec 2026-09-19 E 3.4).
   final Facing walkFacing;
 
+  /// Empty for a pet that does not speak; otherwise the first is the default.
+  final List<PetVoice> voices;
+
   File get coverFile => File('${dir.path}${Platform.pathSeparator}$cover');
 
   File actionFile(String key) => File('${dir.path}${Platform.pathSeparator}$key.mp4');
+
+  /// What [voice] can say over [action]: its `<action>-<n>.wav` files, sorted.
+  List<File> voiceLines(String voice, String action) {
+    final d = Directory('${dir.path}${Platform.pathSeparator}voices${Platform.pathSeparator}$voice');
+    if (!d.existsSync()) return const [];
+    final line = RegExp('^${RegExp.escape(action)}-\\d+\\.wav\$');
+    return [
+      for (final f in d.listSync().whereType<File>())
+        if (line.hasMatch(f.uri.pathSegments.last)) f,
+    ]..sort((a, b) => a.path.compareTo(b.path));
+  }
 
   /// A half-installed or half-downloaded folder shows as 素材缺失 (spec 7).
   bool get isComplete => coverFile.existsSync() && actions.every((k) => actionFile(k).existsSync());
@@ -109,6 +148,19 @@ Pet parsePet(String jsonText, Directory dir) {
     'left' => Facing.left,
     _ => throw FormatException('walkFacing must be left or right, got $facing'),
   };
+  final voices = <PetVoice>[];
+  final rawVoices = raw['voices'];
+  if (rawVoices != null) {
+    if (rawVoices is! List<Object?>) throw const FormatException('voices must be a list');
+    for (final v in rawVoices) {
+      final vid = v is Map<String, Object?> ? v['id'] : null;
+      final vname = v is Map<String, Object?> ? v['name'] : null;
+      if (vid is! String || !_idPattern.hasMatch(vid)) throw FormatException('bad voice id in $v');
+      if (vname is! String || vname.trim().isEmpty) throw FormatException('voice $vid has no name');
+      if (voices.any((x) => x.id == vid)) throw FormatException('duplicate voice $vid');
+      voices.add(PetVoice(id: vid, name: vname));
+    }
+  }
   return Pet(
     id: id,
     name: name,
@@ -119,5 +171,6 @@ Pet parsePet(String jsonText, Directory dir) {
     cover: cover,
     actions: List.unmodifiable(actions),
     walkFacing: walkFacing,
+    voices: List.unmodifiable(voices),
   );
 }

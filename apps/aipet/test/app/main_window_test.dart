@@ -26,6 +26,7 @@ void main() {
     final builtin = Directory('${tmp.path}\\builtin')..createSync();
     writePet(builtin, id: 'builtin-gold', name: '金毛');
     writePet(builtin, id: 'builtin-ragdoll', species: 'cat', name: '布偶猫');
+    writePet(builtin, id: 'builtin-xiaoya', species: 'girl', name: '小雅');
     final (pe, mainEnd) = FakeTransport.pair();
     petEnd = pe;
     petState = LibraryState.empty;
@@ -68,11 +69,13 @@ void main() {
     await open(tester);
     expect(find.text('定制专属宠物'), findsOneWidget);
     expect(find.text('上传您的爱宠照片，生成桌面伙伴'), findsOneWidget);
-    for (final label in ['全部', '狗狗', '猫猫', '其他小宠', '宠物广场', '我的']) {
+    for (final label in ['宠物', '人物', '全部', '猫猫', '狗狗', '其他宠物', '宠物广场', '我的']) {
       expect(find.text(label), findsOneWidget, reason: label);
     }
+    expect(find.text('女生'), findsNothing);
     expect(find.text('金毛'), findsOneWidget);
     expect(find.text('布偶猫'), findsOneWidget);
+    expect(find.text('小雅'), findsNothing);
     expect(find.text('带它回家'), findsNWidgets(2));
   });
 
@@ -82,9 +85,34 @@ void main() {
     await tester.pump();
     expect(find.text('布偶猫'), findsOneWidget);
     expect(find.text('金毛'), findsNothing);
-    await tester.tap(find.text('其他小宠'));
+    await tester.tap(find.text('其他宠物'));
     await tester.pump();
     expect(find.text('这里还没有小伙伴'), findsOneWidget);
+  });
+
+  testWidgets('人物 shows the characters, its own sub-categories, and resets to 全部', (tester) async {
+    await open(tester);
+    await tester.tap(find.text('猫猫'));
+    await tester.pump();
+    await tester.tap(find.text('人物'));
+    await tester.pump();
+    expect(find.text('小雅'), findsOneWidget);
+    expect(find.text('布偶猫'), findsNothing);
+    for (final label in ['全部', '女生', '男生', '动漫角色']) {
+      expect(find.text(label), findsOneWidget, reason: label);
+    }
+    expect(find.text('猫猫'), findsNothing);
+    expect(find.text('定制专属角色'), findsOneWidget);
+    expect(find.text('上传照片，生成桌面角色'), findsOneWidget);
+    expect(find.text('定制专属宠物'), findsNothing);
+    await tester.tap(find.text('男生'));
+    await tester.pump();
+    expect(find.text('这里还没有小伙伴'), findsOneWidget);
+    await tester.tap(find.text('宠物'));
+    await tester.pump();
+    expect(find.text('定制专属宠物'), findsOneWidget);
+    expect(find.text('金毛'), findsOneWidget);
+    expect(find.text('布偶猫'), findsOneWidget);
   });
 
   testWidgets('adopting shows 正在准备… and then 陪伴中', (tester) async {

@@ -3,10 +3,13 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../../domain/hud_layout.dart';
+import '../../domain/pet.dart';
 import '../../services/hud_bridge.dart';
 
 /// The status panel (spec 2026-09-19 E 3.5), after the competitor's: name and
-/// status, companion days and today's count, three numbers, four buttons.
+/// status, companion days and today's count, three numbers, then the pet's
+/// buttons: one row of up to four, else a grid four wide (two rows fit; more
+/// scroll with the wheel).
 class HudPanel extends StatelessWidget {
   const HudPanel({super.key, required this.view, required this.onAction, required this.onClose});
 
@@ -14,12 +17,23 @@ class HudPanel extends StatelessWidget {
   final void Function(String key) onAction;
   final VoidCallback onClose;
 
+  /// The panel's own wording for the animal buttons; any other action reads
+  /// as in the right-click menu.
   static const _labels = {'stand': '站立', 'walk': '行走', 'feed': '喂食', 'play': '玩耍'};
   static const _icons = {
     'stand': Icons.pets,
     'walk': Icons.directions_walk,
     'feed': Icons.rice_bowl,
     'play': Icons.sports_baseball,
+    'act_coy': Icons.favorite,
+    'dance': Icons.music_note,
+    'talk': Icons.chat_bubble,
+    'run': Icons.directions_run,
+    'sleep': Icons.bedtime,
+    'spin': Icons.autorenew,
+    'lick_paw': Icons.clean_hands,
+    'act_cute': Icons.emoji_emotions,
+    'pet_head': Icons.front_hand,
   };
   static const _ink = Color(0xFF3D2B2B);
   static const _rose = Color(0xFFB2566B);
@@ -71,12 +85,25 @@ class HudPanel extends StatelessWidget {
             _stat('健康度', view.health, const Color(0xFF66BB6A)),
           ]),
           const SizedBox(height: 10),
-          Row(children: [
-            for (final (i, b) in kHudButtons.indexed) ...[
-              if (i > 0) const SizedBox(width: 8),
-              _button(b),
-            ],
-          ]),
+          if (view.buttons.length <= 4)
+            Row(children: [
+              for (final (i, b) in view.buttons.indexed) ...[
+                if (i > 0) const SizedBox(width: 8),
+                Expanded(child: _button(b)),
+              ],
+            ])
+          else
+            Expanded(
+              child: GridView.count(
+                key: const Key('hud-buttons'),
+                crossAxisCount: 4,
+                mainAxisSpacing: 8,
+                crossAxisSpacing: 8,
+                childAspectRatio: 2.2,
+                padding: EdgeInsets.zero,
+                children: [for (final b in view.buttons) _button(b, compact: true)],
+              ),
+            ),
         ]),
       );
 
@@ -110,27 +137,30 @@ class HudPanel extends StatelessWidget {
         ),
       );
 
-  Widget _button(String key) {
+  Widget _button(String key, {bool compact = false}) {
     final enabled = view.enabled.contains(key);
-    return Expanded(
-      child: Opacity(
-        opacity: enabled ? 1 : 0.35,
-        child: Material(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          child: InkWell(
-            key: Key('hud-button-$key'),
-            borderRadius: BorderRadius.circular(16),
-            onTap: enabled ? () => onAction(key) : null,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: Column(children: [
-                Icon(_icons[key], size: 22, color: _rose),
-                const SizedBox(height: 2),
-                Text(_labels[key]!, style: const TextStyle(fontSize: 13, color: _ink)),
-              ]),
-            ),
-          ),
+    final icon = Icon(_icons[key] ?? Icons.auto_awesome, size: compact ? 18 : 22, color: _rose);
+    final label = Text(_labels[key] ?? labelFor(key),
+        maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, color: _ink));
+    return Opacity(
+      opacity: enabled ? 1 : 0.35,
+      child: Material(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(compact ? 12 : 16),
+        child: InkWell(
+          key: Key('hud-button-$key'),
+          borderRadius: BorderRadius.circular(compact ? 12 : 16),
+          onTap: enabled ? () => onAction(key) : null,
+          child: compact
+              ? Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                  icon,
+                  const SizedBox(width: 4),
+                  Flexible(child: label),
+                ])
+              : Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Column(children: [icon, const SizedBox(height: 2), label]),
+                ),
         ),
       ),
     );

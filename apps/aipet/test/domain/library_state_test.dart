@@ -48,13 +48,28 @@ void main() {
     expect(LibraryState.fromJson(const {}), LibraryState.empty);
   });
 
-  test('categories filter by species and carry their labels', () {
-    final pets = [pet('d1', Species.dog), pet('c1', Species.cat), pet('d2', Species.dog)];
-    expect(filterPets(pets, Category.all).map((p) => p.id), ['d1', 'c1', 'd2']);
+  test('categories filter by species within their group and carry their labels', () {
+    final pets = [
+      pet('d1', Species.dog), pet('c1', Species.cat), pet('g1', Species.girl),
+      pet('d2', Species.dog), pet('a1', Species.anime), pet('o1', Species.other),
+    ];
+    expect(filterPets(pets, Category.allPets).map((p) => p.id), ['d1', 'c1', 'd2', 'o1']);
     expect(filterPets(pets, Category.dog).map((p) => p.id), ['d1', 'd2']);
     expect(filterPets(pets, Category.cat).map((p) => p.id), ['c1']);
-    expect(filterPets(pets, Category.other), isEmpty);
-    expect(Category.values.map((c) => c.label), ['全部', '狗狗', '猫猫', '其他小宠']);
+    expect(filterPets(pets, Category.other).map((p) => p.id), ['o1']);
+    expect(filterPets(pets, Category.allPeople).map((p) => p.id), ['g1', 'a1']);
+    expect(filterPets(pets, Category.girl).map((p) => p.id), ['g1']);
+    expect(filterPets(pets, Category.boy), isEmpty);
+    expect(filterPets(pets, Category.anime).map((p) => p.id), ['a1']);
+    expect(Group.values.map((g) => g.label), ['宠物', '人物']);
+    expect(Group.pets.categories.map((c) => c.label), ['全部', '猫猫', '狗狗', '其他宠物']);
+    expect(Group.people.categories.map((c) => c.label), ['全部', '女生', '男生', '动漫角色']);
+  });
+
+  test('every species belongs to exactly one category besides 全部', () {
+    for (final s in Species.values) {
+      expect(Category.values.where((c) => c.species == s), hasLength(1), reason: s.name);
+    }
   });
 
   test('adoptedPets keeps adoption order and skips unknown ids', () {

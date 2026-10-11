@@ -37,9 +37,15 @@ class PetWindowController extends ChangeNotifier {
     required this._player,
     required this._push,
     this.prepareTimeout = kPrepareTimeout,
+    this.onAdopted,
   });
 
   final Duration prepareTimeout;
+
+  /// The user put [petId] on the desktop: [firstTime] when it was not adopted
+  /// before (telemetry's pet_adopt / pet_switch). Not called for a switch that
+  /// came in through sync.
+  final void Function(String petId, bool firstTime)? onAdopted;
 
   final PetLibrary _library;
   final SettingsStore _settings;
@@ -89,7 +95,9 @@ class PetWindowController extends ChangeNotifier {
 
   /// Throws [AdoptError]. The old pet keeps playing until the new one's idle
   /// clip is matted and on screen (spec 6).
-  Future<void> adopt(String petId) async {
+  Future<void> adopt(String petId) => _adopt(petId, byUser: true);
+
+  Future<void> _adopt(String petId, {required bool byUser}) async {
     final pet = PetLibrary.byId(_pets, petId);
     if (pet == null) throw const AdoptError('unknown_pet');
     if (!pet.isComplete) throw const AdoptError('missing_assets');
@@ -113,9 +121,38 @@ class PetWindowController extends ChangeNotifier {
     } finally {
       _switching = false;
     }
+    final firstTime = !_state.isAdopted(petId);
     _state = _state.adopted(petId);
     _currentAction = kIdleAction;
     _error = null;
+    _persist(_state);
+    notifyListeners();
+    if (byUser) onAdopted?.call(petId, firstTime);
+    await _push(_state);
+  }
+
+  /// The account's settings won a sync (web platform spec 4.2): its adopted
+  /// list replaces ours, and its pet goes on the desktop when this computer
+  /// has it complete and is not busy. Otherwise whoever is on the desktop
+  /// stays -- and stays listed, so settings.json keeps its invariant.
+  Future<void> applySynced(LibraryState s) async {
+    final want = s.currentPetId;
+    final usable = want != null && (PetLibrary.byId(_pets, want)?.isComplete ?? false);
+    if (usable && want != _state.currentPetId && !_switching && _state.preparingPetId == null) {
+      try {
+        await _adopt(want, byUser: false);
+      } on AdoptError catch (e) {
+        developer.log('synced pet $want not shown: $e', name: 'aipet.pet_window');
+      }
+    }
+    final current = _state.currentPetId;
+    final ids = [...s.adoptedPetIds];
+    for (final id in [want, current]) {
+      if (id != null && !ids.contains(id)) ids.add(id);
+    }
+    final next = LibraryState(currentPetId: current, adoptedPetIds: ids, preparingPetId: _state.preparingPetId);
+    if (next == _state) return;
+    _state = next;
     _persist(_state);
     notifyListeners();
     await _push(_state);

@@ -1,5 +1,6 @@
 import 'dart:ui';
 
+import 'package:aipet/domain/pet.dart';
 import 'package:aipet/services/hud_bridge.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -14,12 +15,27 @@ const view = HudView(
   intimacy: 57,
   satiety: 100,
   health: 100,
+  buttons: kHudButtons,
   enabled: {'stand', 'walk', 'feed'},
 );
 
 void main() {
   test('HudView survives the channel', () {
     expect(HudView.fromJson(Map<Object?, Object?>.from(view.toJson())), view);
+    const c = HudView(
+        name: '小雅', cover: '', status: '', companionDays: 1, todayInteractions: 0, intimacy: 50, satiety: 50,
+        health: 100, buttons: ['stand', 'dance', 'talk'], enabled: {'stand', 'dance', 'talk'});
+    expect(HudView.fromJson(Map<Object?, Object?>.from(c.toJson())), c);
+  });
+
+  test('a dog or cat gets the four pet buttons, then the rest of its actions; a character gets her own', () {
+    expect(hudButtonsFor(Species.dog, ['stand', 'walk', 'sleep', 'feed', 'lick_paw']),
+        [...kHudButtons, 'sleep', 'lick_paw']);
+    expect(hudButtonsFor(Species.cat, ['stand']), kHudButtons);
+    expect(hudButtonsFor(Species.other, ['stand']), kHudButtons);
+    for (final s in [Species.girl, Species.boy, Species.anime]) {
+      expect(hudButtonsFor(s, ['stand', 'act_coy', 'dance', 'talk']), ['stand', 'act_coy', 'dance', 'talk']);
+    }
   });
 
   test('show / update / hide reach the panel with the pet window rectangle', () async {
