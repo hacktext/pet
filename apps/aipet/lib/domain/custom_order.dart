@@ -20,6 +20,10 @@ enum CustomStatus {
   static CustomStatus? fromWire(Object? s) => {for (final v in values) v.wire: v}[s];
 
   bool get awaitingPayment => this == draft || this == pendingPayment;
+
+  /// Paid and not finished: the server will move it on (待生成, 生成中, 审核中),
+  /// so a page showing it is worth asking again.
+  bool get inProgress => this == paid || this == generating || this == review;
 }
 
 enum PayStatus {

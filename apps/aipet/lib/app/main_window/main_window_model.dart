@@ -208,7 +208,7 @@ class MainWindowModel extends ChangeNotifier {
         _visible &&
         _tab == 1 &&
         _account.signedIn &&
-        _customs.any((r) => r.status == CustomStatus.generating);
+        _customs.any((r) => r.status.inProgress);
     if (want) {
       _customPoll ??= Timer.periodic(customPollInterval, (_) => unawaited(loadCustoms()));
     } else {

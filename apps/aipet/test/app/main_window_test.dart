@@ -309,12 +309,43 @@ void main() {
       await tester.pump();
       expect(asks(), ++n);
       expect(find.text('审核中'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 30)); // 审核中 is still in progress
+      await tester.pump();
+      expect(asks(), ++n);
+
+      status = 'delivered';
+      await tester.pump(const Duration(seconds: 30));
+      await tester.pump();
+      expect(asks(), ++n);
+      expect(find.text('已完成'), findsOneWidget);
       await tester.pump(const Duration(seconds: 60));
-      expect(asks(), n); // nothing generating any more
+      expect(asks(), n); // nothing in progress any more
     } finally {
       model.setTab(0);
     }
   });
+
+  for (final (status, polls) in [('paid', true), ('review', true), ('delivered', false), ('failed', false)]) {
+    testWidgets('a $status-only list ${polls ? 'keeps' : 'does not start'} the 30 s refresh', (tester) async {
+      api.reply = (r) => r.url.path.endsWith('/requests')
+          ? FakeHttp.ok([
+              {'id': 5, 'name': '豆豆', 'species': 'cat', 'status': status},
+            ])
+          : FakeHttp.ok([]);
+      await open(tester);
+      await signIn(tester);
+      try {
+        model.setTab(1);
+        await tester.pump();
+        await tester.pump();
+        final n = api.to('/api/aipet/custom/requests').length;
+        await tester.pump(const Duration(seconds: 30));
+        expect(api.to('/api/aipet/custom/requests').length, polls ? n + 1 : n);
+      } finally {
+        model.setTab(0);
+      }
+    });
+  }
 
   testWidgets('a delivered pet this computer lacks asks the pet window to fetch it', (tester) async {
     api.reply = (r) => r.url.path.endsWith('/requests')
