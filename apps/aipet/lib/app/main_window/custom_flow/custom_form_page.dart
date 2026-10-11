@@ -71,10 +71,10 @@ class _CustomFormPageState extends State<CustomFormPage> {
               Wrap(spacing: 8, children: [
                 for (final g in Group.values)
                   ChoiceChip(
-                    label: Text(g.label),
+                    label: _SoonLabel(g.label, open: isGroupOpen(g)),
                     selected: _m.group == g,
                     selectedColor: AppColors.accentSoft,
-                    onSelected: _m.busy ? null : (_) => _m.setGroup(g),
+                    onSelected: _m.busy || !isGroupOpen(g) ? null : (_) => _m.setGroup(g),
                   ),
               ]),
               const SizedBox(height: 6),
@@ -82,10 +82,10 @@ class _CustomFormPageState extends State<CustomFormPage> {
                 for (final c in _m.group.categories)
                   if (c.species != null)
                     ChoiceChip(
-                      label: Text(c.label),
+                      label: _SoonLabel(c.label, open: isOpenForCustom(c)),
                       selected: _m.category == c,
                       selectedColor: AppColors.accentSoft,
-                      onSelected: _m.busy ? null : (_) => _m.setCategory(c),
+                      onSelected: _m.busy || !isOpenForCustom(c) ? null : (_) => _m.setCategory(c),
                     ),
               ]),
               if (_m.categoryError != null) ...[
@@ -138,6 +138,23 @@ class _CustomFormPageState extends State<CustomFormPage> {
           ]),
         ),
       );
+}
+
+/// A chip's label, with 即将开放 after it when it cannot be picked yet.
+class _SoonLabel extends StatelessWidget {
+  const _SoonLabel(this.text, {required this.open});
+
+  final String text;
+  final bool open;
+
+  @override
+  Widget build(BuildContext context) => Row(mainAxisSize: MainAxisSize.min, children: [
+        Text(text),
+        if (!open) ...[
+          const SizedBox(width: 4),
+          const Text('即将开放', style: TextStyle(fontSize: 11, color: AppColors.textMuted)),
+        ],
+      ]);
 }
 
 class _Photos extends StatelessWidget {

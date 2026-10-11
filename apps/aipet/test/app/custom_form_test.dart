@@ -74,13 +74,20 @@ void main() {
     expect(m.message, '无法读取图片：bad.jpg');
   });
 
-  test('switching group picks its first real sub-category', () {
+  test('only cats and dogs can be ordered for now (generation spec 2 / 9)', () {
     final m = model();
     expect(m.category, Category.cat);
     m.setGroup(Group.people);
-    expect(m.category, Category.girl);
-    m.setCategory(Category.anime);
-    expect(m.category.species!.name, 'anime');
+    expect((m.group, m.category), (Group.pets, Category.cat));
+    m.setCategory(Category.other);
+    expect(m.category, Category.cat);
+    m.setCategory(Category.girl);
+    expect(m.category, Category.cat);
+    m.setCategory(Category.dog);
+    expect(m.category, Category.dog);
+    expect(isGroupOpen(Group.pets), isTrue);
+    expect(isGroupOpen(Group.people), isFalse);
+    expect([for (final c in Category.values) if (isOpenForCustom(c)) c], [Category.cat, Category.dog]);
   });
 
   test('submit uploads every photo then creates the request', () async {
@@ -181,7 +188,8 @@ void main() {
     await f;
   });
 
-  testWidgets('page: counter, chips, disabled button until ready, submitted callback', (tester) async {
+  testWidgets('page: counter, chips (人物 and 其他宠物 coming soon), disabled button until ready, submitted callback',
+      (tester) async {
     // Tall enough that the ListView builds 下一步 too.
     tester.view.physicalSize = const Size(420, 1600);
     tester.view.devicePixelRatio = 1.0;
@@ -194,6 +202,7 @@ void main() {
     for (final t in ['宠物', '人物', '猫猫', '狗狗', '其他宠物', '点击上传照片']) {
       expect(find.text(t), findsOneWidget, reason: t);
     }
+    expect(find.text('即将开放'), findsNWidgets(2)); // on 人物 and on 其他宠物
     FilledButton next() => tester.widget<FilledButton>(find.widgetWithText(FilledButton, '下一步'));
     expect(next().onPressed, isNull);
     await tester.enterText(find.byType(TextField), '豆豆');
@@ -201,11 +210,14 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('2/8'), findsOneWidget);
     expect(next().onPressed, isNotNull);
-    await tester.tap(find.text('人物'));
+    await tester.tap(find.text('人物'), warnIfMissed: false);
+    await tester.tap(find.text('其他宠物'), warnIfMissed: false);
     await tester.pump();
-    expect(find.text('女生'), findsOneWidget);
+    expect(find.text('女生'), findsNothing); // still on 宠物
+    await tester.tap(find.text('狗狗'));
+    await tester.pump();
     await tester.tap(find.widgetWithText(FilledButton, '下一步'));
     await tester.pumpAndSettle();
-    expect(done!.species.name, 'girl');
+    expect(done!.species.name, 'dog');
   });
 }

@@ -9,6 +9,14 @@ import 'custom_deps.dart';
 const kMaxPhotos = 3;
 const kNameMax = 8;
 
+/// What can be generated today (generation spec 2 / 9): cats and dogs. The
+/// rest show 即将开放 and cannot be picked.
+const kOpenCategories = {Category.cat, Category.dog};
+
+bool isOpenForCustom(Category c) => kOpenCategories.contains(c);
+
+bool isGroupOpen(Group g) => g.categories.any(isOpenForCustom);
+
 /// One chosen photo, already shrunk to the JPEG that gets uploaded; [key] once
 /// OSS has it, so a retry sends only what is still missing.
 class FormPhoto {
@@ -74,14 +82,14 @@ class CustomFormModel extends ChangeNotifier {
   }
 
   void setGroup(Group g) {
-    if (g == group) return;
-    _category = g.categories.firstWhere((c) => c.species != null);
+    if (g == group || !isGroupOpen(g)) return;
+    _category = g.categories.firstWhere(isOpenForCustom);
     _categoryError = null;
     notifyListeners();
   }
 
   void setCategory(Category c) {
-    if (c.species == null) return;
+    if (!isOpenForCustom(c)) return;
     _category = c;
     _categoryError = null;
     notifyListeners();
