@@ -126,14 +126,17 @@ class CustomDownloader {
     var all = true;
     // Keep going after a failure: every file verified now is one less next time.
     for (final f in assets.files) {
+      if (!_signedIn()) return false; // verified files stay staged for next time
       if (!await _ensureFile(staging, f)) all = false;
     }
     if (!all) return false;
+    if (!_signedIn()) return false;
     if (!await _prune(staging, assets)) return false;
     if (!await _isComplete(staging, d.petId)) {
       developer.log('${d.petId}: the delivered files do not make a complete pet', name: _log);
       return false;
     }
+    if (!_signedIn()) return false; // the prune and checks above awaited
     return _install(staging, d.petId);
   }
 

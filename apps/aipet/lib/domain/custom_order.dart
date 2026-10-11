@@ -211,22 +211,29 @@ class PayOrder {
   }
 }
 
-final _petIdPattern = RegExp(r'^[a-z0-9-]{1,64}$');
+final _petIdPattern = RegExp(r'^custom-[a-z0-9-]{1,57}$');
 
 /// A path segment of a delivered file: no leading dot (so no `.`, `..` or
-/// hidden files), no slashes, colons or other characters Windows minds.
-final _segmentPattern = RegExp(r'^[A-Za-z0-9_][A-Za-z0-9_.-]*$');
+/// hidden files), no trailing dot (Windows strips it), no slashes, colons or
+/// other characters Windows minds.
+final _segmentPattern = RegExp(r'^[A-Za-z0-9_][A-Za-z0-9_.-]*(?<!\.)$');
+final _reservedName = RegExp(r'^(con|prn|aux|nul|com[1-9]|lpt[1-9])$');
 final _sha256Pattern = RegExp(r'^[0-9a-f]{64}$');
 
-/// A folder name under pets/ that a delivered pet may use (the same rule as
-/// pet.json ids), never a dot-folder.
+/// A folder name under pets/ that a delivered pet may use: `custom-` and the
+/// rest of an id (at most 64 characters), never a dot-folder or a built-in's id.
 bool isCustomPetId(String id) => _petIdPattern.hasMatch(id);
 
 /// `stand.mp4`, `voices/a/stand-1.wav`: relative, forward slashes, and nothing
-/// that could step outside the pet folder.
+/// that could step outside the pet folder, name a Windows device, or collide
+/// with the downloader's `.part` files.
 bool isSafeAssetPath(String path) {
   if (path.isEmpty || path.length > 200) return false;
-  return path.split('/').every(_segmentPattern.hasMatch);
+  if (path.toLowerCase().endsWith('.part')) return false;
+  final segments = path.split('/');
+  if (!segments.every(_segmentPattern.hasMatch)) return false;
+  // `con.txt` is the console too: the device name is what precedes the first dot.
+  return !segments.any((s) => _reservedName.hasMatch(s.toLowerCase().split('.').first));
 }
 
 /// One delivered custom pet (`GET custom/deliveries`; delivered_at is not used).
@@ -296,6 +303,13 @@ class CustomAssets {
     }
     final paths = {for (final f in files) f.path.toLowerCase()};
     if (paths.length != files.length || !paths.contains('pet.json')) return null;
+    // A file `a` and a file `a/b` cannot both exist: `a` would be a folder.
+    for (final p in paths) {
+      final segments = p.split('/');
+      for (var i = 1; i < segments.length; i++) {
+        if (paths.contains(segments.take(i).join('/'))) return null;
+      }
+    }
     return CustomAssets(petId: petId, files: List.unmodifiable(files));
   }
 }

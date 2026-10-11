@@ -120,13 +120,15 @@ class MainWindowModel extends ChangeNotifier {
 
   void _petsArrived(List<ReadyPet> ready) {
     if (_disposed) return;
+    if (ready.isEmpty) return;
+    // Announcing is once per pet; listing is every time (the folder may have
+    // been deleted and has come back).
     final fresh = [
       for (final r in ready)
         if (_announced.add(r.petId)) r,
     ];
-    if (fresh.isEmpty) return;
     _pets = _library.scan();
-    _ready = fresh.last;
+    if (fresh.isNotEmpty) _ready = fresh.last;
     notifyListeners();
     unawaited(loadCustoms());
   }

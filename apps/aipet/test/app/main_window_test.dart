@@ -630,6 +630,22 @@ void main() {
     expect(find.text('你的「豆豆」做好了'), findsNothing);
   });
 
+  testWidgets('an announced pet arriving again after its folder reappears is listed, without a second banner',
+      (tester) async {
+    await open(tester);
+    const ready = ReadyPet(petId: 'custom-7', name: '豆豆');
+    await petSide.pushReady([ready]); // folder not there yet
+    await tester.pump();
+    await tester.tap(find.byTooltip('知道了'));
+    await tester.pump();
+    expect(model.plazaPets.map((p) => p.id), isNot(contains('custom-7')));
+    writePet(Directory('${tmp.path}\\custom'), id: 'custom-7', origin: 'custom', species: 'cat', name: '豆豆');
+    await petSide.pushReady([ready]);
+    await tester.pump();
+    expect(model.plazaPets.map((p) => p.id), contains('custom-7'));
+    expect(find.text('你的「豆豆」做好了'), findsNothing);
+  });
+
   test('a push during startup and the same pet from takeReady show one banner', () async {
     writePet(Directory('${tmp.path}\\custom'), id: 'custom-7', origin: 'custom', species: 'cat', name: '豆豆');
     const ready = ReadyPet(petId: 'custom-7', name: '豆豆');

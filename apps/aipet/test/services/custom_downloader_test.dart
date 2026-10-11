@@ -271,6 +271,35 @@ void main() {
     expect(files.requested, isEmpty);
   });
 
+  test('signed out mid-download: nothing installed, onInstalled not called, verified files stay staged', () async {
+    deliver(7, 'custom-7');
+    final prev = files.serve;
+    files.serve = (u) {
+      final r = prev(u);
+      if (u.pathSegments.last == 'cover.png') signedIn = false; // the user signs out during the fetch
+      return r;
+    };
+    await dl.run();
+    expect(installed, isEmpty);
+    expect(Directory('${pets.path}\\custom-7').existsSync(), isFalse);
+    expect(staged('custom-7', 'pet.json').existsSync() || staged('custom-7', 'cover.png').existsSync(), isTrue);
+    expect(downloaded().length, lessThan(4)); // it stopped fetching
+  });
+
+  test('signed out after the last file, before install: nothing installed', () async {
+    deliver(7, 'custom-7');
+    final prev = files.serve;
+    files.serve = (u) {
+      final r = prev(u);
+      if (u.pathSegments.last == 'walk.mp4') signedIn = false; // the last file in the manifest
+      return r;
+    };
+    await dl.run();
+    expect(installed, isEmpty);
+    expect(Directory('${pets.path}\\custom-7').existsSync(), isFalse);
+    expect(staged('custom-7', 'walk.mp4').existsSync(), isTrue);
+  });
+
   test('files that do not add up to a whole pet are not installed', () async {
     deliver(7, 'custom-7');
     server['custom-7']!.remove('walk.mp4'); // pet.json still lists walk

@@ -112,4 +112,48 @@ void main() {
     expect(CustomAssets.fromJson({'pet_id': '../x', 'files': [file('pet.json')]}), isNull);
     expect(CustomAssets.fromJson({'pet_id': 'custom-7', 'files': []}), isNull);
   });
+
+  test('assets: names Windows would alias or the downloader owns reject the whole manifest', () {
+    final hash = 'ab' * 32;
+    Map<String, Object?> file(String path) =>
+        {'path': path, 'bytes': 10, 'sha256': hash, 'url': 'https://oss.test/$path?sig=1'};
+    Object? parse(List<String> paths) =>
+        CustomAssets.fromJson({'pet_id': 'custom-7', 'files': [file('pet.json'), for (final p in paths) file(p)]});
+    expect(parse(['ok.mp4']), isNotNull);
+    for (final bad in [
+      'pet.json.', // Windows strips the dot: the same file as pet.json
+      'a./b.mp4',
+      'stand.mp4.part',
+      'x.PART',
+      'con',
+      'CON.txt',
+      'voices/Nul.wav',
+      'aux.tar.gz',
+      'com1.mp4',
+      'LPT9',
+    ]) {
+      expect(parse([bad]), isNull, reason: bad);
+    }
+    expect(parse(['voices', 'voices/a.wav']), isNull, reason: 'a file and a folder of the same name');
+    expect(parse(['Voices/a.wav', 'voices']), isNull, reason: 'case-insensitive');
+    expect(parse(['voices/a.wav', 'voices/b.wav', 'console.mp4', 'com10.mp4']), isNotNull);
+  });
+
+  test('a pet id is a custom id: custom- and at most 64 characters', () {
+    expect(isCustomPetId('custom-123'), isTrue);
+    expect(isCustomPetId('custom-${'a' * 57}'), isTrue);
+    expect(isCustomPetId('custom-${'a' * 58}'), isFalse);
+    for (final bad in ['abc', 'custom-', 'Custom-1', 'customs-1', 'custom_1', 'xcustom-1']) {
+      expect(isCustomPetId(bad), isFalse, reason: bad);
+    }
+    final hash = 'ab' * 32;
+    expect(
+        CustomAssets.fromJson({
+          'pet_id': 'abc',
+          'files': [
+            {'path': 'pet.json', 'bytes': 1, 'sha256': hash, 'url': 'https://oss.test/x'},
+          ],
+        }),
+        isNull);
+  });
 }
