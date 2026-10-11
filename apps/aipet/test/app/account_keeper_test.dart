@@ -25,7 +25,7 @@ void main() {
   late AccountKeeper keeper;
   late SyncService sync;
 
-  AccountKeeper make() {
+  AccountKeeper make({void Function()? onSynced}) {
     late final AccountKeeper k;
     final api = ApiClient(http, baseUrl: 'https://x.test', token: () => k.token, onUnauthorized: () => k.expired());
     sync = SyncService(root, api: api, local: FakeLocal(), signedIn: () => k.signedIn, now: () => now);
@@ -37,6 +37,7 @@ void main() {
       deviceId: '0b6c3d4e-1111-4222-8333-444455556666',
       deviceName: 'MY-PC',
       push: (v) async => pushed.add(v),
+      onSynced: onSynced,
     );
   }
 
@@ -159,5 +160,15 @@ void main() {
     await keeper.tick();
     expect(http.to('/api/aipet/sync'), hasLength(2));
     expect(pushed.last.lastSyncAt, now);
+  });
+
+  test('every sync, the one after login included, is followed by onSynced', () async {
+    var synced = 0;
+    keeper = make(onSynced: () => synced++);
+    await keeper.login('13800138000', '123456');
+    await Future<void>.delayed(Duration.zero); // login starts its sync without waiting for it
+    expect(synced, 1);
+    await keeper.syncNow();
+    expect(synced, 2);
   });
 }

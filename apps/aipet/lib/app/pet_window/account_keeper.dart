@@ -20,6 +20,7 @@ class AccountKeeper implements AccountHandler {
     required this.deviceId,
     required this.deviceName,
     required this._push,
+    this.onSynced,
   })  : _store = store,
         _account = store.load();
 
@@ -30,6 +31,9 @@ class AccountKeeper implements AccountHandler {
   final SyncService _sync;
   final TrackFn _track;
   final Future<void> Function(AccountView) _push;
+  /// After every sync (generation spec 6.1: delivered custom pets are looked
+  /// for then). The sync after login counts, so this covers signing in too.
+  final void Function()? onSynced;
   Account? _account;
 
   String? get token => _account?.token;
@@ -56,7 +60,10 @@ class AccountKeeper implements AccountHandler {
   Future<void> tick() async {
     final before = _sync.lastSyncAt;
     await _sync.maybeSync();
-    if (_sync.lastSyncAt != before) unawaited(_push(view));
+    if (_sync.lastSyncAt != before) {
+      unawaited(_push(view));
+      onSynced?.call();
+    }
   }
 
   @override
@@ -126,6 +133,7 @@ class AccountKeeper implements AccountHandler {
     unawaited(_push(view)); // syncing
     final r = await running;
     unawaited(_push(view));
+    onSynced?.call();
     return AccountReply(ok: r is ApiOk, message: r.message);
   }
 }

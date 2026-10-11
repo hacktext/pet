@@ -14,6 +14,8 @@ import '../../services/account_store.dart';
 import '../../services/api_client.dart';
 import '../../services/app_paths.dart';
 import '../../services/device_identity.dart';
+import '../../services/custom_downloader.dart';
+import '../../services/file_download.dart';
 import '../../services/hud_bridge.dart';
 import '../../services/matte_cache.dart';
 import '../../services/pet_library.dart';
@@ -92,6 +94,29 @@ Future<void> runPetWindow() async {
     onAdopted: (id, firstTime) => telemetry.track(firstTime ? 'pet_adopt' : 'pet_switch', petId: id),
   );
 
+  // Delivered custom pets (generation spec 6.1). This window is the only
+  // writer of pets/; the library only asks it to look.
+  final downloads = CustomDownloader(
+    api: api,
+    transport: IoDownloadTransport(),
+    petsRoot: customPetsRoot(appData),
+    signedIn: () => account.signedIn,
+    onInstalled: (ready) async {
+      // Must not throw: the pets are installed, and a throw here would leave
+      // them unannounced. Each step is guarded so one failure spares the other.
+      try {
+        controller.rescan();
+      } catch (e) {
+        developer.log('rescan after install failed: $e', name: 'aipet.custom');
+      }
+      try {
+        await bridge.pushReady([for (final d in ready) ReadyPet(petId: d.petId, name: d.name)]);
+      } catch (e) {
+        developer.log('announcing ready pets failed: $e', name: 'aipet.custom');
+      }
+    },
+  );
+
   final mover = DesktopWindowMover(kPetTitle);
   final stats = StatsKeeper(StatsStore(appData), onSaved: () => sync.statsChanged());
   final voices = VoiceStore(appData);
@@ -127,6 +152,7 @@ Future<void> runPetWindow() async {
     deviceId: device.id,
     deviceName: _deviceName(),
     push: (v) => bridge.pushAccount(v),
+    onSynced: () => unawaited(downloads.run()),
   );
   // Below the account: both calls carry its token when there is one, which
   // binds this device (and its events) to the user on the server.
@@ -169,6 +195,7 @@ Future<void> runPetWindow() async {
     onMainWindowClosing: closePolicy.libraryClosing,
     onQuit: quit,
     account: account,
+    onRefreshCustom: downloads.run,
   )..start();
 
   runApp(PetWindowApp(
@@ -191,6 +218,7 @@ Future<void> runPetWindow() async {
   // After boot: loading settings.json is not the user changing them.
   syncLocal.watchSettings(sync.settingsChanged);
   account.start();
+  unawaited(downloads.run()); // after boot: a pet installed now is scanned on top of boot's list
   if (controller.currentPet == null) await launcher.open();
 }
 
