@@ -151,6 +151,12 @@ class ApiClient {
 
   Future<ApiResult> customRequests() => _call('GET', '/api/aipet/custom/requests');
 
+  // Delivered custom pets (generation spec 4.6): the pet window's downloader.
+
+  Future<ApiResult> customDeliveries() => _call('GET', '/api/aipet/custom/deliveries');
+
+  Future<ApiResult> customAssets(int requestId) => _call('GET', '/api/aipet/custom/requests/$requestId/assets');
+
   Future<ApiResult> _call(String method, String path, [Object? body]) async {
     final HttpReply reply;
     String? token;

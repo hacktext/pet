@@ -243,7 +243,7 @@ void main() {
   testWidgets('我的定制 lists requests with their status; 待支付 offers 去支付', (tester) async {
     api.reply = (r) => r.url.path.endsWith('/requests')
         ? FakeHttp.ok([
-            {'id': 2, 'name': '豆豆', 'species': 'cat', 'plan_name': '标准版', 'status': 'making'},
+            {'id': 2, 'name': '豆豆', 'species': 'cat', 'plan_name': '标准版', 'status': 'generating'},
             {'id': 1, 'name': '小白', 'species': 'girl', 'status': 'pending_payment'},
           ])
         : FakeHttp.ok([]);
@@ -256,7 +256,7 @@ void main() {
     expect(find.text('猫猫 · 标准版'), findsOneWidget);
     expect(find.text('小白'), findsOneWidget);
     expect(find.text('女生'), findsOneWidget);
-    expect(find.text('制作中'), findsOneWidget);
+    expect(find.text('生成中'), findsOneWidget);
     expect(find.text('待支付'), findsOneWidget);
     expect(find.text('去支付'), findsOneWidget);
   });
@@ -271,7 +271,7 @@ void main() {
 
   testWidgets('我的 scrolls as a whole: many orders and no pets do not overflow', (tester) async {
     api.reply = (r) => FakeHttp.ok([
-          for (var i = 1; i <= 50; i++) {'id': i, 'name': '宠物$i', 'species': 'dog', 'status': 'done'},
+          for (var i = 1; i <= 50; i++) {'id': i, 'name': '宠物$i', 'species': 'dog', 'status': 'delivered'},
         ]);
     await open(tester);
     await signIn(tester);
@@ -327,7 +327,7 @@ void main() {
     api.reply = (r) => r.url.path.endsWith('/requests')
         ? FakeHttp.ok([
             for (var i = 1; i <= 50; i++)
-              {'id': i, 'name': '宠物$i', 'species': 'dog', 'status': 'done', 'cover_url': 'https://x/c$i.png'},
+              {'id': i, 'name': '宠物$i', 'species': 'dog', 'status': 'delivered', 'cover_url': 'https://x/c$i.png'},
           ])
         : FakeHttp.ok([]);
     await open(tester);
@@ -470,7 +470,7 @@ void main() {
     api.reply = (_) => ++n == 1
         ? first.future
         : FakeHttp.ok([
-            {'id': 2, 'name': '豆豆', 'species': 'cat', 'status': 'making'},
+            {'id': 2, 'name': '豆豆', 'species': 'cat', 'status': 'generating'},
           ]);
     await model.start();
     await petSide.pushAccount(const AccountView(phoneMasked: '138****0000', name: 'n'));

@@ -116,4 +116,14 @@ void main() {
     http.reply = (_) => throw Exception('x');
     expect((await api.me()).message, '网络连接失败，请稍后再试');
   });
+
+  test('custom deliveries and assets: GET, with the token', () async {
+    token = '1|t';
+    await api.customDeliveries();
+    await api.customAssets(7);
+    expect([for (final r in http.sent) '${r.method} ${r.url.path}'],
+        ['GET /api/aipet/custom/deliveries', 'GET /api/aipet/custom/requests/7/assets']);
+    expect(http.sent.last.headers['Authorization'], 'Bearer 1|t');
+    expect(http.sent.last.body, isNull);
+  });
 }

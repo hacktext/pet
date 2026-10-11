@@ -1,14 +1,16 @@
 import 'library_state.dart';
 import 'pet.dart';
 
-/// A custom pet's progress (custom order spec 2): draft and pending_payment
-/// both read as 待支付.
+/// A custom pet's progress (generation spec 3, revising custom order spec 2):
+/// draft and pending_payment both read as 待支付.
 enum CustomStatus {
   draft('draft', '待支付'),
   pendingPayment('pending_payment', '待支付'),
-  paid('paid', '待制作'),
-  making('making', '制作中'),
-  done('done', '已完成'),
+  paid('paid', '待生成'),
+  generating('generating', '生成中'),
+  review('review', '审核中'),
+  delivered('delivered', '已完成'),
+  failed('failed', '生成失败'),
   refunded('refunded', '已退款');
 
   const CustomStatus(this.wire, this.label);
@@ -120,6 +122,11 @@ class CustomRequestInfo {
     this.priceCents,
     this.orderNo,
     this.coverUrl,
+    this.petId,
+    this.stage,
+    this.stageDone,
+    this.stageTotal,
+    this.failReason,
   });
 
   final int id;
@@ -129,6 +136,31 @@ class CustomRequestInfo {
   final String? planCode, planName, orderNo, coverUrl;
   final int? priceCents;
 
+  /// `custom-<id>`: the folder under pets/ it is delivered into; null until
+  /// the server set up its generation.
+  final String? petId;
+
+  /// The latest progress while generating: which step, and n of m.
+  final String? stage;
+  final int? stageDone, stageTotal;
+
+  /// Failed only. For support; the list does not show it.
+  final String? failReason;
+
+  /// What 我的定制 says (generation spec 6.2). The worker counts within a
+  /// step (refs 1/3, then video 1/7), so the count is shown with the step's
+  /// name -- a bare n/m would seem to go backwards when the step changes.
+  String get statusText {
+    final total = stageTotal ?? 0;
+    final done = (stageDone ?? 0).clamp(0, total);
+    return switch (status) {
+      CustomStatus.generating when total > 0 && stage == 'refs' => '生成中（参考图 $done/$total）',
+      CustomStatus.generating when total > 0 && stage == 'video' => '生成中（动作 $done/$total）',
+      CustomStatus.failed => '生成失败（我们会联系你处理或退款）',
+      _ => status.label,
+    };
+  }
+
   static CustomRequestInfo? fromJson(Object? j) {
     if (j is! Map) return null;
     final id = j['id'], name = j['name'];
@@ -136,6 +168,8 @@ class CustomRequestInfo {
     final status = CustomStatus.fromWire(j['status']);
     if (id is! int || name is! String || species == null || status == null) return null;
     String? s(String k) => j[k] is String ? j[k] as String : null;
+    int? n(String k) => j[k] is int ? j[k] as int : null;
+    final petId = s('pet_id');
     return CustomRequestInfo(
       id: id,
       name: name,
@@ -143,9 +177,14 @@ class CustomRequestInfo {
       status: status,
       planCode: s('plan_code'),
       planName: s('plan_name'),
-      priceCents: j['price_cents'] is int ? j['price_cents'] as int : null,
+      priceCents: n('price_cents'),
       orderNo: s('order_no'),
       coverUrl: s('cover_url'),
+      petId: petId != null && isCustomPetId(petId) ? petId : null,
+      stage: s('stage'),
+      stageDone: n('stage_done'),
+      stageTotal: n('stage_total'),
+      failReason: s('fail_reason'),
     );
   }
 }
@@ -165,5 +204,94 @@ class PayOrder {
     final no = j['order_no'], amount = j['amount_cents'], url = j['code_url'], secs = j['expires_in'];
     if (no is! String || amount is! int || url is! String || secs is! int) return null;
     return PayOrder(orderNo: no, amountCents: amount, codeUrl: url, expiresIn: Duration(seconds: secs));
+  }
+}
+
+final _petIdPattern = RegExp(r'^[a-z0-9-]{1,64}$');
+
+/// A path segment of a delivered file: no leading dot (so no `.`, `..` or
+/// hidden files), no slashes, colons or other characters Windows minds.
+final _segmentPattern = RegExp(r'^[A-Za-z0-9_][A-Za-z0-9_.-]*$');
+final _sha256Pattern = RegExp(r'^[0-9a-f]{64}$');
+
+/// A folder name under pets/ that a delivered pet may use (the same rule as
+/// pet.json ids), never a dot-folder.
+bool isCustomPetId(String id) => _petIdPattern.hasMatch(id);
+
+/// `stand.mp4`, `voices/a/stand-1.wav`: relative, forward slashes, and nothing
+/// that could step outside the pet folder.
+bool isSafeAssetPath(String path) {
+  if (path.isEmpty || path.length > 200) return false;
+  return path.split('/').every(_segmentPattern.hasMatch);
+}
+
+/// One delivered custom pet (`GET custom/deliveries`; delivered_at is not used).
+class CustomDelivery {
+  const CustomDelivery({required this.id, required this.petId, required this.name});
+
+  final int id;
+  final String petId;
+  final String name;
+
+  static CustomDelivery? fromJson(Object? j) {
+    if (j is! Map) return null;
+    final id = j['id'], petId = j['pet_id'], name = j['name'];
+    if (id is! int || petId is! String || !isCustomPetId(petId) || name is! String) return null;
+    return CustomDelivery(id: id, petId: petId, name: name);
+  }
+
+  static List<CustomDelivery> listFrom(Object? data) =>
+      [for (final j in (data is List ? data : const [])) ?CustomDelivery.fromJson(j)];
+}
+
+/// One file of a delivered pet: where it goes inside the pet folder, and how
+/// to tell it arrived whole.
+class CustomAsset {
+  const CustomAsset({required this.path, required this.bytes, required this.sha256, required this.url});
+
+  final String path;
+  final int bytes;
+
+  /// Lower-case hex.
+  final String sha256;
+
+  /// A signed GET, good for 30 minutes.
+  final String url;
+
+  static CustomAsset? fromJson(Object? j) {
+    if (j is! Map) return null;
+    final path = j['path'], bytes = j['bytes'], hash = j['sha256'], url = j['url'];
+    if (path is! String || !isSafeAssetPath(path)) return null;
+    if (bytes is! int || bytes < 0 || hash is! String || url is! String) return null;
+    final h = hash.toLowerCase();
+    if (!_sha256Pattern.hasMatch(h)) return null;
+    final u = Uri.tryParse(url);
+    if (u == null || (u.scheme != 'https' && u.scheme != 'http') || u.host.isEmpty) return null;
+    return CustomAsset(path: path, bytes: bytes, sha256: h, url: url);
+  }
+}
+
+/// `GET custom/requests/:id/assets`. All or nothing: a manifest with one
+/// unusable file, two files that are the same file on Windows, or no
+/// pet.json would install a broken pet.
+class CustomAssets {
+  const CustomAssets({required this.petId, required this.files});
+
+  final String petId;
+  final List<CustomAsset> files;
+
+  static CustomAssets? fromJson(Object? j) {
+    if (j is! Map) return null;
+    final petId = j['pet_id'], raw = j['files'];
+    if (petId is! String || !isCustomPetId(petId) || raw is! List || raw.isEmpty) return null;
+    final files = <CustomAsset>[];
+    for (final r in raw) {
+      final f = CustomAsset.fromJson(r);
+      if (f == null) return null;
+      files.add(f);
+    }
+    final paths = {for (final f in files) f.path.toLowerCase()};
+    if (paths.length != files.length || !paths.contains('pet.json')) return null;
+    return CustomAssets(petId: petId, files: List.unmodifiable(files));
   }
 }
