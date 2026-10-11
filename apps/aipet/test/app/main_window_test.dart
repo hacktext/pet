@@ -14,6 +14,7 @@ import 'package:aipet/services/window_bridge.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../support/fake_account.dart';
 import '../support/fake_http.dart';
 import '../support/fake_oss.dart';
 import '../support/fake_transport.dart';
@@ -27,11 +28,13 @@ void main() {
   late MainWindowModel model;
   late FakeTransport petEnd;
   late FakeHttp api;
+  late FakeAccount accountSide;
   late List<PickedFile> picks;
   var quits = 0;
 
   setUp(() {
     api = FakeHttp();
+    accountSide = FakeAccount();
     picks = [];
     tmp = Directory.systemTemp.createTempSync('mainwin_');
     final builtin = Directory('${tmp.path}\\builtin')..createSync();
@@ -47,7 +50,8 @@ void main() {
         state: () => petState,
         onAdopt: (id) => adoptImpl(id),
         onMainWindowClosing: () async {},
-        onQuit: () async => quits++)
+        onQuit: () async => quits++,
+        account: accountSide)
       ..start();
     model = MainWindowModel(
       library: PetLibrary(builtinRoot: builtin, customRoot: Directory('${tmp.path}\\custom')),
@@ -352,10 +356,76 @@ void main() {
     model.setTab(1);
     await tester.pumpAndSettle();
     expired = true;
+    final asked = api.sent.length;
     await tester.tap(find.text('去支付'));
     await tester.pumpAndSettle();
     expect(find.text('选择宠物版本'), findsNothing);
     expect(model.tab, 1);
     expect(find.text('登录已过期，请重新登录'), findsOneWidget);
+    // The pet window was asked to sign out; 我的 is back to the sign-in form.
+    expect(accountSide.calls, ['logout']);
+    expect(model.account.signedIn, isFalse);
+    expect(find.byKey(const Key('account-phone')), findsOneWidget);
+    expect(find.text('我的定制'), findsNothing);
+    expect(find.text('小白'), findsNothing);
+    // No loop: one plans request, nothing asked again on its own.
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+    expect(api.sent.length, asked + 1);
+    expect(accountSide.calls, ['logout']);
+  });
+
+  test('several 1003s in a row: one message, one sign-out', () async {
+    await model.start();
+    await petSide.pushAccount(const AccountView(phoneMasked: '138****0000', name: 'n'));
+    await Future<void>.delayed(Duration.zero);
+    final said = <String>[];
+    model.addListener(() {
+      final m = model.takeMessage();
+      if (m != null) said.add(m);
+    });
+    model.loginExpired();
+    model.loginExpired();
+    model.loginExpired();
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    model.loginExpired(); // signed out by now
+    expect(said, ['登录已过期，请重新登录']);
+    expect(accountSide.calls, ['logout']);
+    expect(model.account.signedIn, isFalse);
+  });
+
+  test('a list that arrives after sign-out does not come back', () async {
+    final reply = Completer<HttpReply>();
+    api.reply = (_) => reply.future;
+    await model.start();
+    await petSide.pushAccount(const AccountView(phoneMasked: '138****0000', name: 'n'));
+    await Future<void>.delayed(Duration.zero); // the push starts a list request, held
+    await petSide.pushAccount(AccountView.signedOut);
+    await Future<void>.delayed(Duration.zero);
+    reply.complete(FakeHttp.ok([
+      {'id': 1, 'name': '小白', 'species': 'girl', 'status': 'pending_payment'},
+    ]));
+    await Future<void>.delayed(Duration.zero);
+    expect(model.customs, isEmpty);
+  });
+
+  test('an older list request cannot overwrite a newer one', () async {
+    final first = Completer<HttpReply>();
+    var n = 0;
+    api.reply = (_) => ++n == 1
+        ? first.future
+        : FakeHttp.ok([
+            {'id': 2, 'name': '豆豆', 'species': 'cat', 'status': 'making'},
+          ]);
+    await model.start();
+    await petSide.pushAccount(const AccountView(phoneMasked: '138****0000', name: 'n'));
+    await Future<void>.delayed(Duration.zero);
+    await model.loadCustoms();
+    expect(model.customs.single.name, '豆豆');
+    first.complete(FakeHttp.ok([
+      {'id': 1, 'name': '小白', 'species': 'girl', 'status': 'pending_payment'},
+    ]));
+    await Future<void>.delayed(Duration.zero);
+    expect(model.customs.single.name, '豆豆');
   });
 }

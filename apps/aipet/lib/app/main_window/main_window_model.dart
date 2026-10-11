@@ -30,7 +30,9 @@ class MainWindowModel extends ChangeNotifier {
   int _tab = 0;
   String? _message;
   bool _closeFlow = false;
+  bool _expiring = false; // a 1003 was handled; the sign-out it asked for is out
   List<CustomRequestInfo> _customs = const [];
+  int _customsAsk = 0; // only the newest list request may fill 我的定制
 
   AccountView _account = AccountView.signedOut;
   bool _accountBusy = false;
@@ -110,15 +112,20 @@ class MainWindowModel extends ChangeNotifier {
 
   Future<void> loadCustoms() async {
     final c = custom;
+    final ask = ++_customsAsk;
     if (c == null || !_account.signedIn) {
       _customs = const [];
       notifyListeners();
       return;
     }
     try {
-      _customs = await c.service.list();
+      final list = await c.service.list();
+      // A newer request, or a sign-out, came while this one was out.
+      if (ask != _customsAsk || !_account.signedIn) return;
+      _customs = list;
     } on CustomFailure {
       // Keep what was shown; the next visit to 我的 asks again.
+      if (ask != _customsAsk) return;
     }
     notifyListeners();
   }
@@ -130,11 +137,16 @@ class MainWindowModel extends ChangeNotifier {
   }
 
   /// The server no longer takes the token: whatever custom page is open
-  /// closes and 我的 says why, where the user can sign in again.
+  /// closes, the pet window is asked to sign out (it owns account.json), and
+  /// 我的 says why, showing the sign-in form. Once per expiry: the 1003s that
+  /// follow while signing out change nothing.
   void loginExpired() {
+    if (_expiring || !_account.signedIn) return;
+    _expiring = true;
     _tab = 1;
     _closeFlow = true;
     _say('登录已过期，请重新登录');
+    unawaited(logout().whenComplete(() => _expiring = false));
   }
 
   /// Whether the custom pages are to close; reading it clears it.
@@ -188,6 +200,8 @@ class MainWindowModel extends ChangeNotifier {
     await _accountRequest(_bridge.logout);
     _account = AccountView.signedOut;
     _accountError = null;
+    _customsAsk++;
+    _customs = const [];
     notifyListeners();
   }
 
