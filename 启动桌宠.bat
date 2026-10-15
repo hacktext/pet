@@ -14,17 +14,21 @@ rem set "AIPET_API_BASE=http://aipet.localhost:8089"
 if not exist "%FLUTTER%" set "FLUTTER=flutter"
 
 rem 软件没有防多开，两个进程会同时写 settings.json，所以已在运行就不再开
-tasklist /FI "IMAGENAME eq aipet.exe" 2>nul | find /I "aipet.exe" >nul
-if not errorlevel 1 (
+rem 只算真正活着的进程：已退出却还挂在列表里的空壳（0 个线程）不算
+set "ALIVE=0"
+for /f %%N in ('powershell -NoProfile -Command "@(Get-Process aipet -ErrorAction SilentlyContinue | Where-Object { $_.Threads.Count -gt 0 }).Count"') do set "ALIVE=%%N"
+if not "%ALIVE%"=="0" (
     echo 桌宠已经在运行了，看看桌面或任务栏托盘。
     timeout /t 4 >nul
     exit /b 0
 )
 
-rem 比较源码最新修改时间和 aipet.exe 的时间
+rem 比较源码最新修改时间和上次编译成功的时间（STAMP）。不用 aipet.exe 的时间：
+rem 只改 Dart 代码时 exe 不会重新链接，它的时间永远是旧的，每次都会白编译一遍
+set "STAMP=%APP%\build\windows\x64\runner\Release\.built"
 for /f %%R in ('powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$exe = $env:EXE; if (-not (Test-Path $exe)) { 'build'; exit }" ^
-    "$t = (Get-Item $exe).LastWriteTime;" ^
+    "$exe = $env:EXE; if (-not (Test-Path $exe) -or -not (Test-Path $env:STAMP)) { 'build'; exit }" ^
+    "$t = (Get-Item $env:STAMP).LastWriteTime;" ^
     "$dirs = 'apps\aipet\lib','apps\aipet\assets','apps\aipet\windows\runner','packages','native' | ForEach-Object { Join-Path $env:ROOT $_ };" ^
     "$skip = '\\(build|\.dart_tool|testdata|ephemeral)\\';" ^
     "$files = @(Get-Item (Join-Path $env:APP 'pubspec.yaml')) + @(Get-ChildItem $dirs -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch $skip });" ^
@@ -33,7 +37,9 @@ for /f %%R in ('powershell -NoProfile -ExecutionPolicy Bypass -Command ^
 if /I "%STATE%"=="build" (
     echo 源码有更新，正在编译 release 版，第一次大约要几分钟……
     pushd "%APP%"
-    call "%FLUTTER%" build windows --release
+    rem 依赖已经下载过就离线解析，pub.dev 连不上也能编译；离线不够再联网
+    call "%FLUTTER%" pub get --offline >nul 2>&1 || call "%FLUTTER%" pub get
+    if not errorlevel 1 call "%FLUTTER%" build windows --release --no-pub
     if errorlevel 1 (
         popd
         echo.
@@ -42,6 +48,7 @@ if /I "%STATE%"=="build" (
         exit /b 1
     )
     popd
+    type nul > "%STAMP%"
 )
 
 if not exist "%EXE%" (

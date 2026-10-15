@@ -1,4 +1,5 @@
 build/
+dist/
 .dart_tool/
 *.log
 .superpowers/
