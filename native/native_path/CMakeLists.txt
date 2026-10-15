@@ -1,0 +1,2 @@
+add_library(native_path INTERFACE)
+target_include_directories(native_path INTERFACE include)

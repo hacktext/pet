@@ -10,6 +10,8 @@
 #include <thread>
 #include <vector>
 
+#include "native_path/native_path.h"
+
 namespace prepare_queue {
 
 struct Outcome {
@@ -33,7 +35,7 @@ inline constexpr int32_t kCancelled = -100;
 // destructor iterates jobs_ without the lock after joining the worker).
 class PrepareQueue {
  public:
-  using Work = std::function<Outcome(const std::wstring& src, const std::wstring& dst, uint32_t edge)>;
+  using Work = std::function<Outcome(const native_path::Path& src, const native_path::Path& dst, uint32_t edge)>;
   using Task = std::function<void()>;
   using Post = std::function<void(Task)>;
   using Done = std::function<void(const Outcome&)>;
@@ -46,11 +48,11 @@ class PrepareQueue {
   PrepareQueue(const PrepareQueue&) = delete;
   PrepareQueue& operator=(const PrepareQueue&) = delete;
 
-  void Submit(const std::wstring& src, const std::wstring& dst, uint32_t edge, Done done);
+  void Submit(const native_path::Path& src, const native_path::Path& dst, uint32_t edge, Done done);
 
  private:
   struct Job {
-    std::wstring src;
+    native_path::Path src;
     uint32_t edge = 0;
     std::vector<Done> waiters;
   };
@@ -61,8 +63,8 @@ class PrepareQueue {
   Post post_;
   std::mutex mu_;
   std::condition_variable cv_;
-  std::deque<std::wstring> order_;    // destinations in FIFO order
-  std::map<std::wstring, Job> jobs_;  // queued + running, keyed by destination
+  std::deque<native_path::Path> order_;    // destinations in FIFO order
+  std::map<native_path::Path, Job> jobs_;  // queued + running, keyed by destination
   bool stopping_ = false;
   std::thread worker_;  // declared last: started once everything above exists
 };

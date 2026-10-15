@@ -43,7 +43,7 @@ int32_t pet_matte_abi_version(void) { return 1; }
 
 const char* pet_matte_last_error(void) { return g_lastError.c_str(); }
 
-int32_t pet_matte_prepare(const wchar_t* srcMp4, const wchar_t* dstAipmat, uint32_t targetEdge) {
+int32_t pet_matte_prepare(const pet_matte_char* srcMp4, const pet_matte_char* dstAipmat, uint32_t targetEdge) {
   g_lastError.clear();
 
   // 校验放在最前面，早于打开/解码源视频：这是纯粹的入参校验，不依赖源

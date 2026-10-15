@@ -6,11 +6,11 @@
 #include "pcmat/reader.h"
 
 namespace {
-std::wstring Fixture() {
-  return (std::filesystem::path(AIPET_TESTDATA_DIR) / "green_box.mp4").wstring();
+native_path::Path Fixture() {
+  return std::filesystem::path(AIPET_TESTDATA_DIR) / "green_box.mp4";
 }
-std::wstring OutPath() {
-  return (std::filesystem::temp_directory_path() / "pipeline_out.aipmat").wstring();
+native_path::Path OutPath() {
+  return std::filesystem::temp_directory_path() / "pipeline_out.aipmat";
 }
 }  // namespace
 
@@ -65,7 +65,8 @@ TEST(Pipeline, DownscalesToTargetEdge) {
 }
 
 TEST(Pipeline, FailsOnMissingSource) {
-  EXPECT_LT(pet_matte_prepare(L"C:\\nope.mp4", OutPath().c_str(), 320), 0);
+  const native_path::Path missing = std::filesystem::temp_directory_path() / "no_such_dir" / "nope.mp4";
+  EXPECT_LT(pet_matte_prepare(missing.c_str(), OutPath().c_str(), 320), 0);
   EXPECT_STRNE(pet_matte_last_error(), "");
 }
 

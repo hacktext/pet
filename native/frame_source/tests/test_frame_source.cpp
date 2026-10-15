@@ -8,8 +8,8 @@
 
 namespace {
 
-std::wstring TempPath(const wchar_t* name) {
-  return (std::filesystem::temp_directory_path() / name).wstring();
+native_path::Path TempPath(const char* name) {
+  return std::filesystem::temp_directory_path() / name;
 }
 
 // 生成 count 个 BGRA 像素，四个通道各自固定成给定值——用来验证贴回画布时
@@ -36,7 +36,7 @@ Rgba PixelAt(const uint8_t* canvas, uint32_t width, uint32_t x, uint32_t y) {
 }  // namespace
 
 TEST(FrameSource, SwapsBgraToRgbaPerChannel) {
-  const std::wstring path = TempPath(L"frame_source_swap.aipmat");
+  const native_path::Path path = TempPath("frame_source_swap.aipmat");
   const uint16_t kW = 2, kH = 2;
   auto frame = SolidBgra(static_cast<size_t>(kW) * kH, /*b=*/10, /*g=*/20, /*r=*/30, /*a=*/255);
   {
@@ -64,7 +64,7 @@ TEST(FrameSource, SwapsBgraToRgbaPerChannel) {
 }
 
 TEST(FrameSource, PlacesCropAtRecordedOffsetAndClearsOutsideIt) {
-  const std::wstring path = TempPath(L"frame_source_placement.aipmat");
+  const native_path::Path path = TempPath("frame_source_placement.aipmat");
   const uint32_t kCanvasW = 10, kCanvasH = 10;
   const uint16_t kCropX = 4, kCropY = 5, kCropW = 3, kCropH = 2;
   auto frame = SolidBgra(static_cast<size_t>(kCropW) * kCropH, /*b=*/1, /*g=*/2, /*r=*/3, /*a=*/4);
@@ -107,7 +107,7 @@ TEST(FrameSource, PlacesCropAtRecordedOffsetAndClearsOutsideIt) {
 }
 
 TEST(FrameSource, AcceptsCropFlushWithCanvasEdge) {
-  const std::wstring path = TempPath(L"frame_source_edge.aipmat");
+  const native_path::Path path = TempPath("frame_source_edge.aipmat");
   const uint32_t kCanvasW = 6, kCanvasH = 4;
   // cropX+cropW == kCanvasW, cropY+cropH == kCanvasH：右/下边界正好贴住
   // 画布边缘，是差一错(off-by-one)最容易出错的地方。
@@ -136,7 +136,7 @@ TEST(FrameSource, AcceptsCropFlushWithCanvasEdge) {
 }
 
 TEST(FrameSource, HandlesFullyTransparentPlaceholderFrame) {
-  const std::wstring path = TempPath(L"frame_source_placeholder.aipmat");
+  const native_path::Path path = TempPath("frame_source_placeholder.aipmat");
   const uint32_t kCanvasW = 4, kCanvasH = 4;
   // pet_matte.cpp 对全透明帧的实际写法：1x1 的占位 crop，四通道全 0。
   auto frame = SolidBgra(1, 0, 0, 0, 0);
@@ -166,7 +166,7 @@ TEST(FrameSource, HandlesFullyTransparentPlaceholderFrame) {
 }
 
 TEST(FrameSource, RejectsCropExceedingCanvasWidth) {
-  const std::wstring path = TempPath(L"frame_source_oob_width.aipmat");
+  const native_path::Path path = TempPath("frame_source_oob_width.aipmat");
   const uint32_t kCanvasW = 4, kCanvasH = 4;
   const uint16_t kCropX = 3, kCropY = 0, kCropW = 4, kCropH = 4;  // cropX+cropW = 7 > 4
   auto frame = SolidBgra(static_cast<size_t>(kCropW) * kCropH, 1, 1, 1, 1);
@@ -188,7 +188,7 @@ TEST(FrameSource, RejectsCropExceedingCanvasWidth) {
 }
 
 TEST(FrameSource, RejectsPayloadSmallerThanCropDeclares) {
-  const std::wstring path = TempPath(L"frame_source_oob_payload.aipmat");
+  const native_path::Path path = TempPath("frame_source_oob_payload.aipmat");
   const uint32_t kCanvasW = 8, kCanvasH = 8;
   // 索引项声明的是 4x4 crop（需要 4*4*4=64 字节），但实际只塞进去 1 个像素
   // （4 字节）——模拟 rawSize 与 crop 尺寸对不上的损坏索引。
@@ -208,7 +208,7 @@ TEST(FrameSource, RejectsPayloadSmallerThanCropDeclares) {
 }
 
 TEST(FrameSource, ClearsCanvasBetweenFrames) {
-  const std::wstring path = TempPath(L"frame_source_clear.aipmat");
+  const native_path::Path path = TempPath("frame_source_clear.aipmat");
   const uint32_t kCanvasW = 6, kCanvasH = 6;
   // Frame A：铺满整个画布的非零像素。
   auto frameA = SolidBgra(static_cast<size_t>(kCanvasW) * kCanvasH, 100, 100, 100, 200);

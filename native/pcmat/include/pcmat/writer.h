@@ -2,13 +2,14 @@
 #include <cstdio>
 #include <string>
 #include <vector>
+#include "native_path/native_path.h"
 #include "pcmat/format.h"
 
 namespace pcmat {
 
 class Writer {
  public:
-  Writer(const std::wstring& path, uint32_t width, uint32_t height, uint32_t timeBaseDen);
+  Writer(const native_path::Path& path, uint32_t width, uint32_t height, uint32_t timeBaseDen);
   ~Writer();
   Writer(const Writer&) = delete;
   Writer& operator=(const Writer&) = delete;
@@ -25,7 +26,7 @@ class Writer {
   bool FailFinish();
 
   FILE* file_ = nullptr;
-  std::wstring path_;
+  native_path::Path path_;
   Header header_{};
   std::vector<FrameIndex> index_;
   uint64_t cursor_ = 0;

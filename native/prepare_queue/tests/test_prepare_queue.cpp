@@ -53,7 +53,7 @@ class Inbox {
 class Gate {
  public:
   PrepareQueue::Work work(int32_t code = 0) {
-    return [this, code](const std::wstring&, const std::wstring& dst, uint32_t) {
+    return [this, code](const native_path::Path&, const native_path::Path& dst, uint32_t) {
       std::unique_lock<std::mutex> lk(mu_);
       started_.push_back(dst);
       cv_.notify_all();
@@ -72,7 +72,7 @@ class Gate {
     std::unique_lock<std::mutex> lk(mu_);
     return cv_.wait_for(lk, 5s, [&] { return started_.size() >= n; });
   }
-  std::vector<std::wstring> started() {
+  std::vector<native_path::Path> started() {
     std::lock_guard<std::mutex> lk(mu_);
     return started_;
   }
@@ -81,7 +81,7 @@ class Gate {
   std::mutex mu_;
   std::condition_variable cv_;
   bool open_ = false;
-  std::vector<std::wstring> started_;
+  std::vector<native_path::Path> started_;
 };
 
 }  // namespace
@@ -92,7 +92,7 @@ TEST(PrepareQueue, ResultArrivesOnlyThroughPost) {
   gate.Open();
   std::vector<Outcome> got;
   PrepareQueue q(gate.work(0), inbox.poster());
-  q.Submit(L"a.mp4", L"a.aipmat", 720, [&](const Outcome& o) { got.push_back(o); });
+  q.Submit("a.mp4", "a.aipmat", 720, [&](const Outcome& o) { got.push_back(o); });
   ASSERT_TRUE(inbox.WaitFor(1));
   EXPECT_TRUE(got.empty()) << "a result ran on the worker thread instead of being posted";
   EXPECT_EQ(inbox.Drain(), 1u);
@@ -105,9 +105,9 @@ TEST(PrepareQueue, SameDestinationWhileRunningIsMerged) {
   Gate gate;
   std::vector<int32_t> codes;
   PrepareQueue q(gate.work(0), inbox.poster());
-  q.Submit(L"a.mp4", L"x", 720, [&](const Outcome& o) { codes.push_back(o.code); });
+  q.Submit("a.mp4", "x", 720, [&](const Outcome& o) { codes.push_back(o.code); });
   ASSERT_TRUE(gate.WaitStarted(1));
-  q.Submit(L"a.mp4", L"x", 720, [&](const Outcome& o) { codes.push_back(o.code); });
+  q.Submit("a.mp4", "x", 720, [&](const Outcome& o) { codes.push_back(o.code); });
   gate.Open();
   ASSERT_TRUE(inbox.WaitFor(2));
   inbox.Drain();
@@ -120,15 +120,15 @@ TEST(PrepareQueue, SameDestinationWhilePendingIsMerged) {
   Gate gate;
   int calls = 0;
   PrepareQueue q(gate.work(0), inbox.poster());
-  q.Submit(L"y.mp4", L"y", 720, [&](const Outcome&) { ++calls; });  // occupies the worker
+  q.Submit("y.mp4", "y", 720, [&](const Outcome&) { ++calls; });  // occupies the worker
   ASSERT_TRUE(gate.WaitStarted(1));
-  q.Submit(L"x.mp4", L"x", 720, [&](const Outcome&) { ++calls; });
-  q.Submit(L"x.mp4", L"x", 720, [&](const Outcome&) { ++calls; });
+  q.Submit("x.mp4", "x", 720, [&](const Outcome&) { ++calls; });
+  q.Submit("x.mp4", "x", 720, [&](const Outcome&) { ++calls; });
   gate.Open();
   ASSERT_TRUE(inbox.WaitFor(3));
   inbox.Drain();
   EXPECT_EQ(calls, 3);
-  EXPECT_EQ(gate.started(), (std::vector<std::wstring>{L"y", L"x"}));
+  EXPECT_EQ(gate.started(), (std::vector<native_path::Path>{"y", "x"}));
 }
 
 TEST(PrepareQueue, JobsRunInSubmissionOrder) {
@@ -136,27 +136,27 @@ TEST(PrepareQueue, JobsRunInSubmissionOrder) {
   Gate gate;
   gate.Open();
   PrepareQueue q(gate.work(0), inbox.poster());
-  for (const wchar_t* d : {L"a", L"b", L"c"}) q.Submit(L"s", d, 720, [](const Outcome&) {});
+  for (const char* d : {"a", "b", "c"}) q.Submit("s", d, 720, [](const Outcome&) {});
   ASSERT_TRUE(inbox.WaitFor(3));
   inbox.Drain();
-  EXPECT_EQ(gate.started(), (std::vector<std::wstring>{L"a", L"b", L"c"}));
+  EXPECT_EQ(gate.started(), (std::vector<native_path::Path>{"a", "b", "c"}));
 }
 
 TEST(PrepareQueue, FailureCodesAndExceptionsReachTheCaller) {
   Inbox inbox;
   std::vector<Outcome> got;
   {
-    PrepareQueue q([](const std::wstring&, const std::wstring&, uint32_t) { return Outcome{-2, "decode failed"}; },
+    PrepareQueue q([](const native_path::Path&, const native_path::Path&, uint32_t) { return Outcome{-2, "decode failed"}; },
                    inbox.poster());
-    q.Submit(L"s", L"d1", 720, [&](const Outcome& o) { got.push_back(o); });
+    q.Submit("s", "d1", 720, [&](const Outcome& o) { got.push_back(o); });
     ASSERT_TRUE(inbox.WaitFor(1));
   }
   {
-    PrepareQueue q([](const std::wstring&, const std::wstring&, uint32_t) -> Outcome {
+    PrepareQueue q([](const native_path::Path&, const native_path::Path&, uint32_t) -> Outcome {
                      throw std::runtime_error("boom");
                    },
                    inbox.poster());
-    q.Submit(L"s", L"d2", 720, [&](const Outcome& o) { got.push_back(o); });
+    q.Submit("s", "d2", 720, [&](const Outcome& o) { got.push_back(o); });
     ASSERT_TRUE(inbox.WaitFor(2));
   }
   inbox.Drain();
@@ -172,9 +172,9 @@ TEST(PrepareQueue, DestructorWaitsForTheRunningJobAndCancelsThePending) {
   Gate gate;
   std::vector<int32_t> codes;
   auto q = std::make_unique<PrepareQueue>(gate.work(0), inbox.poster());
-  q->Submit(L"a", L"running", 720, [&](const Outcome& o) { codes.push_back(o.code); });
+  q->Submit("a", "running", 720, [&](const Outcome& o) { codes.push_back(o.code); });
   ASSERT_TRUE(gate.WaitStarted(1));
-  q->Submit(L"b", L"pending", 720, [&](const Outcome& o) { codes.push_back(o.code); });
+  q->Submit("b", "pending", 720, [&](const Outcome& o) { codes.push_back(o.code); });
   std::thread opener([&] {
     std::this_thread::sleep_for(100ms);
     gate.Open();
@@ -204,8 +204,8 @@ TEST(PrepareQueue, PostFailureDoesNotKillTheWorker) {
     inbox.poster()(std::move(t));
   };
   PrepareQueue q(gate.work(0), throwing_poster);
-  q.Submit(L"a.mp4", L"a", 720, [&](const Outcome& o) { got.push_back(o); });
-  q.Submit(L"b.mp4", L"b", 720, [&](const Outcome& o) { got.push_back(o); });
+  q.Submit("a.mp4", "a", 720, [&](const Outcome& o) { got.push_back(o); });
+  q.Submit("b.mp4", "b", 720, [&](const Outcome& o) { got.push_back(o); });
   ASSERT_TRUE(inbox.WaitFor(1));
   inbox.Drain();
   // The first result (a) is lost because its post threw, but b's result arrives

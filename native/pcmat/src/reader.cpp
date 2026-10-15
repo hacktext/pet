@@ -26,16 +26,15 @@ bool DimensionsAreSane(uint32_t width, uint32_t height) {
 }
 }  // namespace
 
-std::optional<Reader> Reader::Open(const std::wstring& path) {
+std::optional<Reader> Reader::Open(const native_path::Path& path) {
   // ftell 在 MSVC/Windows(LLP64) 下返回 32 位 long，无法表示 >= 2GiB 的文件；
-  // 用 std::filesystem::file_size 取 64 位真实大小。std::filesystem::path 在
-  // Windows 上原生存储宽字符，这里直接传 wstring 不涉及任何编码转换。
+  // 用 std::filesystem::file_size 取 64 位真实大小。
   std::error_code ec;
   const uint64_t len = std::filesystem::file_size(path, ec);
   if (ec || len < static_cast<uint64_t>(kHeaderSize)) return std::nullopt;
 
-  // 同样用 _wfopen 保持宽字符，避免经 ANSI 代码页转换丢失非 ASCII 路径。
-  FILE* f = _wfopen(path.c_str(), L"rb");
+  // native_path::Open：Windows 上走 _wfopen，非 ASCII 路径不经 ANSI 代码页。
+  FILE* f = native_path::Open(path, "rb");
   if (!f) return std::nullopt;
 
   Reader r;

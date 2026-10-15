@@ -194,7 +194,8 @@ HWND CreatePlatformThreadWindow() {
 // Worker thread. Media Foundation gets a COM apartment of its own here; on
 // the platform thread (blocking fallback) CoInitializeEx fails with
 // RPC_E_CHANGED_MODE and nothing is uninitialized.
-prepare_queue::Outcome RunPetMattePrepare(const std::wstring& src, const std::wstring& dst, uint32_t edge) {
+prepare_queue::Outcome RunPetMattePrepare(const native_path::Path& src, const native_path::Path& dst,
+                                          uint32_t edge) {
   const HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   const int32_t code = pet_matte_prepare(src.c_str(), dst.c_str(), edge);
   prepare_queue::Outcome out{code, code != 0 ? pet_matte_last_error() : ""};

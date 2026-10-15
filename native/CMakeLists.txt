@@ -21,9 +21,14 @@ FetchContent_MakeAvailable(lz4)
 enable_testing()
 include(GoogleTest)
 
+add_subdirectory(native_path)
 add_subdirectory(pcmat)
 add_subdirectory(matte_core)
-add_subdirectory(mf_decode)
+# Media Foundation: Windows only. The macOS decoder (AVFoundation) is built by
+# the plugin's podspec, not here.
+if(WIN32)
+  add_subdirectory(mf_decode)
+endif()
 add_subdirectory(pet_matte)
 add_subdirectory(frame_source)
 add_subdirectory(prepare_queue)

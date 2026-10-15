@@ -3,8 +3,8 @@
 #include "mf_decode/decoder.h"
 
 namespace {
-std::wstring FixturePath() {
-  return (std::filesystem::path(AIPET_TESTDATA_DIR) / "green_box.mp4").wstring();
+native_path::Path FixturePath() {
+  return std::filesystem::path(AIPET_TESTDATA_DIR) / "green_box.mp4";
 }
 }  // namespace
 

@@ -4,11 +4,11 @@
 
 namespace pcmat {
 
-Writer::Writer(const std::wstring& path, uint32_t width, uint32_t height, uint32_t timeBaseDen)
+Writer::Writer(const native_path::Path& path, uint32_t width, uint32_t height, uint32_t timeBaseDen)
     : path_(path) {
-  // Windows 路径原生是 UTF-16；用 _wfopen 保持宽字符，避免经 ANSI 代码页
-  // 转换丢失路径中的非 ASCII 字符（例如用户名含中文的 %APPDATA% 路径）。
-  file_ = _wfopen(path.c_str(), L"wb");
+  // native_path::Open：Windows 上走 _wfopen，路径中的非 ASCII 字符（例如
+  // 用户名含中文的 %APPDATA% 路径）不经 ANSI 代码页转换而丢失。
+  file_ = native_path::Open(path, "wb");
   if (!file_) return;
   std::memset(&header_, 0, sizeof(header_));
   std::memcpy(header_.magic, kMagic, 8);
@@ -26,7 +26,7 @@ Writer::Writer(const std::wstring& path, uint32_t width, uint32_t height, uint32
   if (fwrite(zero.data(), 1, kHeaderSize, file_) != kHeaderSize) {
     fclose(file_);
     file_ = nullptr;
-    _wremove(path_.c_str());
+    native_path::Remove(path_);
     return;
   }
   cursor_ = kHeaderSize;
@@ -36,7 +36,7 @@ Writer::~Writer() { if (file_) fclose(file_); }
 
 bool Writer::FailFinish() {
   if (file_) { fclose(file_); file_ = nullptr; }
-  _wremove(path_.c_str());
+  native_path::Remove(path_);
   return false;
 }
 
@@ -89,7 +89,7 @@ bool Writer::Finish(const std::string& manifestJson) {
   // 无法解释的"cannot read aipmat"冒出来，而那时磁盘写入现场早就没了。
   if (fclose(file_) != 0) {
     file_ = nullptr;
-    _wremove(path_.c_str());
+    native_path::Remove(path_);
     return false;
   }
   file_ = nullptr;

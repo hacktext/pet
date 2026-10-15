@@ -9,8 +9,7 @@ namespace frame_source {
 
 class FrameSource {
  public:
-  // 宽字符路径：pcmat::Reader 在 Task 7 已改为 UTF-16 + _wfopen。
-  bool Load(const std::wstring& path);
+  bool Load(const native_path::Path& path);
   uint32_t width() const { return reader_ ? reader_->header().width : 0; }
   uint32_t height() const { return reader_ ? reader_->header().height : 0; }
   uint32_t frameCount() const { return reader_ ? reader_->header().frameCount : 0; }

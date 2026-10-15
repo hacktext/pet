@@ -2,13 +2,14 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include "native_path/native_path.h"
 #include "pcmat/format.h"
 
 namespace pcmat {
 
 class Reader {
  public:
-  static std::optional<Reader> Open(const std::wstring& path);
+  static std::optional<Reader> Open(const native_path::Path& path);
 
   const Header& header() const { return header_; }
   const FrameIndex& index(uint32_t i) const { return index_[i]; }

@@ -30,7 +30,7 @@ PrepareQueue::~PrepareQueue() {
   jobs_.clear();
 }
 
-void PrepareQueue::Submit(const std::wstring& src, const std::wstring& dst, uint32_t edge, Done done) {
+void PrepareQueue::Submit(const native_path::Path& src, const native_path::Path& dst, uint32_t edge, Done done) {
   {
     std::lock_guard<std::mutex> lk(mu_);
     auto it = jobs_.find(dst);
@@ -54,9 +54,9 @@ void PrepareQueue::Run() {
     // stopping_ is checked between jobs only: a running prepare always finishes.
     cv_.wait(lk, [this] { return stopping_ || !order_.empty(); });
     if (stopping_) return;
-    const std::wstring dst = order_.front();
+    const native_path::Path dst = order_.front();
     order_.pop_front();
-    const std::wstring src = jobs_.at(dst).src;
+    const native_path::Path src = jobs_.at(dst).src;
     const uint32_t edge = jobs_.at(dst).edge;
     lk.unlock();
 

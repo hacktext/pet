@@ -1,6 +1,6 @@
 add_library(mf_decode STATIC src/decoder.cpp)
 target_include_directories(mf_decode PUBLIC include)
-target_link_libraries(mf_decode PUBLIC mfplat mfreadwrite mfuuid ole32 propsys)
+target_link_libraries(mf_decode PUBLIC mfplat mfreadwrite mfuuid ole32 propsys native_path)
 
 add_executable(mf_decode_tests tests/test_decoder.cpp)
 target_compile_definitions(mf_decode_tests PRIVATE

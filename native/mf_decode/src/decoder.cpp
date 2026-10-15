@@ -19,7 +19,7 @@ void EnsureMfStarted() { static MfRuntime rt; }
 
 }  // namespace
 
-std::optional<Decoder> Decoder::Open(const std::wstring& path) {
+std::optional<Decoder> Decoder::Open(const native_path::Path& path) {
   EnsureMfStarted();
 
   IMFAttributes* attrs = nullptr;

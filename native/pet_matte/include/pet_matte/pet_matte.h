@@ -11,6 +11,14 @@ inline constexpr uint32_t kDefaultCacheEdge = 720;
 // 42 亿）。
 inline constexpr uint32_t kMaxCacheEdge = 4096;
 
+// 路径的字符类型：Windows 是 UTF-16 的 wchar_t，macOS 是 UTF-8 的 char，
+// 和 std::filesystem::path::value_type 一致。
+#ifdef _WIN32
+typedef wchar_t pet_matte_char;
+#else
+typedef char pet_matte_char;
+#endif
+
 extern "C" {
 
 int32_t pet_matte_abi_version(void);
@@ -20,7 +28,7 @@ int32_t pet_matte_abi_version(void);
 // 静默截断——越界值一路传到写盘的 crop 矩形字段会导致记录的裁剪框和实际
 // 载荷对不上。
 // 返回 0 成功；-1 打不开源；-2 targetEdge 越界或解码失败；-3 写入失败。
-int32_t pet_matte_prepare(const wchar_t* srcMp4, const wchar_t* dstAipmat, uint32_t targetEdge);
+int32_t pet_matte_prepare(const pet_matte_char* srcMp4, const pet_matte_char* dstAipmat, uint32_t targetEdge);
 
 const char* pet_matte_last_error(void);
 

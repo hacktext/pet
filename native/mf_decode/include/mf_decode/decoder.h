@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include "native_path/native_path.h"
+
 struct IMFSourceReader;
 
 namespace mfd {
@@ -17,7 +19,7 @@ struct VideoInfo {
 
 class Decoder {
  public:
-  static std::optional<Decoder> Open(const std::wstring& path);
+  static std::optional<Decoder> Open(const native_path::Path& path);
   Decoder(Decoder&&) noexcept;
   Decoder& operator=(Decoder&&) noexcept;
   Decoder(const Decoder&) = delete;

@@ -12,14 +12,14 @@ std::vector<uint8_t> MakeFrame(size_t n, uint8_t seed) {
   for (size_t i = 0; i < n; ++i) v[i] = static_cast<uint8_t>((i * 7 + seed) & 0xFF);
   return v;
 }
-std::wstring TempPath() {
+native_path::Path TempPath() {
   auto p = std::filesystem::temp_directory_path() / "aipmat_roundtrip.aipmat";
-  return p.wstring();
+  return p;
 }
 }  // namespace
 
 TEST(Roundtrip, ThreeFramesSurviveWriteThenRead) {
-  const std::wstring path = TempPath();
+  const native_path::Path path = TempPath();
   const uint16_t kW = 8, kH = 4;
   const size_t kBytes = static_cast<size_t>(kW) * kH * 4;
 
@@ -74,7 +74,7 @@ TEST(Roundtrip, OpenRejectsWrongMagic) {
     fwrite(buf.data(), 1, buf.size(), f);
     fclose(f);
   }
-  EXPECT_FALSE(pcmat::Reader::Open(path.wstring()).has_value());
+  EXPECT_FALSE(pcmat::Reader::Open(path).has_value());
   std::filesystem::remove(path);
 }
 
@@ -104,7 +104,7 @@ TEST(Roundtrip, OpenRejectsCorruptIndexOffsetWithoutCrashing) {
     fwrite(buf.data(), 1, buf.size(), f);
     fclose(f);
   }
-  EXPECT_FALSE(pcmat::Reader::Open(path.wstring()).has_value());
+  EXPECT_FALSE(pcmat::Reader::Open(path).has_value());
   std::filesystem::remove(path);
 }
 
@@ -141,9 +141,9 @@ TEST(Roundtrip, OpenRejectsZeroWidthOrHeight) {
   // 边界检查挡住。
   auto path = std::filesystem::temp_directory_path() / "zero_dim.aipmat";
   WriteHeaderOnlyFile(path, 0, 64);
-  EXPECT_FALSE(pcmat::Reader::Open(path.wstring()).has_value());
+  EXPECT_FALSE(pcmat::Reader::Open(path).has_value());
   WriteHeaderOnlyFile(path, 64, 0);
-  EXPECT_FALSE(pcmat::Reader::Open(path.wstring()).has_value());
+  EXPECT_FALSE(pcmat::Reader::Open(path).has_value());
   std::filesystem::remove(path);
 }
 
@@ -154,7 +154,7 @@ TEST(Roundtrip, OpenRejectsAbsurdlyLargeDimensionsWithoutCrashing) {
   // Reader::Open 必须在这里就拒绝，画布分配这步永远不会被走到。
   auto path = std::filesystem::temp_directory_path() / "huge_dim.aipmat";
   WriteHeaderOnlyFile(path, UINT32_MAX, UINT32_MAX);
-  EXPECT_FALSE(pcmat::Reader::Open(path.wstring()).has_value());
+  EXPECT_FALSE(pcmat::Reader::Open(path).has_value());
   std::filesystem::remove(path);
 }
 
@@ -164,8 +164,8 @@ TEST(Roundtrip, SurvivesNonAsciiPath) {
   // 覆盖不到的字符会被静默改写甚至截断。这里刻意混合中文、带附加符号的
   // 拉丁字母、以及一个超出 BMP 需要代理对编码的表情符号，逼近真实场景下
   // %APPDATA% 路径里可能出现的用户名字符集。
-  const std::wstring path =
-      (std::filesystem::temp_directory_path() / L"测试_ünïcode_🐕.aipmat").wstring();
+  const native_path::Path path =
+      std::filesystem::temp_directory_path() / std::filesystem::u8path(u8"测试_ünïcode_🐕.aipmat");
   const uint16_t kW = 4, kH = 4;
   const size_t kBytes = static_cast<size_t>(kW) * kH * 4;
   auto frame = MakeFrame(kBytes, 42);

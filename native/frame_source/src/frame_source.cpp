@@ -4,7 +4,7 @@
 
 namespace frame_source {
 
-bool FrameSource::Load(const std::wstring& path) {
+bool FrameSource::Load(const native_path::Path& path) {
   reader_ = pcmat::Reader::Open(path);
   if (!reader_) return false;
   canvas_.assign(static_cast<size_t>(width()) * height() * 4, 0);
