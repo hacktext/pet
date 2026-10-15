@@ -4,12 +4,14 @@ the server allows it; an expired / refused URL is not retried."""
 from __future__ import annotations
 
 import http.client
+import logging
 import socket
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
+log = logging.getLogger("petgen.download")
 RETRIES = 3
 CHUNK = 1 << 16
 
@@ -28,6 +30,7 @@ def fetch(url: str, dest: Path, *, retries: int = RETRIES, opener=None, sleep=ti
     last: object = None
     for attempt in range(retries + 1):
         if attempt:
+            log.warning("下载 %s 出错（%s），%d 秒后第 %d 次重试", dest.name, last, 2 ** attempt, attempt)
             sleep(2 ** attempt)
         have = part.stat().st_size if part.exists() else 0
         req = urllib.request.Request(url)

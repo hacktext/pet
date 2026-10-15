@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import logging
 import socket
 import ssl
 import time
@@ -13,6 +14,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+log = logging.getLogger("petgen.server")
 PREFIX = "/internal/aipet/"
 RETRY_TRIES = 3
 # Everything that can go wrong on the wire, including while reading the body.
@@ -82,6 +84,7 @@ class Server:
             except ServerError as e:
                 if attempt == RETRY_TRIES or not _transient(e):
                     raise
+                log.warning("请求后台 %s 出错，%d 秒后重试：%s", path, 2 ** attempt, e)
                 self._sleep(2 ** attempt)
 
     def claim(self) -> dict:

@@ -16,6 +16,7 @@ import threading
 import time
 from pathlib import Path
 
+from petgen import names
 from petgen.download import DownloadError
 from petgen.jobstate import Job, JobState
 from petgen.pipeline import BudgetExceeded, Env, JobAborted, StepFailed, StopRequested, run_job
@@ -30,6 +31,7 @@ IDLE_WAIT = 15.0
 PAUSE_WAIT = 300.0
 ERROR_WAIT = 60.0
 STATUS_EVERY = 300.0
+IDLE_LOG_EVERY = 300.0   # while there is nothing to do, say so this often
 LOW_BALANCE = "生成额度不足"
 REASON_MAX = 255
 # What one tick did with a job: run() --once stops after any of these.
@@ -44,6 +46,7 @@ class Worker:
         self.wait = wait or stop.wait
         self._last_status: tuple[bool, str] | None = None
         self._status_at = float("-inf")
+        self._idle_logged_at: float | None = None   # None: the next idle round is logged
 
     def run(self, once: bool = False) -> int:
         while not self.stop.is_set():
@@ -59,13 +62,14 @@ class Worker:
             balance = {"image": float(self.env.kling.units_left("image")),
                        "video": float(self.env.kling.units_left("video"))}
         except Exception as e:  # noqa: BLE001 -- network, bad JSON, odd payload: all just mean "try later"
-            log.warning("balance check failed: %s", e)
+            log.warning("查询可灵余额失败，%d 秒后重试：%s", ERROR_WAIT, e)
             self.wait(ERROR_WAIT)
             return "balance-error"
         low = balance["image"] < IMAGE_NEED or balance["video"] < VIDEO_NEED
         self._status(low, LOW_BALANCE if low else "", balance)
         if low:
-            log.info("paused: Kling units left %s", balance)
+            log.info("可灵余额不足（图片 %.0f、视频 %.0f 单位），暂停领单，%d 秒后再查",
+                     balance["image"], balance["video"], PAUSE_WAIT)
             self.wait(PAUSE_WAIT)
             return "paused"
         if self.stop.is_set():
@@ -78,14 +82,20 @@ class Worker:
             if job is not None and not isinstance(job, dict):
                 raise ServerError(f"jobs/claim: unexpected job {type(job).__name__}")
         except Exception as e:  # noqa: BLE001
-            log.warning("claim failed: %s", e)
+            log.warning("向后台领取任务失败，%d 秒后重试：%s", ERROR_WAIT, e)
             self.wait(ERROR_WAIT)
             return "server-error"
         if not job:
             if res.get("paused_reason"):
-                log.info("server holds jobs back: %s", res["paused_reason"])
+                log.info("后台暂停派单：%s", res["paused_reason"])
+            now = self.clock()
+            if self._idle_logged_at is None or now - self._idle_logged_at >= IDLE_LOG_EVERY:
+                log.info("暂无任务，每 %d 秒查询一次（可灵余额：图片 %.0f、视频 %.0f 单位）",
+                         IDLE_WAIT, balance["image"], balance["video"])
+                self._idle_logged_at = now
             self.wait(IDLE_WAIT)
             return "idle"
+        self._idle_logged_at = None               # after a job, say again that we are waiting
         return self.process(job)
 
     def _status(self, paused: bool, reason: str, balance: dict) -> None:
@@ -97,7 +107,7 @@ class Worker:
         try:
             self.server.status(paused, reason, {k: math.floor(v) for k, v in balance.items()})
         except Exception as e:  # noqa: BLE001
-            log.warning("worker/status not sent: %s", e)
+            log.warning("向后台上报 worker 状态失败：%s", e)
             return
         self._last_status, self._status_at = (paused, reason), now
 
@@ -111,30 +121,31 @@ class Worker:
         try:
             JobState.load(state)
         except Exception as e:  # noqa: BLE001 -- kept as is: starting over could pay Kling twice
-            log.error("job %s: %s is unreadable", job.id, state)
+            log.error("任务 %s：进度文件 %s 损坏，无法继续", job.id, state)
             self._fail(job.id, "state", f"state.json 损坏：{e}")
             return "failed"
-        log.info("job %s (%s, %s) claimed", job.id, job.species, ",".join(job.actions))
+        log.info("领到任务 %s：%s「%s」，动作：%s", job.id, names.species(job.species), job.name,
+                 names.actions(job.actions))
         rep = Reporter(self.server, job.id, self.stop, interval=self.heartbeat, clock=self.clock).start()
         try:
             try:
                 run_job(job, self.env, rep)
             finally:
                 rep.close()                       # no heartbeat after finish, nor after a fail report
-            log.info("job %s uploaded for review", job.id)
+            log.info("任务 %s 完成：成品已上传，等待后台审核", job.id)
             return "done"
         except StopRequested:
-            log.info("stopping: job %s is left for the reaper to hand back", job.id)
+            log.info("正在停止：任务 %s 留给后台稍后重新派发", job.id)
             return "stopped"
         except (JobAborted, ServerAbort):
             # Also a retried finish whose first try went through: the job is the server's already.
-            log.info("job %s was changed on the server; dropped", job.id)
+            log.info("任务 %s 已在后台被修改或取消，放弃本次处理", job.id)
             return "aborted"
         except ServerError as e:
             if not transient_server_error(e):     # 4xx: retrying the same upload cannot help; settle the job
                 self._fail(job.id, rep.step, f"服务器拒绝：{e}")
                 return "failed"
-            log.warning("job %s dropped, the server's reaper will hand it back: %s", job.id, e)
+            log.warning("任务 %s 暂时放弃（后台连不上），后台稍后会重新派发：%s", job.id, e)
             return "dropped"
         except (StepFailed, BudgetExceeded) as e:
             if self.stop.is_set() and isinstance(e.__cause__, (subprocess.SubprocessError, OSError)):
@@ -147,22 +158,21 @@ class Worker:
         except Exception as e:  # noqa: BLE001 -- any crash fails this job, the worker carries on
             if self.stop.is_set():
                 return self._stopped(job.id, e)       # most likely the shutdown's own doing: not the job's fault
-            log.exception("job %s crashed in %s", job.id, rep.step)
+            log.exception("任务 %s 在「%s」出现程序异常", job.id, names.step(rep.step))
             self._fail(job.id, rep.step, f"{type(e).__name__}: {e}")
             return "failed"
 
     def _stopped(self, job_id, e: BaseException) -> str:
-        log.info("stopping: job %s broke off during shutdown (%s: %s); left for the reaper to hand back",
-                 job_id, type(e).__name__, e)
+        log.info("正在停止：任务 %s 被中断（%s: %s），留给后台稍后重新派发", job_id, type(e).__name__, e)
         return "stopped"
 
     def _fail(self, job_id, stage: str, reason: str) -> None:
         if job_id is None:
             return
-        log.info("job %s failed at %s: %s", job_id, stage, reason)
+        log.error("任务 %s 失败，步骤「%s」：%s", job_id, names.step(stage), reason)
         try:
             self.server.fail(job_id, stage, reason[:REASON_MAX])
         except ServerAbort:
             pass                                  # a retried fail whose first try went through
         except Exception as e:  # noqa: BLE001
-            log.error("could not report the failure of job %s: %s", job_id, e)
+            log.error("任务 %s 的失败结果没能上报给后台：%s", job_id, e)

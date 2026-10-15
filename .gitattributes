@@ -1,3 +1,8 @@
 apps/aipet/assets/pets/**/*.mp4 filter=lfs diff=lfs merge=lfs -text
 apps/aipet/assets/pets/**/*.png filter=lfs diff=lfs merge=lfs -text
 apps/aipet/assets/pets/**/*.wav filter=lfs diff=lfs merge=lfs -text
+
+# 部署到 Linux 的文件：始终 LF
+tools/petgen/deploy/*.sh text eol=lf
+tools/petgen/deploy/*.service text eol=lf
+tools/petgen/deploy/*.txt text eol=lf

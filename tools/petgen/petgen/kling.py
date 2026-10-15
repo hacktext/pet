@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import http.client
 import json
+import logging
 import socket
 import time
 import urllib.error
@@ -16,6 +17,9 @@ from petgen.download import fetch
 
 _PATHS = {"image": "/v1/images/generations", "video": "/v1/videos/image2video"}
 _PACK_NAMES = {"image": ("图像", "图片"), "video": ("视频",)}
+_KINDS = {"image": "图片", "video": "视频"}
+_STATUS = {"submitted": "已提交，排队中", "processing": "生成中", "succeed": "已完成", "failed": "失败"}
+log = logging.getLogger("petgen.kling")
 POLL_GIVE_UP = 600.0     # seconds of failing polls in a row before wait() gives up
 
 
@@ -47,6 +51,7 @@ def _exchange(method: str, path: str, body: dict | None = None) -> tuple[int | N
                                  data=json.dumps(body).encode() if body is not None else None)
     req.add_header("Authorization", f"Bearer {key}")
     req.add_header("Content-Type", "application/json")
+    at = f" [{method} {base + path}]"       # which request failed; the key is in a header, never here
     try:
         try:
             with urllib.request.urlopen(req, timeout=60) as r:
@@ -60,13 +65,13 @@ def _exchange(method: str, path: str, body: dict | None = None) -> tuple[int | N
             if not isinstance(res, dict):
                 return e.code, {"code": e.code, "message": body_text[:200]}, True
     except urllib.error.URLError as e:      # before OSError: URLError is one
-        raise KlingError(f"network error: {e.reason}") from e
+        raise KlingError(f"network error: {e.reason}{at}") from e
     except socket.timeout as e:
-        raise KlingError(f"request timeout: {e}") from e
+        raise KlingError(f"request timeout: {e}{at}") from e
     except (http.client.HTTPException, OSError) as e:   # RemoteDisconnected, IncompleteRead, reset, SSL
-        raise KlingError(f"connection error: {type(e).__name__}: {e}") from e
+        raise KlingError(f"connection error: {type(e).__name__}: {e}{at}") from e
     except ValueError as e:                 # JSONDecodeError, UnicodeDecodeError
-        raise KlingError(f"unreadable answer: {e}") from e
+        raise KlingError(f"unreadable answer: {e}{at}") from e
     if not isinstance(res, dict):
         raise KlingError(f"unexpected answer: {type(res).__name__}")
     return status, res, False
@@ -126,6 +131,7 @@ def wait(kind: str, task_id: str, every: float = 8.0, limit: int = 120,
     clock = clock or time.monotonic
     sleep = sleep or time.sleep
     polls, failing_since = 0, None
+    seen = None
     while polls < limit:
         if on_poll is not None:
             on_poll()
@@ -137,6 +143,8 @@ def wait(kind: str, task_id: str, every: float = 8.0, limit: int = 120,
             now = clock()
             if failing_since is None:
                 failing_since = now
+            log.warning("查询可灵%s任务 %s 状态失败（已连续 %.0f 秒，超过 %.0f 秒才放弃），稍后再查：%s",
+                        _KINDS.get(kind, kind), task_id, now - failing_since, POLL_GIVE_UP, e)
             if now - failing_since > POLL_GIVE_UP:
                 raise KlingError(f"{kind} task {task_id}: polls failing for {now - failing_since:.0f}s: {e}") from e
             sleep(every)
@@ -144,6 +152,9 @@ def wait(kind: str, task_id: str, every: float = 8.0, limit: int = 120,
         failing_since = None
         polls += 1
         d = res.get("data") or {}
+        if d.get("task_status") != seen:
+            seen = d.get("task_status")
+            log.info("可灵%s任务 %s 状态：%s", _KINDS.get(kind, kind), task_id, _STATUS.get(seen, seen))
         if d.get("task_status") == "succeed":
             return d
         if d.get("task_status") == "failed":

@@ -32,10 +32,17 @@ class ComposeResult:
 
 
 def segment(src: Path) -> np.ndarray:
+    import onnxruntime as ort
     from rembg import new_session, remove  # heavy import, only when composing
 
     if MODEL not in _sessions:
-        _sessions[MODEL] = new_session(MODEL)
+        # BiRefNet peaks near 7.5 GB with onnxruntime's defaults (measured
+        # 2026-10-14, 1024 px); without the arena and the memory pattern it is
+        # about 6.1 GB at the same speed. A small server needs swap either way.
+        opts = ort.SessionOptions()
+        opts.enable_cpu_mem_arena = False
+        opts.enable_mem_pattern = False
+        _sessions[MODEL] = new_session(MODEL, sess_opts=opts)
     # alpha matting re-solves the mask's unknown band as a soft matte: it keeps
     # wispy tail fur the plain segmenter drops (spike: lite+matting beat the
     # full 973 MB model without matting).

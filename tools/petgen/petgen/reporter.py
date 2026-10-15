@@ -106,7 +106,7 @@ class Reporter:
         except ServerAbort:
             abort = True
         except Exception as e:                 # never let the heartbeat thread die; cost stays pending
-            log.warning("progress for job %s not sent, kept for the next one: %s", self._job_id, e)
+            log.warning("任务 %s 的进度没能上报给后台（下次一起补报）：%s", self._job_id, e)
             return
         with self._lock:
             # The server added the increment; keep what rounding left behind and anything added meanwhile.

@@ -15,7 +15,7 @@ REPO = HERE.parents[1]
 ASSETS = REPO / "apps" / "aipet" / "assets" / "pets"
 os.environ.setdefault("U2NET_HOME", str(WORK / "u2net"))  # before rembg is imported
 
-from petgen import kling, volc  # noqa: E402
+from petgen import kling, net, volc  # noqa: E402
 from petgen.keycheck import score_file  # noqa: E402
 from petgen.qa import qa_clip  # noqa: E402
 from petgen.package import ACTIONS, chosen_facing, pet_json, write_pet_dir  # noqa: E402
@@ -239,31 +239,42 @@ def cmd_worker(a) -> int:
     Ctrl+C / SIGTERM finishes the step in hand (maybe a paid clip) and
     leaves the job for the server's reaper; a second one quits at once."""
     import logging
+    import logging.handlers
     import signal
     import threading
     from petgen.config import ConfigError, load_worker_config
     from petgen.pipeline import Env
     from petgen.server import Server
-    from petgen.worker import Worker
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    from petgen.worker import ERROR_WAIT, IDLE_WAIT, PAUSE_WAIT, Worker
+    fmt = "%(asctime)s %(levelname)s %(message)s"
+    logging.basicConfig(level=logging.INFO, format=fmt)
+    log = logging.getLogger("petgen")
     try:
         cfg = load_worker_config(a.config)
     except ConfigError as e:
-        print(f"FAIL worker: {e}")
+        print(f"启动失败：{e}", flush=True)
         return 1
     work = a.work or WORK
     props = a.props or work / "props"
     missing = [f"{k}-cutout.png" for k in ("bowl", "ball") if not (props / f"{k}-cutout.png").exists()]
     if missing:
-        print(f"FAIL worker: no {', '.join(missing)} in {props}: run `petgen prop bowl` / `petgen prop ball` "
-              f"or copy work/props there")
+        print(f"启动失败：{props} 里缺少 {'、'.join(missing)}（从开发机 tools/petgen/work/props/ 拷过来）", flush=True)
         return 1
+    # The same lines in <work>/logs/worker.log, a file per day, 30 days kept.
+    (work / "logs").mkdir(parents=True, exist_ok=True)
+    fh = logging.handlers.TimedRotatingFileHandler(work / "logs" / "worker.log", when="midnight",
+                                                   backupCount=30, encoding="utf-8")
+    fh.setFormatter(logging.Formatter(fmt))
+    logging.getLogger().addHandler(fh)
+    log.info("worker 启动：后台 %s，工作目录 %s，日志文件 %s", a.server, work, fh.baseFilename)
+    log.info("领单间隔：无任务时每 %d 秒查一次；出错 %d 秒后重试；可灵余额不足时 %d 秒后再查。User-Agent %s",
+             IDLE_WAIT, ERROR_WAIT, PAUSE_WAIT, net.USER_AGENT)
     stop = threading.Event()
 
     def on_signal(_signum, _frame):
         if stop.is_set():
             raise KeyboardInterrupt
-        print("stopping after the current step (signal again to quit now)", flush=True)
+        log.info("收到停止信号：做完当前步骤后退出（再按一次 Ctrl+C 立即退出）")
         stop.set()
 
     signal.signal(signal.SIGINT, on_signal)
@@ -275,6 +286,10 @@ def cmd_worker(a) -> int:
         return Worker(server, env, stop).run(once=a.once)
     except KeyboardInterrupt:
         return 130
+    finally:
+        log.info("worker 已退出")
+        logging.getLogger().removeHandler(fh)
+        fh.close()
 
 
 def main() -> int:
@@ -327,6 +342,7 @@ def main() -> int:
                            help="pet folder to write; default apps/aipet/assets/pets/builtin-<pet>")
         p.set_defaults(fn=fn)
     a = ap.parse_args()
+    net.install()
     return a.fn(a)
 
 

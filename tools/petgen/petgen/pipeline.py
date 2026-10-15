@@ -7,6 +7,7 @@ lost a paid clip) resumes the paid task instead of paying again."""
 from __future__ import annotations
 
 import hashlib
+import logging
 import shutil
 import time
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from petgen import kling as kling_module
+from petgen import names
 from petgen.config import Prices
 from petgen.download import DownloadError
 from petgen.download import fetch as http_fetch
@@ -21,6 +23,8 @@ from petgen.jobstate import Job, JobState, apply_redo
 from petgen.kling import KlingError, KlingRejected, KlingTaskFailed
 from petgen.prompts import POSE_ASPECT, REF_POSE_FOR_ACTION, custom_action_prompt, custom_pose_prompt
 from petgen.props import PROP_REFS
+
+log = logging.getLogger("petgen.job")
 
 IMAGE_UNITS = 8        # one kling-v3 still (HANDOFF 4)
 VIDEO_UNITS = 4        # one 5 s pro clip
@@ -123,25 +127,31 @@ def generate(run: Run, key: str, kind: str, make_body: Callable[[], dict], dest:
         st["pending_create"] = {"attempt": st["attempts"], "error": INTERRUPTED_CREATE}
         run.state.save()
         create = run.env.kling.create_image if kind == "image" else run.env.kling.create_video
+        log.info("任务 %s：向可灵提交%s生成（第 %d 次尝试）", run.job.id, names.KINDS[kind], st["attempts"])
         try:
             task_id = create(body)
-        except KlingRejected:
+        except KlingRejected as e:
+            log.warning("任务 %s：可灵拒绝了这次提交（不扣费）：%s", run.job.id, e)
             st.pop("pending_create", None)   # a definite refusal: nothing charged
             run.state.save()
             raise
         except KlingError as e:
+            log.error("任务 %s：提交可灵时网络出错，不确定可灵是否已建任务，为避免重复扣费停止：%s", run.job.id, e)
             st["pending_create"] = {"attempt": st["attempts"], "error": str(e)}
             run.state.save()
             raise _unknown_create(str(e)) from e
         st.pop("pending_create", None)
         st["task"] = {"id": task_id, "url": None, "charged": False}
         run.state.save()
+        log.info("任务 %s：可灵已建任务 %s，等待生成", run.job.id, task_id)
     task = st["task"]
     if task["url"] is None:
+        t0 = time.monotonic()
         try:
             d = run.env.kling.wait(kind, task["id"], every=8.0 if kind == "image" else 10.0,
                                    on_poll=run.progress.poll)
-        except KlingTaskFailed:
+        except KlingTaskFailed as e:
+            log.warning("任务 %s：可灵任务 %s 生成失败：%s", run.job.id, task["id"], e)
             st["task"] = None
             run.state.save()
             raise
@@ -152,6 +162,8 @@ def generate(run: Run, key: str, kind: str, make_body: Callable[[], dict], dest:
                        float(IMAGE_UNITS if kind == "image" else VIDEO_UNITS))
             task["charged"] = True
         run.state.save()
+        log.info("任务 %s：可灵任务 %s 生成完成，用时 %.0f 秒", run.job.id, task["id"], time.monotonic() - t0)
+    log.info("任务 %s：下载可灵生成结果 → %s", run.job.id, Path(dest).name)
     run.env.kling.download(task["url"], dest)
     st["task"] = None
     run.state.save()
@@ -190,7 +202,10 @@ def _retry(run: Run, st: dict, e: Exception) -> str:
     kept, wait before the next re-poll / re-download instead of burning
     every loop at once on the same outage."""
     if st.get("task") is not None:
+        log.warning("任务 %s：出错，%d 秒后重新查询/下载已付费的可灵任务：%s", run.job.id, RETRY_WAIT, e)
         run.env.sleep(RETRY_WAIT)
+    else:
+        log.warning("任务 %s：出错，准备重试：%s", run.job.id, e)
     return str(e)
 
 
@@ -228,12 +243,15 @@ def step_ref(run: Run, pose: str) -> None:
             except (KlingError, DownloadError) as e:
                 last = _retry(run, st, e)
                 continue
+        log.info("任务 %s：定妆图（%s）抠图与质检", run.job.id, names.POSES.get(pose, pose))
         verdict = gate(raw, run.dir, f"ref-{pose}")
         if verdict["pass"]:
             st.update(done=True, score=verdict)
             run.state.save()
             return
         last = verdict["reason"]
+        log.warning("任务 %s：定妆图（%s）质检未通过（%s），换下一张照片重新生成",
+                    run.job.id, names.POSES.get(pose, pose), last)
         raw.unlink()
     raise StepFailed(f"参考图 {pose} 未能生成（换照片重试后仍失败）：{last}"[:255])
 
@@ -290,7 +308,11 @@ def step_video(run: Run, action: str) -> None:
             except (KlingError, DownloadError) as e:
                 last = _retry(run, st, e)
                 continue
+        log.info("任务 %s：动作视频（%s）后期处理与质检", run.job.id, names.action(action))
         qa = finish_and_qa(raw, final, run.dir, action)
+        if not qa["pass"]:
+            log.warning("任务 %s：动作视频（%s）质检未通过%s", run.job.id, names.action(action),
+                        "，保留给审核人员决定" if st["attempts"] >= MAX_GENERATIONS else "，重新生成一次")
         if qa["pass"] or st["attempts"] >= MAX_GENERATIONS:
             st.update(done=True, qa=qa)                 # a second miss goes to review marked; a person decides
             run.state.save()
@@ -353,9 +375,12 @@ def step_upload(run: Run) -> None:
     up = run.env.uploader
     urls = up.upload_urls(run.job.id, [{"path": f["path"], "bytes": f["bytes"], "content_type": f["content_type"]}
                                        for f in files])
+    log.info("任务 %s：上传 %d 个文件到 OSS", run.job.id, len(files))
     for f in files:
         run.progress.poll()
+        log.info("任务 %s：上传 %s（%.1f MB）", run.job.id, f["path"], f["bytes"] / 1048576)
         up.put(urls[f["path"]], f["local"], f["content_type"])
+    log.info("任务 %s：通知后台成品已就绪", run.job.id)
     up.finish(run.job.id, run.state.data["steps"]["package"]["walk_facing"],
               [{k: f[k] for k in ("path", "bytes", "sha256", "qa", "deliverable")} for f in files])
     run.state.step("upload")["done"] = True
@@ -377,15 +402,23 @@ def run_job(job: Job, env: Env, progress: Progress) -> Run:
     run = Run(job, env, progress)
     apply_redo(run.state, job, run.dir)
     steps = job.steps()
-    for step in steps:
+    started = time.monotonic()
+    log.info("任务 %s 开始处理，共 %d 步，工作目录 %s", job.id, len(steps), run.dir)
+    for i, step in enumerate(steps, 1):
         if run.state.done(step):
+            log.info("任务 %s [%d/%d] %s：之前已完成，跳过", job.id, i, len(steps), names.step(step))
             continue
         kind, _, arg = step.partition(":")
         same = [s for s in steps if s.partition(":")[0] == kind]
         done = sum(run.state.done(s) for s in same)
         stage, message = SERVER_STAGES[kind], arg or _LABELS[kind]
         progress.begin(step, stage, done, len(same), message)
+        log.info("任务 %s [%d/%d] %s：开始", job.id, i, len(steps), names.step(step))
+        t0 = time.monotonic()
         _STEPS[kind](run, *([arg] if arg else []))
+        log.info("任务 %s [%d/%d] %s：完成，用时 %.0f 秒", job.id, i, len(steps), names.step(step),
+                 time.monotonic() - t0)
         if kind != "upload":
             progress.end(step, stage, done + 1, len(same), message)
+    log.info("任务 %s 全部步骤完成，总用时 %.1f 分钟", job.id, (time.monotonic() - started) / 60)
     return run
