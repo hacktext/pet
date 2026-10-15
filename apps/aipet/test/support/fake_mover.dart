@@ -9,6 +9,7 @@ class FakeMover implements WindowMover {
   Rect rect;
   Rect? work;
   final moves = <Offset>[];
+  final resizes = <Rect>[];
 
   @override
   Future<Rect> bounds() async => rect;
@@ -20,5 +21,11 @@ class FakeMover implements WindowMover {
   void moveTo(Offset topLeft) {
     moves.add(topLeft);
     rect = topLeft & rect.size;
+  }
+
+  @override
+  void setBounds(Rect r) {
+    resizes.add(r);
+    rect = r;
   }
 }

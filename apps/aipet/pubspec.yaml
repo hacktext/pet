@@ -74,6 +74,7 @@ flutter:
   #   - images/a_dot_ham.jpeg
   assets:
     - assets/tray.ico
+    - assets/tray.png
     - assets/pets/builtin-gold/
     - assets/pets/builtin-corgi/
     - assets/pets/builtin-ragdoll/

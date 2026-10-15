@@ -16,6 +16,9 @@ abstract class WindowMover {
 
   /// Moves the window's top-left to [topLeft] (logical) without taking focus.
   void moveTo(Offset topLeft);
+
+  /// Moves and resizes the window to [rect] (logical) without taking focus.
+  void setBounds(Rect rect);
 }
 
 /// Moves the window titled [_title]. The lookup happens on the first move
@@ -37,15 +40,22 @@ class DesktopWindowMover implements WindowMover {
 
   @override
   void moveTo(Offset topLeft) {
+    _window()?.moveTo(topLeft);
+  }
+
+  @override
+  void setBounds(Rect rect) {
+    _window()?.setRect(rect);
+  }
+
+  NativeWindow? _window() {
     final w = _native ??= NativeWindow.find(_title);
     if (w == null) {
       if (!_logged) {
         _logged = true; // once: a walk asks ~30 times a second
         developer.log('no window titled "$_title"; not moving', name: 'aipet.pet_window');
       }
-      return;
     }
-    final s = physicalScale();
-    w.moveTo((topLeft.dx * s).round(), (topLeft.dy * s).round());
+    return w;
   }
 }

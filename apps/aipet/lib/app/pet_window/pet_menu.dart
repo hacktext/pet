@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../../domain/pet.dart';
+import '../../domain/pet_size.dart';
 
 /// Every entry is this tall, so a level's height is countable: the top level
-/// is 3 * 36 + 16 of menu padding = 124, the actions 7 * 36 + 16 = 268, and
+/// is at most 5 * 36 + 16 of menu padding = 196, the actions 7 * 36 + 16 = 268, and
 /// showMenu allows 360 - 16 = 344 inside the pet window.
 const double kPetMenuItemHeight = 36;
 
@@ -27,6 +28,13 @@ final class PetMenuVoice extends PetMenuPick {
   final String? voice;
 }
 
+/// Make the pet this big from now on.
+final class PetMenuSize extends PetMenuPick {
+  const PetMenuSize(this.size);
+
+  final PetSize size;
+}
+
 /// 打开宠物库.
 final class PetMenuOpenLibrary extends PetMenuPick {
   const PetMenuOpenLibrary();
@@ -46,7 +54,10 @@ final class PetMenuQuit extends PetMenuPick {
 ///
 /// [actions] empty (nobody adopted yet) drops 动作, leaving the two commands.
 /// [voices] non-empty (a character that speaks) adds 声音, a level of its
-/// voices and 静音 with [currentVoice] -- null for 静音 -- ticked.
+/// voices and 静音 with [currentVoice] -- null for 静音 -- ticked. 大小 is
+/// always there, a level of the sizes with [currentSize] ticked. A pet
+/// smaller than 大 has a smaller window; the caller grows it to
+/// [kPetMenuRoom] while the menu is up, so these counts still hold.
 Future<PetMenuPick?> showPetMenu(
   BuildContext context, {
   required Offset at,
@@ -54,19 +65,29 @@ Future<PetMenuPick?> showPetMenu(
   String? currentAction,
   List<PetVoice> voices = const [],
   String? currentVoice,
+  PetSize currentSize = PetSize.fallback,
 }) async {
   final choice = await _level(context, at, [
     if (actions.isNotEmpty)
       const PopupMenuItem<String>(value: _openActions, height: kPetMenuItemHeight, child: Text('动作')),
     if (voices.isNotEmpty)
       const PopupMenuItem<String>(value: _openVoices, height: kPetMenuItemHeight, child: Text('声音')),
+    const PopupMenuItem<String>(value: _openSizes, height: kPetMenuItemHeight, child: Text('大小')),
     const PopupMenuItem<String>(value: _openLibrary, height: kPetMenuItemHeight, child: Text('打开宠物库')),
     const PopupMenuItem<String>(value: _quit, height: kPetMenuItemHeight, child: Text('退出')),
   ]);
   if (choice == _openLibrary) return const PetMenuOpenLibrary();
   if (choice == _quit) return const PetMenuQuit();
-  if (choice != _openActions && choice != _openVoices) return null;
+  if (choice != _openActions && choice != _openVoices && choice != _openSizes) return null;
   if (!context.mounted) return null; // the window went away while the menu was up
+  if (choice == _openSizes) {
+    final size = await _level(context, at, [
+      for (final s in PetSize.values.reversed)
+        _checkItem('pet-menu-size-${s.name}', s.name, s.label, current: s == currentSize),
+    ]);
+    final picked = PetSize.byName(size);
+    return picked == null ? null : PetMenuSize(picked);
+  }
   if (choice == _openVoices) {
     final voice = await _level(context, at, [
       for (final v in voices) _checkItem('pet-menu-voice-${v.id}', v.id, v.name, current: v.id == currentVoice),
@@ -82,6 +103,7 @@ Future<PetMenuPick?> showPetMenu(
 
 const String _openActions = 'actions';
 const String _openVoices = 'voices';
+const String _openSizes = 'sizes';
 const String _off = 'off';
 const String _openLibrary = 'open';
 const String _quit = 'quit';

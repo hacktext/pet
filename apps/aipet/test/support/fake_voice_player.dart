@@ -7,7 +7,7 @@ class FakeVoicePlayer implements VoicePlayer {
 
   @override
   void play(File wav) {
-    final parts = wav.path.split('\\');
+    final parts = wav.path.split(RegExp(r'[\\/]')); // either separator: tests also run on macOS
     log.add('${parts[parts.length - 2]}/${parts.last}');
   }
 

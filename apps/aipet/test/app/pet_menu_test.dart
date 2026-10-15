@@ -1,5 +1,6 @@
 import 'package:aipet/app/pet_window/pet_menu.dart';
 import 'package:aipet/domain/pet.dart';
+import 'package:aipet/domain/pet_size.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -18,7 +19,8 @@ void main() {
       {List<String> actions = _actions,
       String? current = 'stand',
       List<PetVoice> voices = const [],
-      String? voice}) async {
+      String? voice,
+      PetSize size = PetSize.fallback}) async {
     t.view.physicalSize = _window;
     t.view.devicePixelRatio = 1.0;
     addTearDown(t.view.reset);
@@ -34,7 +36,8 @@ void main() {
                     actions: actions,
                     currentAction: current,
                     voices: voices,
-                    currentVoice: voice)),
+                    currentVoice: voice,
+                    currentSize: size)),
             child: const SizedBox.expand(),
           ),
         ),
@@ -54,9 +57,9 @@ void main() {
 
   Finder action(String key) => find.byKey(Key('pet-menu-action-$key'));
 
-  testWidgets('the top level is 动作, 打开宠物库 and 退出, with no action on it', (t) async {
+  testWidgets('the top level is 动作, 大小, 打开宠物库 and 退出, with no action on it', (t) async {
     await open(t);
-    for (final s in ['动作', '打开宠物库', '退出']) {
+    for (final s in ['动作', '大小', '打开宠物库', '退出']) {
       expect(find.text(s), findsOneWidget, reason: s);
     }
     for (final a in _actions) {
@@ -64,9 +67,10 @@ void main() {
     }
   });
 
-  testWidgets('with no pet the top level is only the two commands', (t) async {
+  testWidgets('with no pet the top level is 大小 and the two commands', (t) async {
     await open(t, actions: const [], current: null);
     expect(find.text('动作'), findsNothing);
+    expect(find.text('大小'), findsOneWidget);
     expect(find.text('打开宠物库'), findsOneWidget);
     expect(find.text('退出'), findsOneWidget);
   });
@@ -138,6 +142,27 @@ void main() {
         findsOneWidget);
     await pick(t, find.text('静音'));
     expect(picked, [isA<PetMenuVoice>().having((p) => p.voice, 'voice', isNull)]);
+  });
+
+  testWidgets('大小 lists 大, 中 and 小, the current one ticked, and reports the pick', (t) async {
+    await open(t, size: PetSize.medium);
+    await pick(t, find.text('大小'));
+    expect(slack(t), 0, reason: 'sizes');
+    final labels = [for (final s in ['large', 'medium', 'small']) t.getRect(find.byKey(Key('pet-menu-size-$s'))).top];
+    expect(labels, orderedEquals([...labels]..sort()), reason: '大 on top');
+    expect(find.descendant(of: find.byKey(const Key('pet-menu-size-medium')), matching: find.byIcon(Icons.done)),
+        findsOneWidget);
+    expect(find.byIcon(Icons.done), findsOneWidget);
+    await pick(t, find.text('小'));
+    expect(picked, [isA<PetMenuSize>().having((p) => p.size, 'size', PetSize.small)]);
+  });
+
+  testWidgets('the fullest top level still fits without a scroll', (t) async {
+    await open(t, voices: voices);
+    for (final s in ['动作', '声音', '大小', '打开宠物库', '退出']) {
+      expect(find.text(s), findsOneWidget, reason: s);
+    }
+    expect(slack(t), 0);
   });
 
   testWidgets('dismissing either level reports nothing', (t) async {

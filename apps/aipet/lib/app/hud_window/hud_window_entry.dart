@@ -40,9 +40,7 @@ Future<void> runHudWindow() async {
       view.value = v;
       native ??= NativeWindow.find(kHudTitle);
       final work = await displayWorkArea(pet) ?? pet.inflate(kHudSize.longestSide);
-      final p = hudPosition(pet, kHudSize, work);
-      final s = physicalScale();
-      native?.showAt((p.dx * s).round(), (p.dy * s).round());
+      native?.showAt(hudPosition(pet, kHudSize, work));
     },
     onUpdate: (v) => view.value = v,
     onHide: () => windowManager.hide(),

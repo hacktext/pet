@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:ui';
 
 import 'package:ffi/ffi.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../../services/displays.dart';
 import 'window_mover.dart';
@@ -18,6 +19,24 @@ abstract class DragPointer {
   bool primaryDown();
 }
 
+/// Drags the pet window until the primary button is released; the future
+/// completes when the drag ends.
+abstract interface class WindowDragger {
+  Future<void> drag();
+}
+
+/// The platform's dragger: macOS hands the drag to AppKit, which moves the
+/// window itself, live; Windows follows the cursor (see PetDragger).
+WindowDragger platformDragger(WindowMover mover) =>
+    Platform.isMacOS ? AppKitDragger() : PetDragger(mover, SystemDragPointer());
+
+/// window_manager's startDragging(): on macOS that is NSWindow.performDrag,
+/// which tracks the mouse itself and returns once the button is up.
+class AppKitDragger implements WindowDragger {
+  @override
+  Future<void> drag() => windowManager.startDragging();
+}
+
 /// Drags the pet window by following the system cursor.
 ///
 /// Not window_manager's startDragging(): that hands the move to Windows'
@@ -30,7 +49,7 @@ abstract class DragPointer {
 /// The cursor is polled from the OS rather than read from pointer events: a
 /// quick flick leaves the window before the next move, and the window would
 /// stop receiving the events that should bring it along.
-class PetDragger {
+class PetDragger implements WindowDragger {
   PetDragger(this._mover, this._pointer, {this.tick = const Duration(milliseconds: 16)});
 
   final WindowMover _mover;
@@ -44,6 +63,7 @@ class PetDragger {
 
   /// Follows the cursor until the primary button is released. A call while a
   /// drag is running returns that drag's future.
+  @override
   Future<void> drag() async {
     final running = _done;
     if (running != null) return running.future;

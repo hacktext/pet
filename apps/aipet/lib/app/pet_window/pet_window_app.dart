@@ -9,6 +9,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../../domain/pet_size.dart';
 import '../../domain/walker.dart';
 import '../../services/account_store.dart';
 import '../../services/api_client.dart';
@@ -19,6 +20,7 @@ import '../../services/file_download.dart';
 import '../../services/hud_bridge.dart';
 import '../../services/matte_cache.dart';
 import '../../services/pet_library.dart';
+import '../../services/pet_size_store.dart';
 import '../../services/settings_store.dart';
 import '../../services/stats_store.dart';
 import '../../services/sync_service.dart';
@@ -47,10 +49,14 @@ const kPetTitle = 'aipet pet';
 /// Primary engine: builds the services, boots, and opens the library on a
 /// first run (spec 3.3).
 Future<void> runPetWindow() async {
+  final appData = appDataRoot();
+  final sizes = PetSizeStore(appData);
+  final size = sizes.load();
+
   await windowManager.ensureInitialized();
   await windowManager.waitUntilReadyToShow(
-    const WindowOptions(
-      size: Size(360, 360),
+    WindowOptions(
+      size: Size.square(size.edge),
       backgroundColor: Colors.transparent,
       skipTaskbar: true,
       titleBarStyle: TitleBarStyle.hidden,
@@ -65,8 +71,6 @@ Future<void> runPetWindow() async {
       await windowManager.setPreventClose(true);
     },
   );
-
-  final appData = appDataRoot();
 
   // The web platform (spec 2026-10-02 8): usage events, the account and sync.
   // All of it is asynchronous and best effort -- offline, the app behaves
@@ -128,7 +132,7 @@ Future<void> runPetWindow() async {
     mover: mover,
     hudTransport: WindowChannelTransport(kHudChannel),
     voices: voices,
-    voicePlayer: WinmmVoicePlayer(),
+    voicePlayer: platformVoicePlayer(),
     onInteract: (id, kind) => telemetry.track('interact', petId: id, props: {'kind': kind}),
     onVoiceChosen: (id, voice) {
       telemetry.track('voice_change', petId: id, props: {'voice': voice});
@@ -205,7 +209,10 @@ Future<void> runPetWindow() async {
     onQuit: quit,
     companion: companion,
     walker: walker,
-    dragger: PetDragger(mover, SystemDragPointer()),
+    dragger: platformDragger(mover),
+    mover: mover,
+    sizes: sizes,
+    initialSize: size,
   ));
   // The panel engine, created once and kept hidden; without it the pet
   // window works as before (spec 2026-09-19 E 4). The two engines are
@@ -222,15 +229,18 @@ Future<void> runPetWindow() async {
   if (controller.currentPet == null) await launcher.open();
 }
 
-/// For device/hello, e.g. `Windows "Windows 11 Pro" 10.0 (Build 26200)`.
-String _osName() => 'Windows ${Platform.operatingSystemVersion}';
+/// For device/hello, e.g. `Windows "Windows 11 Pro" 10.0 (Build 26200)` or
+/// `macOS Version 15.1 (Build 24B83)`.
+String _osName() => '${_platformName()} ${Platform.operatingSystemVersion}';
+
+String _platformName() => Platform.isMacOS ? 'macOS' : 'Windows';
 
 /// The token's name on the server: this computer's name.
 String _deviceName() {
   try {
     return Platform.localHostname;
   } catch (_) {
-    return 'Windows';
+    return _platformName();
   }
 }
 
@@ -244,6 +254,9 @@ class PetWindowApp extends StatefulWidget {
     required this.companion,
     required this.walker,
     required this.dragger,
+    required this.mover,
+    required this.sizes,
+    required this.initialSize,
   });
 
   final PetWindowController controller;
@@ -252,7 +265,10 @@ class PetWindowApp extends StatefulWidget {
   final Future<void> Function() onQuit;
   final Companion companion;
   final WalkDriver walker;
-  final PetDragger dragger;
+  final WindowDragger dragger;
+  final WindowMover mover;
+  final PetSizeStore sizes;
+  final PetSize initialSize;
 
   @override
   State<PetWindowApp> createState() => _PetWindowAppState();
@@ -260,6 +276,11 @@ class PetWindowApp extends StatefulWidget {
 
 class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowListener {
   bool? _visible;
+  late PetSize _size = widget.initialSize;
+
+  /// Where the pet is drawn inside its window while the window has grown to
+  /// make room for the menu; null when the window is the pet.
+  Offset? _inset;
 
   @override
   void initState() {
@@ -286,7 +307,8 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
   }
 
   Future<void> _setUpTray() async {
-    await trayManager.setIcon('assets/tray.ico');
+    // The menu bar wants a PNG; the Windows tray an .ico.
+    await trayManager.setIcon(Platform.isMacOS ? 'assets/tray.png' : 'assets/tray.ico');
     await trayManager.setToolTip('aipet');
     await trayManager.setContextMenu(Menu(items: [
       MenuItem(key: 'open', label: '打开宠物库'),
@@ -319,14 +341,24 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
 
   Future<void> _showMenu(BuildContext ctx, Offset at) async {
     final c = widget.controller;
-    final pick = await showPetMenu(
-      ctx,
-      at: at,
-      actions: c.currentPet?.actions ?? const [],
-      currentAction: c.currentAction,
-      voices: widget.companion.availableVoices,
-      currentVoice: widget.companion.currentVoice,
-    );
+    final pet = await _growForMenu();
+    if (!ctx.mounted) return;
+    final PetMenuPick? pick;
+    try {
+      pick = await showPetMenu(
+        ctx,
+        at: at + (_inset ?? Offset.zero),
+        actions: c.currentPet?.actions ?? const [],
+        currentAction: c.currentAction,
+        voices: widget.companion.availableVoices,
+        currentVoice: widget.companion.currentVoice,
+        currentSize: _size,
+      );
+    } finally {
+      // Back to the pet's own rectangle before anything picked runs: a walk
+      // or a resize starts from the window's bounds.
+      if (pet != null) _place(pet, inset: null);
+    }
     switch (pick) {
       case null:
         return;
@@ -338,7 +370,60 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
         await widget.companion.userAction(action);
       case PetMenuVoice(:final voice):
         widget.companion.chooseVoice(voice);
+      case PetMenuSize(:final size):
+        await _resize(size);
     }
+  }
+
+  /// A pet smaller than the menu's room gets a window of [kPetMenuRoom] while
+  /// the menu is up, with the pet drawn where it was; returns the pet's own
+  /// rectangle to go back to, or null when the window was left alone.
+  Future<Rect?> _growForMenu() async {
+    if (_size.edge >= kPetMenuRoom) return null;
+    try {
+      // First: a walk would slide the grown window as if it were the pet.
+      widget.walker.stop();
+      final pet = await widget.mover.bounds();
+      final room = menuRoomFor(pet, await widget.mover.workArea(pet));
+      if (!mounted) return null;
+      _place(room, inset: pet.topLeft - room.topLeft);
+      return pet;
+    } catch (e) {
+      // The menu still opens, only cramped into the pet's own window.
+      developer.log('making room for the menu failed: $e', name: 'aipet.pet_window');
+      return null;
+    }
+  }
+
+  /// The pet's new size, its feet where they were; remembered for next time.
+  Future<void> _resize(PetSize size) async {
+    if (size == _size) return;
+    try {
+      widget.walker.stop(); // a walk keeps the width it started with
+      final pet = await widget.mover.bounds();
+      if (!mounted) return;
+      _size = size;
+      _place(resizedPet(pet, size), inset: null);
+      widget.sizes.save(size);
+    } catch (e) {
+      developer.log('resizing the pet failed: $e', name: 'aipet.pet_window');
+    }
+  }
+
+  /// The window to [window] with the pet drawn at [inset] inside it. The
+  /// state first, then the window, in one go: the frame drawn for the new
+  /// size already has the pet where it belongs.
+  void _place(Rect window, {required Offset? inset}) {
+    setState(() => _inset = inset);
+    widget.mover.setBounds(window);
+  }
+
+  /// The pet fills its window, or sits at [_inset] while the window has
+  /// grown for the menu.
+  Widget _petAt(Widget pet) {
+    final inset = _inset;
+    if (inset == null) return pet;
+    return Positioned(left: inset.dx, top: inset.dy, width: _size.edge, height: _size.edge, child: pet);
   }
 
   @override
@@ -355,7 +440,7 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
                 onPanStart: (_) async {
                   widget.companion.dragStarted();
                   try {
-                    // Follows the cursor ourselves, not startDragging(): see PetDragger.
+                    // Windows follows the cursor ourselves, not startDragging(): see PetDragger.
                     await widget.dragger.drag();
                   } catch (e) {
                     // The callback returns void, so a throw here would land
@@ -366,15 +451,17 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
                   }
                 },
                 onSecondaryTapUp: (d) => _showMenu(ctx, d.globalPosition),
-                child: Stack(alignment: Alignment.center, children: [
-                  ListenableBuilder(
+                // expand: the Stack is the window. Sized by its children, it
+                // would shrink to the empty error slot, taking the pet with it.
+                child: Stack(alignment: Alignment.center, fit: StackFit.expand, children: [
+                  _petAt(ListenableBuilder(
                     listenable: widget.walker,
                     builder: (_, child) => Transform.flip(flipX: widget.walker.mirrored, child: child),
                     child: ValueListenableBuilder<AlphaVideoController?>(
                       valueListenable: widget.player.controller,
                       builder: (_, vc, _) => vc == null ? const SizedBox.shrink() : AlphaVideoView(controller: vc),
                     ),
-                  ),
+                  )),
                   ListenableBuilder(
                     listenable: widget.controller,
                     builder: (_, _) {

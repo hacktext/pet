@@ -44,3 +44,38 @@ class WinmmVoicePlayer implements VoicePlayer {
     if (p != null) malloc.free(p);
   }
 }
+
+/// The platform's player: winmm on Windows, afplay on macOS.
+VoicePlayer platformVoicePlayer() => Platform.isMacOS ? AfplayVoicePlayer() : WinmmVoicePlayer();
+
+/// macOS: /usr/bin/afplay, one process per line; a new line or stop() kills
+/// the one still speaking. Ships with every macOS, so nothing to bundle.
+class AfplayVoicePlayer implements VoicePlayer {
+  AfplayVoicePlayer({Future<Process> Function(String exe, List<String> args)? start})
+      : _start = start ?? ((exe, args) => Process.start(exe, args));
+
+  final Future<Process> Function(String exe, List<String> args) _start;
+  Process? _current;
+  int _gen = 0;
+
+  @override
+  void play(File wav) {
+    stop();
+    final gen = _gen;
+    _start('/usr/bin/afplay', [wav.absolute.path]).then((p) {
+      // stop() or another line came while afplay was starting.
+      if (gen != _gen) {
+        p.kill();
+      } else {
+        _current = p;
+      }
+    }, onError: (Object _) {}); // a missing afplay stays silent, like SND_NODEFAULT
+  }
+
+  @override
+  void stop() {
+    _gen++;
+    _current?.kill();
+    _current = null;
+  }
+}
