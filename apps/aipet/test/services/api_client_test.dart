@@ -117,6 +117,11 @@ void main() {
     expect((await api.me()).message, '网络连接失败，请稍后再试');
   });
 
+  test('the server answering with an error page is not called a network failure', () async {
+    http.reply = (_) => const HttpReply(500, '<html>');
+    expect((await api.me()).message, '服务器暂时出错，请稍后再试');
+  });
+
   test('custom deliveries and assets: GET, with the token', () async {
     token = '1|t';
     await api.customDeliveries();

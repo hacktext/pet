@@ -226,12 +226,39 @@ void main() {
         'revisions': 1, 'badge': null, 'icon': 'standard',
       };
 
-  testWidgets('立即定制 while signed out goes to 我的 and asks to sign in', (tester) async {
+  /// What the form and the plans page ask on the way to the plans: the
+  /// photo ticket, the new order (id 9, 豆豆, unpaid) and one plan.
+  HttpReply? formReply(SentRequest r) => switch (r.url.path) {
+        '/api/aipet/custom/upload-tickets' => FakeHttp.ok([
+            {'key': 'k1', 'url': 'https://b.oss', 'fields': {'key': 'k1'}},
+          ]),
+        '/api/aipet/custom/requests' when r.method == 'POST' =>
+          FakeHttp.ok({'id': 9, 'name': '豆豆', 'species': 'cat', 'status': 'draft'}),
+        '/api/aipet/custom/plans' => FakeHttp.ok([plan('standard', '标准版', 3900)]),
+        _ => null,
+      };
+
+  /// 立即定制, a name and a photo, 下一步: the plans of a new, unpaid order --
+  /// the only way to them now that 我的定制 lists no unpaid order.
+  Future<void> toPlans(WidgetTester tester) async {
+    picks = [const PickedFile('a.jpg', [1, 2, 3])];
+    await tester.tap(find.text('立即定制'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '豆豆');
+    await tester.tap(find.text('点击上传照片'));
+    await tester.pumpAndSettle();
+    await tester.dragUntilVisible(find.text('下一步'), find.byType(ListView), const Offset(0, -300));
+    await tester.tap(find.text('下一步'));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('立即定制 while signed out opens the sign-in page over 我的', (tester) async {
     await open(tester);
     await tester.tap(find.text('立即定制'));
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(model.tab, 1);
-    expect(find.text('请先登录后再定制'), findsOneWidget);
+    expect(find.text('登录后即可定制你的专属宠物'), findsOneWidget);
+    expect(find.byKey(const Key('account-phone')), findsOneWidget);
     expect(find.text('定制你的专属宠物'), findsNothing);
   });
 
@@ -243,7 +270,7 @@ void main() {
     expect(find.text('定制你的专属宠物'), findsOneWidget);
   });
 
-  testWidgets('我的定制: every stage in words; 待支付 offers 去支付', (tester) async {
+  testWidgets('我的定制: every stage in words; an unpaid order is not listed', (tester) async {
     api.reply = (r) => r.url.path.endsWith('/requests')
         ? FakeHttp.ok([
             {'id': 5, 'name': '豆豆', 'species': 'cat', 'plan_name': '标准版', 'status': 'generating',
@@ -262,8 +289,11 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('我的定制'), findsOneWidget);
       expect(find.text('猫猫 · 标准版'), findsOneWidget);
-      for (final t in ['生成中（动作 3/7）', '审核中', '生成失败（我们会联系你处理或退款）', '待生成', '待支付', '去支付']) {
+      for (final t in ['生成中（动作 3/7）', '审核中', '生成失败（我们会联系你处理或退款）', '待生成']) {
         expect(find.text(t), findsOneWidget, reason: t);
+      }
+      for (final t in ['小白', '待支付', '去支付']) {
+        expect(find.text(t), findsNothing, reason: t);
       }
       expect(find.text('refs: gate'), findsNothing);
     } finally {
@@ -391,41 +421,20 @@ void main() {
     expect(find.text('退出程序'), findsOneWidget);
   });
 
-  testWidgets('closing the 去支付 flow without paying asks the list again', (tester) async {
-    api.reply = (r) => switch (r.url.path) {
-          '/api/aipet/custom/requests' =>
-            FakeHttp.ok([{'id': 1, 'name': '小白', 'species': 'girl', 'status': 'pending_payment'}]),
-          '/api/aipet/custom/plans' => FakeHttp.ok([plan('standard', '标准版', 3900)]),
-          _ => FakeHttp.ok([]),
-        };
+  testWidgets('closing the plans unpaid asks the list again, and the unpaid order is not in it', (tester) async {
+    api.reply = (r) =>
+        formReply(r) ?? FakeHttp.ok(r.url.path == '/api/aipet/custom/requests'
+            ? [{'id': 9, 'name': '豆豆', 'species': 'cat', 'status': 'draft'}]
+            : []);
     await open(tester);
     await signIn(tester);
-    model.setTab(1);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('去支付'));
-    await tester.pumpAndSettle();
+    await toPlans(tester);
     expect(find.text('选择宠物版本'), findsOneWidget);
     final asked = api.to('/api/aipet/custom/requests').length;
     await tester.pageBack();
     await tester.pumpAndSettle();
     expect(api.to('/api/aipet/custom/requests').length, greaterThan(asked));
-  });
-
-  testWidgets('去支付 preselects the own plan of the order', (tester) async {
-    api.reply = (r) => switch (r.url.path) {
-          '/api/aipet/custom/requests' => FakeHttp.ok([
-              {'id': 1, 'name': '小白', 'species': 'girl', 'status': 'pending_payment', 'plan_code': 'pro'}
-            ]),
-          '/api/aipet/custom/plans' => FakeHttp.ok([plan('standard', '标准版', 3900), plan('pro', '高级Pro版', 5900)]),
-          _ => FakeHttp.ok([]),
-        };
-    await open(tester);
-    await signIn(tester);
-    model.setTab(1);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('去支付'));
-    await tester.pumpAndSettle();
-    expect(find.text('已选 高级Pro版'), findsOneWidget);
+    expect(model.customs, isEmpty);
   });
 
   testWidgets('我的定制 thumbnails decode at thumbnail size and rows build lazily', (tester) async {
@@ -447,46 +456,28 @@ void main() {
   });
 
   testWidgets('form 下一步 goes on to the plans', (tester) async {
-    api.reply = (r) => switch (r.url.path) {
-          '/api/aipet/custom/upload-tickets' => FakeHttp.ok([
-              {'key': 'k1', 'url': 'https://b.oss', 'fields': {'key': 'k1'}},
-            ]),
-          '/api/aipet/custom/requests' when r.method == 'POST' =>
-            FakeHttp.ok({'id': 9, 'name': '豆豆', 'species': 'cat', 'status': 'draft'}),
-          '/api/aipet/custom/plans' => FakeHttp.ok([plan('standard', '标准版', 3900)]),
-          _ => FakeHttp.ok([]),
-        };
-    picks = [const PickedFile('a.jpg', [1, 2, 3])];
+    api.reply = (r) => formReply(r) ?? FakeHttp.ok([]);
     await open(tester);
     await signIn(tester);
-    await tester.tap(find.text('立即定制'));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField), '豆豆');
-    await tester.tap(find.text('点击上传照片'));
-    await tester.pumpAndSettle();
-    await tester.dragUntilVisible(find.text('下一步'), find.byType(ListView), const Offset(0, -300));
-    await tester.tap(find.text('下一步'));
-    await tester.pumpAndSettle();
+    await toPlans(tester);
     expect(find.text('选择宠物版本'), findsOneWidget);
     expect(find.text('已选 标准版'), findsOneWidget);
   });
 
-  testWidgets('去支付 → plans → pay → paid → submitted → back on 我的, list asked again', (tester) async {
+  testWidgets('form → plans → pay → paid → submitted → back on 我的, list asked again', (tester) async {
     var status = 'pending';
-    api.reply = (r) => switch (r.url.path) {
-          '/api/aipet/custom/requests' =>
-            FakeHttp.ok([{'id': 1, 'name': '小白', 'species': 'girl', 'status': 'pending_payment'}]),
-          '/api/aipet/custom/plans' => FakeHttp.ok([plan('standard', '标准版', 3900)]),
-          '/api/aipet/custom/requests/1/order' =>
+    api.reply = (r) =>
+        formReply(r) ??
+        switch (r.url.path) {
+          // delivered, not paid: a paid one would start the 30 s refresh
+          '/api/aipet/custom/requests' => FakeHttp.ok([{'id': 9, 'name': '豆豆', 'species': 'cat', 'status': 'delivered'}]),
+          '/api/aipet/custom/requests/9/order' =>
             FakeHttp.ok({'order_no': 'PX1', 'amount_cents': 3900, 'code_url': 'weixin://x', 'expires_in': 900}),
           _ => FakeHttp.ok({'status': status}),
         };
     await open(tester);
     await signIn(tester);
-    model.setTab(1);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('去支付'));
-    await tester.pumpAndSettle();
+    await toPlans(tester);
     await tester.tap(find.text('创建宠物'));
     await tester.pumpAndSettle();
     expect(find.text('请使用微信扫码支付'), findsOneWidget);
@@ -505,33 +496,25 @@ void main() {
   });
 
   testWidgets('login expired on a custom page: back to 我的 with the reason', (tester) async {
-    var expired = false;
-    api.reply = (r) => switch (r.url.path) {
-          '/api/aipet/custom/requests' when !expired =>
-            FakeHttp.ok([{'id': 1, 'name': '小白', 'species': 'girl', 'status': 'pending_payment'}]),
-          _ => FakeHttp.fail(1003, 'token invalid', null, 401),
-        };
+    api.reply = (r) => r.url.path == '/api/aipet/custom/plans'
+        ? FakeHttp.fail(1003, 'token invalid', null, 401)
+        : formReply(r) ?? FakeHttp.ok([]);
     await open(tester);
     await signIn(tester);
-    model.setTab(1);
-    await tester.pumpAndSettle();
-    expired = true;
-    final asked = api.sent.length;
-    await tester.tap(find.text('去支付'));
-    await tester.pumpAndSettle();
+    await toPlans(tester);
     expect(find.text('选择宠物版本'), findsNothing);
     expect(model.tab, 1);
     expect(find.text('登录已过期，请重新登录'), findsOneWidget);
     // The pet window was asked to sign out; 我的 is back to the sign-in form.
     expect(accountSide.calls, ['logout']);
     expect(model.account.signedIn, isFalse);
-    expect(find.byKey(const Key('account-phone')), findsOneWidget);
+    expect(find.text('登录 / 注册'), findsOneWidget);
     expect(find.text('我的定制'), findsNothing);
-    expect(find.text('小白'), findsNothing);
-    // No loop: one plans request, nothing asked again on its own.
+    // No loop: nothing asked again on its own.
+    final asked = api.sent.length;
     await tester.pump(const Duration(seconds: 5));
     await tester.pumpAndSettle();
-    expect(api.sent.length, asked + 1);
+    expect(api.sent.length, asked);
     expect(accountSide.calls, ['logout']);
   });
 

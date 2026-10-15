@@ -53,6 +53,13 @@ void main() {
     await tester.pump();
   }
 
+  /// 我的 → 去登录: the sign-in page.
+  Future<void> openSignIn(WidgetTester tester) async {
+    await open(tester);
+    await tester.tap(find.text('去登录'));
+    await tester.pumpAndSettle();
+  }
+
   /// Lets a bridge round trip (several microtask hops) finish.
   Future<void> settle(WidgetTester tester) async {
     for (var i = 0; i < 5; i++) {
@@ -60,17 +67,21 @@ void main() {
     }
   }
 
-  testWidgets('signed out: phone, code, 获取验证码 and 登录', (tester) async {
+  testWidgets('signed out: 我的 offers 登录 / 注册, its page phone, code, 获取验证码 and 登录', (tester) async {
     await open(tester);
+    expect(find.text('登录 / 注册'), findsOneWidget);
+    expect(find.text('还没有领养小伙伴，去广场看看吧'), findsOneWidget);
+    expect(phone, findsNothing);
+    await tester.tap(find.text('去登录'));
+    await tester.pumpAndSettle();
     expect(phone, findsOneWidget);
     expect(code, findsOneWidget);
     expect(find.text('获取验证码'), findsOneWidget);
     expect(find.text('登录'), findsOneWidget);
-    expect(find.text('还没有领养小伙伴，去广场看看吧'), findsOneWidget);
   });
 
   testWidgets('a bad phone number is caught here, not sent', (tester) async {
-    await open(tester);
+    await openSignIn(tester);
     await tester.enterText(phone, '12345');
     await tester.tap(find.text('获取验证码'));
     await settle(tester);
@@ -80,7 +91,7 @@ void main() {
 
   testWidgets('获取验证码 counts down from the wait the server gave', (tester) async {
     account.smsReply = const AccountReply(ok: true, retryAfter: 60);
-    await open(tester);
+    await openSignIn(tester);
     await tester.enterText(phone, '13800138000');
     await tester.tap(find.text('获取验证码'));
     await settle(tester);
@@ -96,7 +107,7 @@ void main() {
   });
 
   testWidgets('too frequent: the server message inline, and its own wait', (tester) async {
-    await open(tester); // FakeAccount's default: 5001-like, retry after 42
+    await openSignIn(tester); // FakeAccount's default: 5001-like, retry after 42
     await tester.enterText(phone, '13800138000');
     await tester.tap(find.text('获取验证码'));
     await settle(tester);
@@ -107,7 +118,7 @@ void main() {
 
   testWidgets('a wrong code shows what the server said', (tester) async {
     account.loginReply = const AccountReply(ok: false, message: '验证码错误或已过期');
-    await open(tester);
+    await openSignIn(tester);
     await tester.enterText(phone, '13800138000');
     await tester.enterText(code, '12');
     await tester.tap(find.text('登录'));
@@ -121,11 +132,12 @@ void main() {
   });
 
   testWidgets('signing in turns the card into the account, with sync and sign out', (tester) async {
-    await open(tester);
+    await openSignIn(tester);
     await tester.enterText(phone, '13800138000');
     await tester.enterText(code, '123456');
     await tester.tap(find.text('登录'));
     await settle(tester);
+    await tester.pumpAndSettle(); // the sign-in page closes itself
     expect(account.calls, ['login 13800138000 123456']);
     expect(find.text('138****1234'), findsOneWidget);
     expect(find.text('尚未同步'), findsOneWidget);
@@ -151,7 +163,7 @@ void main() {
     await tester.tap(find.text('退出登录'));
     await settle(tester);
     expect(account.calls.last, 'logout');
-    expect(phone, findsOneWidget);
+    expect(find.text('登录 / 注册'), findsOneWidget);
     expect(find.text('网络连接失败，请稍后再试'), findsNothing);
   });
 

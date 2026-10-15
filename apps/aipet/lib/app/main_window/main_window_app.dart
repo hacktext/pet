@@ -9,6 +9,7 @@ import 'custom_flow/custom_form_page.dart';
 import 'custom_flow/pay_page.dart';
 import 'custom_flow/plan_page.dart';
 import 'custom_flow/submitted_page.dart';
+import 'login_page.dart';
 import 'main_window_model.dart';
 import 'pet_card.dart';
 import 'theme.dart';
@@ -255,6 +256,7 @@ void openCustomFlow(BuildContext context, MainWindowModel model) {
   if (deps == null) return;
   if (!model.account.signedIn) {
     model.requireLogin();
+    openLogin(context, model, reason: '登录后即可定制你的专属宠物');
     return;
   }
   Navigator.of(context)
@@ -299,9 +301,8 @@ void openPlans(BuildContext context, MainWindowModel model, CustomRequestInfo re
       .then((_) => model.loadCustoms());
 }
 
-/// 我的定制: each order's first photo, name, category, plan and progress;
-/// one still awaiting payment offers 去支付. A sliver, so up to 50 rows build
-/// only as they scroll into view.
+/// 我的定制: each paid order's first photo, name, category, plan and
+/// progress. A sliver, so up to 50 rows build only as they scroll into view.
 class _CustomList extends StatelessWidget {
   const _CustomList({required this.model});
 
@@ -341,17 +342,11 @@ class _CustomList extends StatelessWidget {
               ),
               title: Text(r.name),
               subtitle: Text([speciesLabel(r.species), ?r.planName].join(' · ')),
-              trailing: r.status.awaitingPayment
-                  ? Row(mainAxisSize: MainAxisSize.min, children: [
-                      Text(r.statusText, style: const TextStyle(color: AppColors.textMuted)),
-                      const SizedBox(width: 8),
-                      FilledButton(onPressed: () => openPlans(context, model, r), child: const Text('去支付')),
-                    ])
-                  : Text(r.statusText,
-                      style: TextStyle(
-                        color: r.status == CustomStatus.failed ? Colors.redAccent : AppColors.accent,
-                        fontWeight: FontWeight.w700,
-                      )),
+              trailing: Text(r.statusText,
+                  style: TextStyle(
+                    color: r.status == CustomStatus.failed ? Colors.redAccent : AppColors.accent,
+                    fontWeight: FontWeight.w700,
+                  )),
             ),
           );
         },
@@ -360,28 +355,13 @@ class _CustomList extends StatelessWidget {
   }
 }
 
-/// Sign in with a phone number and an SMS code, or -- signed in -- the
-/// account, its last sync, 立即同步 and 退出登录 (web platform spec 8). The
-/// pet window does the work; this only asks.
-class _AccountCard extends StatefulWidget {
+/// Signed out, 登录 / 注册 opening the sign-in page; signed in, the account,
+/// its last sync, 立即同步 and 退出登录 (web platform spec 8). The pet window
+/// does the work; this only asks.
+class _AccountCard extends StatelessWidget {
   const _AccountCard({required this.model});
 
   final MainWindowModel model;
-
-  @override
-  State<_AccountCard> createState() => _AccountCardState();
-}
-
-class _AccountCardState extends State<_AccountCard> {
-  final _phone = TextEditingController();
-  final _code = TextEditingController();
-
-  @override
-  void dispose() {
-    _phone.dispose();
-    _code.dispose();
-    super.dispose();
-  }
 
   static String _two(int n) => n.toString().padLeft(2, '0');
 
@@ -394,73 +374,40 @@ class _AccountCardState extends State<_AccountCard> {
 
   @override
   Widget build(BuildContext context) {
-    final model = widget.model;
     final a = model.account;
+    if (!a.signedIn) return _SignInEntry(onTap: () => openLogin(context, model));
     final error = model.accountError;
     final busy = model.accountBusy;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(color: AppColors.card, borderRadius: BorderRadius.circular(20)),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        if (a.signedIn) ...[
-          Row(children: [
-            const CircleAvatar(
-              backgroundColor: AppColors.accentSoft,
-              child: Icon(Icons.person, color: AppColors.accent),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(a.phoneMasked!,
-                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.text)),
-                const SizedBox(height: 2),
-                Text(_syncLine(a), style: const TextStyle(fontSize: 12, color: AppColors.textMuted)),
-              ]),
-            ),
-          ]),
-          const SizedBox(height: 12),
-          Row(children: [
-            Expanded(
-              child: OutlinedButton(
-                onPressed: busy || a.syncing ? null : model.syncNow,
-                child: const Text('立即同步'),
-              ),
-            ),
-            const SizedBox(width: 12),
-            TextButton(onPressed: busy ? null : model.logout, child: const Text('退出登录')),
-          ]),
-        ] else ...[
-          const Text('登录后，宠物和养成数据可在多台电脑间同步',
-              style: TextStyle(fontSize: 12, color: AppColors.textMuted)),
-          const SizedBox(height: 8),
-          TextField(
-            key: const Key('account-phone'),
-            controller: _phone,
-            keyboardType: TextInputType.phone,
-            decoration: const InputDecoration(hintText: '手机号', isDense: true),
+        Row(children: [
+          const CircleAvatar(
+            backgroundColor: AppColors.accentSoft,
+            child: Icon(Icons.person, color: AppColors.accent),
           ),
-          const SizedBox(height: 8),
-          Row(children: [
-            Expanded(
-              child: TextField(
-                key: const Key('account-code'),
-                controller: _code,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(hintText: '验证码', isDense: true),
-              ),
-            ),
-            const SizedBox(width: 12),
-            OutlinedButton(
-              onPressed: busy || model.codeWait > 0 ? null : () => model.sendCode(_phone.text),
-              child: Text(model.codeWait > 0 ? '${model.codeWait}秒后重发' : '获取验证码'),
-            ),
-          ]),
-          const SizedBox(height: 12),
-          FilledButton(
-            onPressed: busy ? null : () => model.login(_phone.text, _code.text),
-            child: const Text('登录'),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(a.phoneMasked!,
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.text)),
+              const SizedBox(height: 2),
+              Text(_syncLine(a), style: const TextStyle(fontSize: 12, color: AppColors.textMuted)),
+            ]),
           ),
-        ],
+        ]),
+        const SizedBox(height: 12),
+        Row(children: [
+          Expanded(
+            child: OutlinedButton(
+              onPressed: busy || a.syncing ? null : model.syncNow,
+              child: const Text('立即同步'),
+            ),
+          ),
+          const SizedBox(width: 12),
+          TextButton(onPressed: busy ? null : model.logout, child: const Text('退出登录')),
+        ]),
         if (error != null) ...[
           const SizedBox(height: 8),
           Text(error, style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.error)),
@@ -468,6 +415,48 @@ class _AccountCardState extends State<_AccountCard> {
       ]),
     );
   }
+}
+
+/// 我的 while signed out: one tap to the sign-in page.
+class _SignInEntry extends StatelessWidget {
+  const _SignInEntry({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Material(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(20),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(children: [
+              const CircleAvatar(
+                radius: 24,
+                backgroundColor: AppColors.accentSoft,
+                child: Icon(Icons.person_outline, color: AppColors.accent, size: 28),
+              ),
+              const SizedBox(width: 14),
+              const Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('登录 / 注册',
+                      style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: AppColors.text)),
+                  SizedBox(height: 4),
+                  Text('同步宠物和养成数据，定制专属宠物',
+                      style: TextStyle(fontSize: 12, color: AppColors.textMuted)),
+                ]),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(color: AppColors.accent, borderRadius: BorderRadius.circular(20)),
+                child: const Text('去登录', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+              ),
+            ]),
+          ),
+        ),
+      );
 }
 
 /// 你的「豆豆」做好了 [换它陪我] [×] (generation spec 6.2).

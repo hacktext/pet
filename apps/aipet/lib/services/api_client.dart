@@ -90,7 +90,9 @@ final class ApiOffline extends ApiResult {
   final String reason;
 
   @override
-  String get message => '网络连接失败，请稍后再试';
+  // The server was reached but answered with an error page (reason 'HTTP n'):
+  // telling the user to check their network would send them the wrong way.
+  String get message => reason.startsWith('HTTP ') ? '服务器暂时出错，请稍后再试' : '网络连接失败，请稍后再试';
 }
 
 /// The aipet endpoints of pixpickweb-tp (web platform spec 4): every answer is

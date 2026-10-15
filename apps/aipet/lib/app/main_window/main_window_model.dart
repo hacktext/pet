@@ -180,7 +180,9 @@ class MainWindowModel extends ChangeNotifier {
       final list = await c.service.list();
       // A newer request, or a sign-out, came while this one was out.
       if (_disposed || ask != _customsAsk || !_account.signedIn) return;
-      _customs = list;
+      // An order nobody paid for is not shown: leaving the plans page unpaid
+      // leaves no trace in 我的定制, and a new 立即定制 starts over.
+      _customs = [for (final r in list) if (!r.status.awaitingPayment) r];
       // Delivered but not here (yet, or the user deleted it): the pet window
       // is the one that downloads; this window never writes pets/.
       if (list.any(_deliveredButMissing)) _bridge.refreshCustom();
@@ -219,10 +221,17 @@ class MainWindowModel extends ChangeNotifier {
     }
   }
 
-  /// 立即定制 while signed out.
+  /// 立即定制 while signed out: 我的 behind the sign-in page it opens.
   void requireLogin() {
     _tab = 1;
-    _say('请先登录后再定制');
+    notifyListeners();
+  }
+
+  /// A fresh sign-in page starts without the last attempt's error.
+  void clearAccountError() {
+    if (_accountError == null) return;
+    _accountError = null;
+    notifyListeners();
   }
 
   /// The server no longer takes the token: whatever custom page is open
