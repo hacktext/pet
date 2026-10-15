@@ -130,6 +130,9 @@ void main() {
     expect(find.text('定制专属角色'), findsOneWidget);
     expect(find.text('上传照片，生成桌面角色'), findsOneWidget);
     expect(find.text('定制专属宠物'), findsNothing);
+    // The banner sits under 宠物 | 人物 and above the categories: it belongs to the tab.
+    expect(tester.getTopLeft(find.text('定制专属角色')).dy, greaterThan(tester.getBottomLeft(find.text('人物')).dy));
+    expect(tester.getBottomLeft(find.text('立即定制')).dy, lessThan(tester.getTopLeft(find.text('女生')).dy));
     await tester.tap(find.text('男生'));
     await tester.pump();
     expect(find.text('这里还没有小伙伴'), findsOneWidget);

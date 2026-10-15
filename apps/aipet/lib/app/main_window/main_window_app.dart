@@ -107,15 +107,17 @@ class _PlazaPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final pets = model.plazaPets;
+    // 宠物 | 人物 first, then the banner of the chosen group (定制专属宠物 /
+    // 定制专属角色), so it reads as belonging to that tab.
     return CustomScrollView(slivers: [
       SliverPadding(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-        sliver: SliverToBoxAdapter(
-            child: _Banner(group: model.group, onCustom: () => openCustomFlow(context, model))),
+        sliver: SliverToBoxAdapter(child: _GroupSwitch(model: model)),
       ),
       SliverPadding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-        sliver: SliverToBoxAdapter(child: _GroupSwitch(model: model)),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+        sliver: SliverToBoxAdapter(
+            child: _Banner(group: model.group, onCustom: () => openCustomFlow(context, model))),
       ),
       SliverToBoxAdapter(
         child: Padding(
