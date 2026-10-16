@@ -12,7 +12,7 @@ class FakePlayer implements ClipPlayer {
   @override
   Future<void> play(File aipmat, {required bool loop, VoidCallback? onFinished}) async {
     if (gate != null) await gate!.future;
-    final parts = aipmat.path.split('\\');
+    final parts = aipmat.path.split(RegExp(r'[\\/]')); // either separator: tests also run on macOS
     plays.add('${parts[parts.length - 2]}/${parts.last}|${loop ? 'loop' : 'once'}');
     lastOnFinished = onFinished;
   }

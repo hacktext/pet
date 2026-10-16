@@ -11,6 +11,7 @@ import 'package:aipet/app/pet_window/walk_driver.dart';
 import 'package:aipet/domain/library_state.dart';
 import 'package:aipet/domain/walker.dart';
 import 'package:aipet/services/hud_bridge.dart';
+import 'package:aipet/services/needs_store.dart';
 import 'package:aipet/services/pet_library.dart';
 import 'package:aipet/services/settings_store.dart';
 import 'package:aipet/services/stats_store.dart';
@@ -31,6 +32,16 @@ class LowRandom implements Random {
   double nextDouble() => 0;
   @override
   bool nextBool() => false;
+}
+
+/// The longest idle and roam, and a coin that always lands on "nap".
+class HighRandom implements Random {
+  @override
+  int nextInt(int max) => 0;
+  @override
+  double nextDouble() => 0.99;
+  @override
+  bool nextBool() => true;
 }
 
 /// A mover whose bounds() can be parked: on Windows it is a platform round
@@ -75,7 +86,14 @@ void main() {
     }
   }
 
-  Future<void> boot({Future<File> Function(File)? ensure, bool twoPets = false, bool character = false}) async {
+  /// [lively] turns on hover coaxing and meal requests, which the panel and
+  /// roaming tests leave off: they would add actions and panel updates.
+  Future<void> boot(
+      {Future<File> Function(File)? ensure,
+      bool twoPets = false,
+      bool character = false,
+      bool lively = false,
+      Random? random}) async {
     // Held in a local as well: the step must undo the folder this boot() just
     // made, not whichever one the shared variable points at when it runs.
     final dir = tmp = Directory.systemTemp.createTempSync('companion_');
@@ -129,8 +147,11 @@ void main() {
         hudTransport: petEnd,
         voices: VoiceStore(appData),
         voicePlayer: voice,
-        random: LowRandom(),
+        random: random ?? LowRandom(),
         cursor: () async => cursorAt,
+        needs: NeedsStore(appData),
+        coaxOnHover: lively,
+        askForNeeds: lively,
         onInteract: (pet, kind) => events.add('interact $pet $kind'),
         onVoiceChosen: (pet, v) => events.add('voice $pet $v'));
     events = [];
@@ -508,6 +529,120 @@ void main() {
       'voice builtin-xiaoya off',
     ]);
     await run(t, const Duration(seconds: 1));
+  });
+
+  int plays(String clip) => player.plays.where((p) => p.startsWith('builtin-$clip')).length;
+
+  petTest('hovering the pet makes it coax once, not again for 30 s, and it is not an interaction', (t) async {
+    await boot(lively: true);
+    c.petEnter();
+    await t.pump(const Duration(milliseconds: 300));
+    expect(player.plays.last, 'builtin-gold/act_cute.mp4|once');
+    expect(stats.current!.todayInteractions, 0);
+    player.lastOnFinished!(); // the clip ends: back to stand
+    await t.pump();
+    c.petExit();
+    c.petEnter();
+    await t.pump(const Duration(milliseconds: 300));
+    expect(plays('gold/act_cute'), 1);
+    c.petExit();
+    now = now.add(const Duration(seconds: 31));
+    c.petEnter();
+    await t.pump(const Duration(milliseconds: 300));
+    expect(plays('gold/act_cute'), 2);
+    c.petExit();
+  });
+
+  petTest('a quick pass over the pet does not make it coax', (t) async {
+    await boot(lively: true);
+    c.petEnter();
+    await t.pump(const Duration(milliseconds: 200));
+    c.petExit();
+    await t.pump(const Duration(seconds: 1));
+    expect(plays('gold/act_cute'), 0);
+  });
+
+  petTest('a character coaxes with 撒娇', (t) async {
+    await boot(character: true, lively: true);
+    c.petEnter();
+    await t.pump(const Duration(milliseconds: 300));
+    expect(player.plays.last, 'builtin-xiaoya/act_coy.mp4|once');
+    c.petExit();
+  });
+
+  petTest('no coaxing over a walk', (t) async {
+    await boot(lively: true);
+    unawaited(c.userAction('walk'));
+    await run(t, const Duration(seconds: 1));
+    c.petEnter();
+    await t.pump(const Duration(milliseconds: 300));
+    expect(plays('gold/act_cute'), 0);
+    c.petExit();
+    await run(t, const Duration(seconds: 21));
+  });
+
+  petTest('roaming sometimes naps, then stands up again', (t) async {
+    await boot(random: HighRandom());
+    await t.pump(const Duration(minutes: 3));
+    expect(player.plays.last, 'builtin-gold/sleep.mp4|loop');
+    await t.pump(const Duration(minutes: 2));
+    expect(player.plays.last, 'builtin-gold/stand.mp4|loop');
+    expect(stats.current!.todayInteractions, 0);
+  });
+
+  petTest('an action during a nap is not undone by the nap waking up', (t) async {
+    await boot(random: HighRandom());
+    await t.pump(const Duration(minutes: 3));
+    expect(player.plays.last, 'builtin-gold/sleep.mp4|loop');
+    await c.userAction('play');
+    final before = player.plays.length;
+    await t.pump(const Duration(minutes: 2));
+    expect(player.plays.skip(before).where((p) => p.contains('stand')).length, lessThanOrEqualTo(1));
+  });
+
+  petTest('at a meal time the pet asks for food over its head until it is fed', (t) async {
+    await boot(lively: true); // 9:00: breakfast (8:00) is open
+    c.checkNeeds();
+    await t.pump(); // its 卖萌 is on its way
+    expect(c.bubble.value, '我饿了，想吃饭~');
+    expect(c.view!.status, '想吃饭了');
+    expect(player.plays.last, 'builtin-gold/act_cute.mp4|once');
+    await t.pump(kBubbleFor);
+    expect(c.bubble.value, isNull, reason: 'the bubble goes, the request stays');
+    expect(c.view!.status, '想吃饭了');
+    now = now.add(const Duration(minutes: 29));
+    c.checkNeeds();
+    expect(c.bubble.value, isNull, reason: 'not asked again before 30 minutes');
+    now = now.add(const Duration(minutes: 1));
+    c.checkNeeds();
+    expect(c.bubble.value, '我饿了，想吃饭~');
+    await c.userAction('feed');
+    expect(c.bubble.value, isNull);
+    expect(c.view!.status, isNot('想吃饭了'));
+    c.checkNeeds();
+    expect(c.bubble.value, isNull, reason: 'fed: breakfast is served');
+    expect(NeedsStore(Directory('${tmp.path}\\appdata')).lastServed(), now, reason: 'kept across a restart');
+  });
+
+  petTest('hidden: no panel, no roaming, no requests; shown again, it carries on', (t) async {
+    await boot(lively: true);
+    c.setHidden(true);
+    c.petEnter();
+    await t.pump(const Duration(seconds: 1));
+    expect(panel, isEmpty);
+    c.petExit();
+    c.checkNeeds();
+    expect(c.bubble.value, isNull);
+    await t.pump(const Duration(minutes: 7));
+    expect(player.plays.where((p) => p.contains('walk')), isEmpty);
+    c.setHidden(false);
+    await t.pump();
+    expect(c.bubble.value, '我饿了，想吃饭~', reason: 'a meal that came due meanwhile');
+    player.lastOnFinished!(); // its 卖萌 ends: back to stand
+    await t.pump();
+    await t.pump(const Duration(minutes: 3));
+    expect(player.plays.where((p) => p.contains('walk')), isNotEmpty);
+    await run(t, const Duration(seconds: 9));
   });
 }
 

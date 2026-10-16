@@ -4,12 +4,15 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart';
 import 'package:screen_retriever/screen_retriever.dart';
 
 import '../../domain/hud_layout.dart';
+import '../../domain/needs.dart';
 import '../../domain/pet.dart';
 import '../../domain/pet_stats.dart';
 import '../../services/hud_bridge.dart';
+import '../../services/needs_store.dart';
 import '../../services/voice_player.dart';
 import '../../services/voice_store.dart';
 import '../../services/window_bridge.dart';
@@ -18,6 +21,15 @@ import 'pet_window_controller.dart';
 import 'stats_keeper.dart';
 import 'walk_driver.dart';
 import 'window_mover.dart';
+
+/// Over the pet this long, it coaxes (卖萌, or 撒娇 for a character)...
+const kHoverCuteAfter = Duration(milliseconds: 300);
+
+/// ...and not again for this long.
+const kHoverCuteCooldown = Duration(seconds: 30);
+
+/// A bubble over the pet's head stays this long.
+const kBubbleFor = Duration(seconds: 10);
 
 /// Everything the user does with the pet on the desktop (spec 2026-09-19 E):
 /// actions from the panel or the menu, walking across the screen, roaming
@@ -36,8 +48,14 @@ class Companion {
     this.onInteract,
     this.onVoiceChosen,
     Future<Offset?> Function()? cursor,
+    NeedsStore? needs,
+    this.coaxOnHover = true,
+    this.askForNeeds = true,
   })  : _random = random ?? Random(),
-        _cursor = cursor ?? _systemCursor {
+        _cursor = cursor ?? _systemCursor,
+        _needs = needs {
+    _lastServed = needs?.lastServed();
+    if (askForNeeds) _needTicker = Timer.periodic(const Duration(minutes: 1), (_) => checkNeeds());
     presenter = HudPresenter(
         show: () => unawaited(_showHud()),
         hide: () {
@@ -68,6 +86,12 @@ class Companion {
   final Duration userWalk;
   final Random _random;
 
+  /// Hovering the pet makes it coax (卖萌 / 撒娇).
+  final bool coaxOnHover;
+
+  /// Meal and drink times ask to be fed.
+  final bool askForNeeds;
+
   /// The pointer on the screen, logical pixels, top-left origin; null when
   /// it cannot be told.
   final Future<Offset?> Function() _cursor;
@@ -75,6 +99,23 @@ class Companion {
   /// The pet window and the panel together, as last placed: the pointer
   /// anywhere in here, the gap between them included, is still "on" them.
   Rect? _hudArea;
+
+  final NeedsStore? _needs;
+  DateTime? _lastServed;
+  Need? _need; // the meal or drink asked for and not yet given
+  DateTime? _needAskedAt;
+  Timer? _needTicker;
+  Timer? _bubbleTimer;
+  Timer? _cuteTimer;
+  DateTime? _lastCute;
+  Timer? _napTimer;
+  bool _hidden = false;
+
+  /// Words over the pet's head (a meal or drink request); null for none.
+  final ValueNotifier<String?> bubble = ValueNotifier(null);
+
+  /// Hidden from the desktop (快速隐藏): no panel, no roaming, no requests.
+  bool get hidden => _hidden;
 
   /// The user did something with the pet (telemetry's `interact`): [kind] is
   /// the action key from the panel or the menu, or `drag`.
@@ -105,7 +146,7 @@ class Companion {
     return HudView(
       name: pet.name,
       cover: pet.coverFile.path,
-      status: statusText(s),
+      status: _need?.kind.status ?? statusText(s),
       companionDays: companionDays(s, stats.now),
       todayInteractions: s.todayInteractions,
       intimacy: s.intimacy.round(),
@@ -127,6 +168,9 @@ class Companion {
     if (pet == null || !pet.actions.contains(key)) return;
     stats.interact(key);
     onInteract?.call(pet.id, key);
+    _napTimer?.cancel();
+    _napTimer = null;
+    if (key == 'feed') _served();
     if (key == 'walk') {
       voicePlayer.stop();
       return _walk(userWalk);
@@ -194,14 +238,117 @@ class Companion {
       // Not once we are on our way out: a walk stopped by shutdown() wakes up
       // here after the panel has been hidden, and freeing the panel with the
       // pointer still on the pet would ask for it right back.
-      if (!_disposed) presenter.busy = _dragging || walker.walking || _walks > 0;
+      if (!_disposed) presenter.busy = _hidden || _dragging || walker.walking || _walks > 0;
     }
     if (gen == _walkGen && pets.currentAction == 'walk') await pets.playAction('stand');
   }
 
-  void petEnter() => presenter.petEnter();
+  void petEnter() {
+    presenter.petEnter();
+    _cuteTimer?.cancel();
+    if (!coaxOnHover) return;
+    _cuteTimer = Timer(kHoverCuteAfter, () {
+      _cuteTimer = null;
+      final now = stats.now;
+      final last = _lastCute;
+      if (last != null && now.isBefore(last.add(kHoverCuteCooldown))) return;
+      if (_beCute()) _lastCute = now;
+    });
+  }
 
-  void petExit() => presenter.petExit();
+  void petExit() {
+    presenter.petExit();
+    _cuteTimer?.cancel();
+    _cuteTimer = null;
+  }
+
+  /// The pet's coaxing clip, if it has one and is idle (standing or napping):
+  /// never over a walk, a drag or another action. Not an interaction -- the
+  /// user only passed by. True if it plays.
+  bool _beCute() {
+    final pet = pets.currentPet;
+    if (_disposed || _hidden || pet == null || _dragging || walker.walking || _walks > 0) return false;
+    final key = pet.species.isCharacter ? 'act_coy' : 'act_cute';
+    final now = pets.currentAction;
+    if (!pet.actions.contains(key) || (now != 'stand' && now != 'sleep')) return false;
+    _napTimer?.cancel();
+    _napTimer = null;
+    unawaited(pets.playAction(key).then((_) {
+      if (!_disposed && pets.currentPet == pet && pets.currentAction == key) _speak(pet, key);
+    }));
+    return true;
+  }
+
+  /// Every minute (and on demand): is it time to ask for food or water? An
+  /// open need asks again every [kNeedRemind] until fed; only a pet that can
+  /// eat asks at all.
+  void checkNeeds() {
+    if (_disposed || _hidden || !askForNeeds) return;
+    final pet = pets.currentPet;
+    final open = pet != null && pet.actions.contains('feed') ? openNeed(stats.now, _lastServed) : null;
+    if (open != _need) {
+      _need = open;
+      _needAskedAt = null;
+      if (open == null) _clearBubble();
+      _pushView();
+    }
+    if (open == null) return;
+    final now = stats.now;
+    final asked = _needAskedAt;
+    if (asked != null && now.isBefore(asked.add(kNeedRemind))) return;
+    _needAskedAt = now;
+    _say(open.kind.bubble);
+    _beCute();
+  }
+
+  void _served() {
+    final now = stats.now;
+    _lastServed = now;
+    _needs?.served(now);
+    if (_need != null) {
+      _need = null;
+      _needAskedAt = null;
+      _clearBubble();
+      _pushView();
+    }
+  }
+
+  void _say(String text) {
+    bubble.value = text;
+    _bubbleTimer?.cancel();
+    _bubbleTimer = Timer(kBubbleFor, _clearBubble);
+  }
+
+  void _clearBubble() {
+    _bubbleTimer?.cancel();
+    _bubbleTimer = null;
+    bubble.value = null;
+  }
+
+  /// 快速隐藏: off the desktop with nothing going on, until shown again. The
+  /// window itself is the pet window's business.
+  void setHidden(bool hidden) {
+    if (_disposed || hidden == _hidden) return;
+    _hidden = hidden;
+    if (hidden) {
+      _walkGen++;
+      walker.stop();
+      _roam?.cancel();
+      _roam = null;
+      _napTimer?.cancel();
+      _napTimer = null;
+      _cuteTimer?.cancel();
+      _cuteTimer = null;
+      voicePlayer.stop();
+      _clearBubble();
+      if (pets.currentAction == 'walk') unawaited(pets.playAction('stand'));
+    }
+    presenter.busy = hidden || _dragging || walker.walking || _walks > 0;
+    if (!hidden) {
+      _petsChanged(); // roaming again
+      checkNeeds(); // a meal that came due meanwhile
+    }
+  }
 
   void dragStarted() {
     final pet = pets.currentPet;
@@ -215,7 +362,7 @@ class Companion {
 
   void dragEnded() {
     _dragging = false;
-    presenter.busy = walker.walking;
+    presenter.busy = _hidden || walker.walking;
   }
 
   /// Quitting: stop walking and take the panel off the screen, and wait for
@@ -237,6 +384,7 @@ class Companion {
     walker.stop();
     _roam?.cancel();
     _roam = null;
+    _cancelTimers();
     await hud.hide();
   }
 
@@ -253,7 +401,7 @@ class Companion {
       _walkGen++;
       walker.stop();
     }
-    if (pets.currentAction == 'stand' && !walker.walking) {
+    if (pets.currentAction == 'stand' && !walker.walking && !_hidden) {
       _roam ??= _scheduleRoam();
     } else if (pets.currentAction != 'stand') {
       _roam?.cancel();
@@ -262,9 +410,10 @@ class Companion {
     _pushView();
   }
 
-  /// 3-6 idle minutes, then roam if nothing else is going on (spec 3.4).
+  /// 3-6 idle minutes, then roam if nothing else is going on (spec 3.4):
+  /// a walk, or a nap -- more often a nap at night.
   Timer _scheduleRoam() => Timer(Duration(seconds: 180 + _random.nextInt(181)), () {
-        if (_disposed) return;
+        if (_disposed || _hidden) return;
         _roam = null;
         final idle = pets.currentPet != null &&
             pets.currentAction == 'stand' &&
@@ -277,8 +426,26 @@ class Companion {
           _roam = _scheduleRoam();
           return;
         }
-        unawaited(_walk(Duration(seconds: 8 + _random.nextInt(8))));
+        final hour = stats.now.hour;
+        final napShare = hour >= 22 || hour < 7 ? 0.8 : 0.4;
+        if (pets.currentPet!.actions.contains('sleep') && _random.nextDouble() >= 1 - napShare) {
+          unawaited(_nap(Duration(minutes: 2 + _random.nextInt(4))));
+        } else {
+          unawaited(_walk(Duration(seconds: 8 + _random.nextInt(8))));
+        }
       });
+
+  /// Sleeps for [length], then stands up -- unless something else happened
+  /// meanwhile (an action, a drag, being hidden), which cancels the wake-up.
+  Future<void> _nap(Duration length) async {
+    await pets.playAction('sleep');
+    if (_disposed || _hidden || pets.currentAction != 'sleep') return;
+    _napTimer?.cancel();
+    _napTimer = Timer(length, () {
+      _napTimer = null;
+      if (!_disposed && pets.currentAction == 'sleep') unawaited(pets.playAction('stand'));
+    });
+  }
 
   Future<void> _showHud() async {
     if (_disposed) return;
@@ -337,8 +504,16 @@ class Companion {
     walker.stop();
     _roam?.cancel();
     _roam = null;
+    _cancelTimers();
     presenter.dispose();
     pets.removeListener(_petsChanged);
     stats.removeListener(_pushView);
+  }
+
+  void _cancelTimers() {
+    for (final t in [_needTicker, _bubbleTimer, _cuteTimer, _napTimer]) {
+      t?.cancel();
+    }
+    _needTicker = _bubbleTimer = _cuteTimer = _napTimer = null;
   }
 }
