@@ -8,17 +8,17 @@ void main() {
   setUp(() => root = Directory.systemTemp.createTempSync('autostart_'));
   tearDown(() => root.deleteSync(recursive: true));
 
-  test('on by default: a first run wants it', () {
-    expect(Autostart(root).wanted, isTrue);
+  test('off by default: a first run does not want it', () {
+    expect(Autostart(root).wanted, isFalse);
   });
 
   test('an unreadable choice counts as never made', () {
     Autostart(root).file.writeAsStringSync('{nope');
-    expect(Autostart(root).wanted, isTrue);
+    expect(Autostart(root).wanted, isFalse);
   });
 
-  test('turned off, it stays off', () {
-    Autostart(root).file.writeAsStringSync('{"enabled":false}');
-    expect(Autostart(root).wanted, isFalse);
+  test('turned on, it stays on', () {
+    Autostart(root).file.writeAsStringSync('{"enabled":true}');
+    expect(Autostart(root).wanted, isTrue);
   });
 }

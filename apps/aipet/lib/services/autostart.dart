@@ -4,7 +4,7 @@ import 'dart:io';
 
 import 'package:launch_at_startup/launch_at_startup.dart';
 
-/// 开机启动: on unless the user turned it off. The choice lives in
+/// 开机启动: off unless the user turned it on. The choice lives in
 /// autostart.json (local, not synced); the system entry (the Run key on
 /// Windows, a login item on macOS) is brought in line with it at every start,
 /// so a reinstall to another folder points it at the new exe.
@@ -19,15 +19,15 @@ class Autostart {
 
   File get file => File('${root.path}${Platform.pathSeparator}autostart.json');
 
-  /// The user's choice; true when never made.
+  /// The user's choice; false when never made.
   bool get wanted {
     try {
-      if (!file.existsSync()) return true;
+      if (!file.existsSync()) return false;
       final j = jsonDecode(file.readAsStringSync());
       final v = j is Map<String, Object?> ? j['enabled'] : null;
-      return v is bool ? v : true;
+      return v is bool ? v : false;
     } catch (_) {
-      return true;
+      return false;
     }
   }
 
