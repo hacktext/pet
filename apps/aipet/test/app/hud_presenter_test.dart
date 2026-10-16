@@ -122,4 +122,53 @@ void main() {
     expect(log, ['show'], reason: 'the pointer still crosses the pet while the engine is torn down');
     expect(p.shown, isFalse);
   });
+
+  group('pointerOver (macOS: the panel window sends no enter / exit)', () {
+    late bool over;
+    late HudPresenter q;
+    setUp(() {
+      over = false;
+      q = HudPresenter(show: () => log.add('show'), hide: () => log.add('hide'), pointerOver: () async => over);
+    });
+    tearDown(() => q.dispose());
+
+    testWidgets('a pointer still over the panel keeps it up, checked again every 600 ms', (t) async {
+      q.petEnter();
+      await t.pump(ms * 300);
+      q.petExit(); // crossed onto the panel, which reported nothing
+      over = true;
+      await t.pump(const Duration(seconds: 3));
+      expect(log, ['show']);
+      over = false; // gone for real
+      await t.pump(ms * 600);
+      expect(log, ['show', 'hide']);
+    });
+
+    testWidgets('without the pointer there it hides after 600 ms as before', (t) async {
+      q.petEnter();
+      await t.pump(ms * 300);
+      q.petExit();
+      await t.pump(ms * 600);
+      expect(log, ['show', 'hide']);
+    });
+
+    testWidgets('busy and x still hide at once, whatever the pointer', (t) async {
+      over = true;
+      q.petEnter();
+      await t.pump(ms * 300);
+      q.close();
+      expect(log, ['show', 'hide']);
+    });
+
+    testWidgets('a check that fails hides, as before there was one', (t) async {
+      final r = HudPresenter(
+          show: () => log.add('show'), hide: () => log.add('hide'), pointerOver: () async => throw StateError('x'));
+      addTearDown(r.dispose);
+      r.petEnter();
+      await t.pump(ms * 300);
+      r.petExit();
+      await t.pump(ms * 600);
+      expect(log, ['show', 'hide']);
+    });
+  });
 }

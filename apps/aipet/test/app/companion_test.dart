@@ -58,6 +58,7 @@ void main() {
   late FakeVoicePlayer voice;
   late FakeTransport panelEnd;
   late List<String> events; // what the telemetry and sync hooks heard
+  Offset? cursorAt; // where the pointer is on the screen; null: cannot be told
   Completer<void>? showGate; // when set, the panel takes its time coming up
   Completer<void>? hideGate; // when set, the panel takes its time going away
 
@@ -91,6 +92,7 @@ void main() {
     mover = GatedMover();
     showGate = null;
     hideGate = null;
+    cursorAt = null;
     pets = PetWindowController(
       library: PetLibrary(builtinRoot: builtin, customRoot: Directory('${tmp.path}\\custom')),
       settings: SettingsStore(appData),
@@ -128,6 +130,7 @@ void main() {
         voices: VoiceStore(appData),
         voicePlayer: voice,
         random: LowRandom(),
+        cursor: () async => cursorAt,
         onInteract: (pet, kind) => events.add('interact $pet $kind'),
         onVoiceChosen: (pet, v) => events.add('voice $pet $v'));
     events = [];
@@ -282,6 +285,21 @@ void main() {
     await t.pump();
     expect(panel.last, 'update 1');
     c.petExit();
+    await t.pump(const Duration(milliseconds: 600));
+    expect(panel.last, 'hide');
+  });
+
+  petTest('macOS: the pointer on the panel keeps it up though the panel window reports nothing', (t) async {
+    await boot();
+    c.petEnter();
+    await t.pump(const Duration(milliseconds: 300));
+    expect(panel, ['show ${mover.rect} 金毛 0']);
+    // Off the pet and onto the panel above it, which sends no hover event.
+    cursorAt = mover.rect.topCenter.translate(0, -100);
+    c.petExit();
+    await t.pump(const Duration(seconds: 3));
+    expect(panel.last, startsWith('show'));
+    cursorAt = mover.rect.bottomRight.translate(200, 200); // away from both
     await t.pump(const Duration(milliseconds: 600));
     expect(panel.last, 'hide');
   });

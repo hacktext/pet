@@ -2,7 +2,11 @@ import 'dart:async';
 import 'dart:developer' as developer;
 import 'dart:io';
 import 'dart:math';
+import 'dart:ui';
 
+import 'package:screen_retriever/screen_retriever.dart';
+
+import '../../domain/hud_layout.dart';
 import '../../domain/pet.dart';
 import '../../domain/pet_stats.dart';
 import '../../services/hud_bridge.dart';
@@ -31,8 +35,16 @@ class Companion {
     this.userWalk = const Duration(seconds: 20),
     this.onInteract,
     this.onVoiceChosen,
-  }) : _random = random ?? Random() {
-    presenter = HudPresenter(show: () => unawaited(_showHud()), hide: () => unawaited(hud.hide()));
+    Future<Offset?> Function()? cursor,
+  })  : _random = random ?? Random(),
+        _cursor = cursor ?? _systemCursor {
+    presenter = HudPresenter(
+        show: () => unawaited(_showHud()),
+        hide: () {
+          _hudArea = null;
+          unawaited(hud.hide());
+        },
+        pointerOver: _pointerOverPetOrPanel);
     hud = PetHudBridge(
       hudTransport,
       onAction: (k) => unawaited(userAction(k)),
@@ -55,6 +67,14 @@ class Companion {
   final VoicePlayer voicePlayer;
   final Duration userWalk;
   final Random _random;
+
+  /// The pointer on the screen, logical pixels, top-left origin; null when
+  /// it cannot be told.
+  final Future<Offset?> Function() _cursor;
+
+  /// The pet window and the panel together, as last placed: the pointer
+  /// anywhere in here, the gap between them included, is still "on" them.
+  Rect? _hudArea;
 
   /// The user did something with the pet (telemetry's `interact`): [kind] is
   /// the action key from the panel or the menu, or `drag`.
@@ -278,10 +298,29 @@ class Companion {
       // old rectangle and leave it there.
       final b = await mover.bounds();
       if (_disposed || gen != _showGen || !presenter.shown) return;
+      // Where the panel will land: the same rule the panel window uses.
+      final work = await mover.workArea(b) ?? b.inflate(kHudSize.longestSide);
+      if (_disposed || gen != _showGen || !presenter.shown) return; // that was a round trip too
+      _hudArea = b.expandToInclude(hudPosition(b, kHudSize, work) & kHudSize);
       await hud.show(b, v);
       if (!presenter.shown) unawaited(hud.hide());
     } catch (e) {
       developer.log('showHud failed: $e', name: 'aipet.hud');
+    }
+  }
+
+  Future<bool> _pointerOverPetOrPanel() async {
+    final area = _hudArea;
+    if (area == null) return false;
+    final at = await _cursor();
+    return at != null && area.contains(at);
+  }
+
+  static Future<Offset?> _systemCursor() async {
+    try {
+      return await screenRetriever.getCursorScreenPoint();
+    } catch (_) {
+      return null;
     }
   }
 

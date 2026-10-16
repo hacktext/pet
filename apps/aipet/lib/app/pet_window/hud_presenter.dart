@@ -5,16 +5,24 @@ import 'dart:async';
 /// the pointer was on the pet when x was pressed it stays hidden until the
 /// pointer leaves the pet, otherwise the next time the pointer enters the pet
 /// it shows again. Walking or dragging (busy) hides it at once.
+///
+/// [pointerOver], when given, is asked before a hide that came from the
+/// pointer leaving: true keeps the panel up and asks again after another
+/// [hideDelay]. Enter / exit events alone are not enough on macOS, where the
+/// panel is a window that never becomes key and so is sent no mouse-entered
+/// events: crossing from the pet to the panel looked like leaving both.
 class HudPresenter {
   HudPresenter({
     required this.show,
     required this.hide,
+    this.pointerOver,
     this.showDelay = const Duration(milliseconds: 300),
     this.hideDelay = const Duration(milliseconds: 600),
   });
 
   final void Function() show;
   final void Function() hide;
+  final Future<bool> Function()? pointerOver;
   final Duration showDelay;
   final Duration hideDelay;
 
@@ -29,6 +37,7 @@ class HudPresenter {
   /// ask for it again.
   bool _done = false;
   Timer? _pending;
+  int _gen = 0; // bumped by every event: a pointerOver answer for an older state is dropped
 
   bool get shown => _shown;
   bool get pointerOnPet => _inPet;
@@ -78,6 +87,7 @@ class HudPresenter {
     // seconds the native teardown takes. None of that may bring the panel
     // back, and this must not depend on the owner guarding its own callbacks.
     if (_done) return;
+    _gen++;
     _pending?.cancel();
     _pending = null;
     final want = !_busy && !_dismissed && (_inPet || (_shown && _inHud));
@@ -96,14 +106,30 @@ class HudPresenter {
         _inHud = false;
         hide();
       } else {
-        _pending = Timer(hideDelay, () {
-          _pending = null;
-          _shown = false;
-          _inHud = false;
-          hide();
-        });
+        _armHide();
       }
     }
+  }
+
+  void _armHide() {
+    final gen = _gen;
+    _pending = Timer(hideDelay, () async {
+      _pending = null;
+      final check = pointerOver;
+      if (check != null) {
+        bool over;
+        try {
+          over = await check();
+        } catch (_) {
+          over = false; // no answer: hide, as before there was a check
+        }
+        if (_done || gen != _gen) return; // an event came meanwhile and decided
+        if (over) return _armHide();
+      }
+      _shown = false;
+      _inHud = false;
+      hide();
+    });
   }
 
   /// For good: after this the panel counts as down and every event is
