@@ -24,10 +24,13 @@ include(GoogleTest)
 add_subdirectory(native_path)
 add_subdirectory(pcmat)
 add_subdirectory(matte_core)
-# Media Foundation: Windows only. The macOS decoder (AVFoundation) is built by
-# the plugin's podspec, not here.
+# Decoder: Media Foundation on Windows, AVFoundation on macOS. Both build a
+# target named mf_decode behind the same header. The Flutter macOS plugin
+# compiles these sources through its podspec instead of this tree.
 if(WIN32)
   add_subdirectory(mf_decode)
+elseif(APPLE)
+  add_subdirectory(avf_decode)
 endif()
 add_subdirectory(pet_matte)
 add_subdirectory(frame_source)

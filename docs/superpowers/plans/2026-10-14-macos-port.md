@@ -125,3 +125,23 @@
 
 ## 6. 建议的执行方式
 阶段 1、4 在 Windows 上完成并提交（两边测试都要绿）；阶段 0、2、3、5、6 在 Mac 上用 Claude Code 完成。
+
+## 7. 进度（2026-10-15，Mac 上）
+
+阶段 0、2、3、5、6 已在 Apple 芯片 Mac（macOS 26.2、Xcode 26.6、Flutter 3.47.2）上完成，产出可运行的 arm64 包。
+
+- **环境**：Flutter 从国内镜像下载（`storage.flutter-io.cn`）装在 `$HOME/development/flutter`；pub 走 pub.dev（`--enforce-lockfile`，镜像会改写 `pubspec.lock`）。`brew install cocoapods cmake`。
+- **阶段 2**：`native/avf_decode/src/decoder.mm`（AVAssetReader → 32BGRA，ARC），CMake 目标仍叫 `mf_decode`、共用头文件和测试；`decoder.h` 的句柄按平台区分。`native/testdata/make_fixtures.sh` 生成夹具。Mac 上原生 ctest **59/59**。
+- **阶段 3**：`packages/alpha_video/macos/`（podspec + `AlphaVideoPlugin.mm`）。`Classes/native/` 下是一行的转发源文件，通过头文件搜索路径编译 `native/` 的真源；lz4 1.10.0 放在 `Classes/third_party/lz4`。纹理用 `CVPixelBufferPool` + vImage 把 RGBA 换成 BGRA，保持预乘。**预乘 alpha 已实测正确**：屏幕截图的边缘颜色与 `.aipmat` 源数据一致，无发黑发白。
+- **阶段 5**：`apps/aipet/macos/`。`MainFlutterWindow.swift`：所有引擎透明、注册 `aipet/native_window`（y 轴按主屏翻转）、desktop_multi_window 子窗口回调里注册插件；`LSUIElement`；关闭沙盒、保留 network.client；`ARCHS = arm64`；最低 macOS 12（Flutter 3.47 模板的下限）。关掉最后一个窗口不退出。
+- **开机启动**（10-16）：`MainFlutterWindow.swift` 的 `launch_at_startup` 通道用 `SMAppService.mainApp` 实现（macOS 13+；12 上报告关闭、忽略设置），没有引入 LaunchAtLogin 包。实测首次启动即注册登录项。
+- **阶段 6**：`apps/aipet/installer/build_macos.sh` → `dist/Aipet-<版本>-arm64.dmg`。默认 ad-hoc 签名；设置 `AIPET_SIGN_IDENTITY` / `AIPET_NOTARY_PROFILE` 时做 Developer ID 签名和公证。
+
+已实测：启动、宠物库显示、领养后抠像缓存生成、宠物透明显示并走动。
+未实测（需要人手操作）：拖拽（`AppKitDragger` 松手后才返回？）、悬停面板不抢焦点、右键菜单、托盘、语音、登录/支付、多显示器。
+
+已知问题：
+- `flutter test` 在 Mac 上 428 过 / 26 挂，全部是测试代码写死了 Windows 路径（`'${tmp.path}\\builtin'`、`'C:\\pets\\...'`、`fake_player.dart` 按 `\\` 切分），不是应用代码的问题。
+- alpha_video 只有 CocoaPods，没有 Swift Package Manager 支持（Flutter 目前只是警告）。
+- 应用图标还是 Flutter 默认图标。
+- 首次启动时如果用户正在用别的应用，宠物库窗口会出现在其后面、不抢到前台（macOS 的协作式激活），需要真机确认是否要主动激活。

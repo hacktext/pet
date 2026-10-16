@@ -6,9 +6,16 @@
 
 #include "native_path/native_path.h"
 
+#ifdef _WIN32
 struct IMFSourceReader;
+#endif
 
 namespace mfd {
+
+#ifndef _WIN32
+// macOS：AVAssetReader 及其 track output，定义在 avf_decode/src/decoder.mm。
+struct AvfReader;
+#endif
 
 struct VideoInfo {
   uint32_t width = 0;
@@ -41,7 +48,11 @@ class Decoder {
 
  private:
   Decoder() = default;
+#ifdef _WIN32
   IMFSourceReader* reader_ = nullptr;
+#else
+  AvfReader* reader_ = nullptr;
+#endif
   VideoInfo info_{};
   uint64_t lastPts_ = 0;
   bool hadError_ = false;

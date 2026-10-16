@@ -11,3 +11,6 @@ dist/
 secrets/*
 !secrets/*.example
 *.key
+
+# macOS Finder
+.DS_Store

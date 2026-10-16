@@ -1,0 +1,35 @@
+PODS:
+  - alpha_video (0.0.1):
+    - FlutterMacOS
+  - FlutterMacOS (1.0.0)
+  - HotKey (0.2.1)
+  - hotkey_manager_macos (0.0.1):
+    - FlutterMacOS
+    - HotKey
+
+DEPENDENCIES:
+  - alpha_video (from `Flutter/ephemeral/.symlinks/plugins/alpha_video/macos`)
+  - FlutterMacOS (from `Flutter/ephemeral`)
+  - hotkey_manager_macos (from `Flutter/ephemeral/.symlinks/plugins/hotkey_manager_macos/macos`)
+
+SPEC REPOS:
+  trunk:
+    - HotKey
+
+EXTERNAL SOURCES:
+  alpha_video:
+    :path: Flutter/ephemeral/.symlinks/plugins/alpha_video/macos
+  FlutterMacOS:
+    :path: Flutter/ephemeral
+  hotkey_manager_macos:
+    :path: Flutter/ephemeral/.symlinks/plugins/hotkey_manager_macos/macos
+
+SPEC CHECKSUMS:
+  alpha_video: 07e0e4d4d9d4ccbdf599d74f16b48f04dd75c952
+  FlutterMacOS: c232990155153907050900a2e175c7773903ba4e
+  HotKey: 400beb7caa29054ea8d864c96f5ba7e5b4852277
+  hotkey_manager_macos: a4317849af96d2430fa89944d3c58977ca089fbe
+
+PODFILE CHECKSUM: 1e95c36afbfd1cb6423ceca4de7a8e1b256fb6ac
+
+COCOAPODS: 1.17.0
