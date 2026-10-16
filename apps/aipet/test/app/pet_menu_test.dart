@@ -57,9 +57,9 @@ void main() {
 
   Finder action(String key) => find.byKey(Key('pet-menu-action-$key'));
 
-  testWidgets('the top level is 动作, 大小, 打开宠物库 and 退出, with no action on it', (t) async {
+  testWidgets('the top level is 动作, 大小, 隐藏, 打开宠物库 and 退出, with no action on it', (t) async {
     await open(t);
-    for (final s in ['动作', '大小', '打开宠物库', '退出']) {
+    for (final s in ['动作', '大小', '隐藏', '打开宠物库', '退出']) {
       expect(find.text(s), findsOneWidget, reason: s);
     }
     for (final a in _actions) {
@@ -106,6 +106,12 @@ void main() {
     await pick(t, find.text('动作'));
     await pick(t, action('spin')); // the last one: the first to fall below the fold
     expect(picked, [isA<PetMenuAction>().having((p) => p.action, 'action', 'spin')]);
+  });
+
+  testWidgets('隐藏 reports itself', (t) async {
+    await open(t);
+    await pick(t, find.text('隐藏'));
+    expect(picked, [isA<PetMenuHide>()]);
   });
 
   testWidgets('打开宠物库 and 退出 report themselves', (t) async {
@@ -159,7 +165,7 @@ void main() {
 
   testWidgets('the fullest top level still fits without a scroll', (t) async {
     await open(t, voices: voices);
-    for (final s in ['动作', '声音', '大小', '打开宠物库', '退出']) {
+    for (final s in ['动作', '声音', '大小', '隐藏', '打开宠物库', '退出']) {
       expect(find.text(s), findsOneWidget, reason: s);
     }
     expect(slack(t), 0);

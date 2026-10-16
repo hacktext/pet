@@ -53,6 +53,11 @@ Source: "{#VcRedist}\vcruntime140.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#VcRedist}\vcruntime140_1.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#VcRedist}\concrt140.dll"; DestDir: "{app}"; Flags: ignoreversion
 
+[Registry]
+; 开机启动由软件自己写（默认开启，托盘菜单可关）；卸载时删掉这一项。
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "Aipet"; Flags: uninsdeletevalue dontcreatekey
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"; ValueType: none; ValueName: "Aipet"; Flags: uninsdeletevalue dontcreatekey
+
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
 Name: "{group}\卸载 {#AppName}"; Filename: "{uninstallexe}"

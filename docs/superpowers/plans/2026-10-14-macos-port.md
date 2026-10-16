@@ -117,5 +117,11 @@
 - 托盘图标 macOS 用 `assets/tray.png`（44×44，彩色，非模板图）。
 - 上报的系统名：macOS 为 `macOS <版本>`。
 
+### 2026-10-16 新增，Mac 侧要补的
+- **悬浮面板**：`HudPresenter` 在隐藏前用 `screen_retriever.getCursorScreenPoint()` 确认指针是否还在「宠物窗口 ∪ 面板」里（面板窗口在 Mac 上不是 key window，收不到 mouse-entered）。真机确认从宠物移到面板再点按钮不会消失。
+- **开机启动**：`launch_at_startup` 在 macOS 走 MethodChannel `launch_at_startup`（`launchAtStartupIsEnabled` / `launchAtStartupSetEnabled`），需要按该包 README 在 `MainFlutterWindow.swift` 里用 `LaunchAtLogin`（Swift Package）实现。没实现时 `Autostart` 只记日志、不影响运行。
+- **快速隐藏快捷键**：`hotkey_manager`，Control+Option+H（Command+Option+H 是系统的「隐藏其他」）。真机确认注册成功、后台时也能触发。
+- 托盘菜单新增「隐藏宠物 / 显示宠物」「开机启动（勾选）」；右键菜单新增「隐藏」。
+
 ## 6. 建议的执行方式
 阶段 1、4 在 Windows 上完成并提交（两边测试都要绿）；阶段 0、2、3、5、6 在 Mac 上用 Claude Code 完成。

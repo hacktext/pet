@@ -4,7 +4,7 @@ import '../../domain/pet.dart';
 import '../../domain/pet_size.dart';
 
 /// Every entry is this tall, so a level's height is countable: the top level
-/// is at most 5 * 36 + 16 of menu padding = 196, the actions 7 * 36 + 16 = 268, and
+/// is at most 6 * 36 + 16 of menu padding = 232, the actions 7 * 36 + 16 = 268, and
 /// showMenu allows 360 - 16 = 344 inside the pet window.
 const double kPetMenuItemHeight = 36;
 
@@ -33,6 +33,11 @@ final class PetMenuSize extends PetMenuPick {
   const PetMenuSize(this.size);
 
   final PetSize size;
+}
+
+/// 隐藏: off the desktop until the tray or the hotkey brings it back.
+final class PetMenuHide extends PetMenuPick {
+  const PetMenuHide();
 }
 
 /// 打开宠物库.
@@ -73,10 +78,12 @@ Future<PetMenuPick?> showPetMenu(
     if (voices.isNotEmpty)
       const PopupMenuItem<String>(value: _openVoices, height: kPetMenuItemHeight, child: Text('声音')),
     const PopupMenuItem<String>(value: _openSizes, height: kPetMenuItemHeight, child: Text('大小')),
+    const PopupMenuItem<String>(value: _hide, height: kPetMenuItemHeight, child: Text('隐藏')),
     const PopupMenuItem<String>(value: _openLibrary, height: kPetMenuItemHeight, child: Text('打开宠物库')),
     const PopupMenuItem<String>(value: _quit, height: kPetMenuItemHeight, child: Text('退出')),
   ]);
   if (choice == _openLibrary) return const PetMenuOpenLibrary();
+  if (choice == _hide) return const PetMenuHide();
   if (choice == _quit) return const PetMenuQuit();
   if (choice != _openActions && choice != _openVoices && choice != _openSizes) return null;
   if (!context.mounted) return null; // the window went away while the menu was up
@@ -104,6 +111,7 @@ Future<PetMenuPick?> showPetMenu(
 const String _openActions = 'actions';
 const String _openVoices = 'voices';
 const String _openSizes = 'sizes';
+const String _hide = 'hide';
 const String _off = 'off';
 const String _openLibrary = 'open';
 const String _quit = 'quit';

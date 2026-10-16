@@ -4,8 +4,11 @@ import 'dart:io';
 
 import 'package:alpha_video/alpha_video.dart';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/services.dart';
+import 'package:hotkey_manager/hotkey_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -14,11 +17,13 @@ import '../../domain/walker.dart';
 import '../../services/account_store.dart';
 import '../../services/api_client.dart';
 import '../../services/app_paths.dart';
+import '../../services/autostart.dart';
 import '../../services/device_identity.dart';
 import '../../services/custom_downloader.dart';
 import '../../services/file_download.dart';
 import '../../services/hud_bridge.dart';
 import '../../services/matte_cache.dart';
+import '../../services/needs_store.dart';
 import '../../services/pet_library.dart';
 import '../../services/pet_size_store.dart';
 import '../../services/settings_store.dart';
@@ -50,6 +55,10 @@ const kPetTitle = 'aipet pet';
 /// first run (spec 3.3).
 Future<void> runPetWindow() async {
   final appData = appDataRoot();
+  final autostart = Autostart(appData);
+  // Not from a debug build: a developer's run would point the login entry at
+  // a build folder.
+  if (!kDebugMode) unawaited(autostart.apply());
   final sizes = PetSizeStore(appData);
   final size = sizes.load();
 
@@ -133,6 +142,7 @@ Future<void> runPetWindow() async {
     hudTransport: WindowChannelTransport(kHudChannel),
     voices: voices,
     voicePlayer: platformVoicePlayer(),
+    needs: NeedsStore(appData),
     onInteract: (id, kind) => telemetry.track('interact', petId: id, props: {'kind': kind}),
     onVoiceChosen: (id, voice) {
       telemetry.track('voice_change', petId: id, props: {'voice': voice});
@@ -176,6 +186,7 @@ Future<void> runPetWindow() async {
     release: [
       player.dispose,
       trayManager.destroy,
+      hotKeyManager.unregisterAll,
       () async {
         statsTicker.cancel();
         heartbeat.cancel();
@@ -213,6 +224,7 @@ Future<void> runPetWindow() async {
     mover: mover,
     sizes: sizes,
     initialSize: size,
+    autostart: autostart,
   ));
   // The panel engine, created once and kept hidden; without it the pet
   // window works as before (spec 2026-09-19 E 4). The two engines are
@@ -257,6 +269,7 @@ class PetWindowApp extends StatefulWidget {
     required this.mover,
     required this.sizes,
     required this.initialSize,
+    required this.autostart,
   });
 
   final PetWindowController controller;
@@ -269,6 +282,7 @@ class PetWindowApp extends StatefulWidget {
   final WindowMover mover;
   final PetSizeStore sizes;
   final PetSize initialSize;
+  final Autostart autostart;
 
   @override
   State<PetWindowApp> createState() => _PetWindowAppState();
@@ -277,6 +291,12 @@ class PetWindowApp extends StatefulWidget {
 class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowListener {
   bool? _visible;
   late PetSize _size = widget.initialSize;
+
+  /// 快速隐藏: off the desktop until the hotkey, the tray or the library
+  /// brings it back. Not remembered: the next start shows the pet.
+  bool _hidden = false;
+  String? _shownPetId;
+  late bool _autostartOn = widget.autostart.wanted;
 
   /// Where the pet is drawn inside its window while the window has grown to
   /// make room for the menu; null when the window is the pet.
@@ -296,6 +316,34 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
     // decided.
     SchedulerBinding.instance.addPostFrameCallback((_) => _syncVisibility());
     unawaited(_setUpTray());
+    unawaited(_registerHotKey());
+  }
+
+  /// Ctrl+Alt+H on Windows, Control+Option+H on macOS (Command+Option+H is
+  /// the system's 隐藏其他): hides the pet, and shows it again.
+  static final _hotKey = HotKey(
+    key: PhysicalKeyboardKey.keyH,
+    modifiers: [HotKeyModifier.control, HotKeyModifier.alt],
+    scope: HotKeyScope.system,
+  );
+
+  static String get _hotKeyLabel => Platform.isMacOS ? '⌃⌥H' : 'Ctrl+Alt+H';
+
+  Future<void> _registerHotKey() async {
+    try {
+      await hotKeyManager.register(_hotKey, keyDownHandler: (_) => _setHidden(!_hidden));
+    } catch (e) {
+      // Taken by another program: the tray and the menu still hide.
+      developer.log('hotkey $_hotKeyLabel not registered: $e', name: 'aipet.pet_window');
+    }
+  }
+
+  void _setHidden(bool hidden) {
+    if (hidden == _hidden) return;
+    _hidden = hidden;
+    widget.companion.setHidden(hidden);
+    _syncVisibility();
+    unawaited(_setUpTray());
   }
 
   @override
@@ -312,13 +360,20 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
     await trayManager.setToolTip('aipet');
     await trayManager.setContextMenu(Menu(items: [
       MenuItem(key: 'open', label: '打开宠物库'),
+      MenuItem(key: 'toggle', label: '${_hidden ? '显示宠物' : '隐藏宠物'}  $_hotKeyLabel'),
+      MenuItem.checkbox(key: 'autostart', label: '开机启动', checked: _autostartOn),
       MenuItem.separator(),
       MenuItem(key: 'quit', label: '退出'),
     ]));
   }
 
   void _syncVisibility() {
-    final want = widget.controller.currentPet != null;
+    // A pet picked in the library while hidden is one the user wants to see.
+    final id = widget.controller.currentPet?.id;
+    final switched = _shownPetId != null && id != null && id != _shownPetId;
+    _shownPetId = id ?? _shownPetId;
+    if (_hidden && switched) return _setHidden(false);
+    final want = widget.controller.currentPet != null && !_hidden;
     if (want == _visible) return;
     _visible = want;
     unawaited(want ? windowManager.show() : windowManager.hide());
@@ -333,6 +388,12 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
   @override
   void onTrayMenuItemClick(MenuItem menuItem) {
     if (menuItem.key == 'open') widget.launcher.open();
+    if (menuItem.key == 'toggle') _setHidden(!_hidden);
+    if (menuItem.key == 'autostart') {
+      _autostartOn = !_autostartOn;
+      unawaited(widget.autostart.choose(_autostartOn));
+      unawaited(_setUpTray());
+    }
     if (menuItem.key == 'quit') widget.onQuit();
   }
 
@@ -372,6 +433,8 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
         widget.companion.chooseVoice(voice);
       case PetMenuSize(:final size):
         await _resize(size);
+      case PetMenuHide():
+        _setHidden(true);
     }
   }
 
@@ -462,6 +525,18 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
                       builder: (_, vc, _) => vc == null ? const SizedBox.shrink() : AlphaVideoView(controller: vc),
                     ),
                   )),
+                  // A meal or drink request over the pet's head.
+                  ValueListenableBuilder<String?>(
+                    valueListenable: widget.companion.bubble,
+                    builder: (_, text, _) => text == null
+                        ? const SizedBox.shrink()
+                        : Positioned(
+                            top: (_inset?.dy ?? 0) + 6,
+                            left: _inset?.dx ?? 0,
+                            width: _size.edge,
+                            child: Center(child: _Bubble(text)),
+                          ),
+                  ),
                   ListenableBuilder(
                     listenable: widget.controller,
                     builder: (_, _) {
@@ -483,5 +558,24 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
             ),
           ),
         ),
+      );
+}
+
+/// Words over the pet's head.
+class _Bubble extends StatelessWidget {
+  const _Bubble(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: const Color(0xF2FFFFFF),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0xFFF08A3C), width: 1.5),
+          boxShadow: const [BoxShadow(color: Color(0x33000000), blurRadius: 6, offset: Offset(0, 2))],
+        ),
+        child: Text(text, style: const TextStyle(fontSize: 13, color: Color(0xFF3D2B1F), fontWeight: FontWeight.w600)),
       );
 }
