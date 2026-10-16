@@ -31,6 +31,17 @@ const kHoverCuteCooldown = Duration(seconds: 30);
 /// A bubble over the pet's head stays this long.
 const kBubbleFor = Duration(seconds: 10);
 
+/// How [pet] coaxes: 撒娇 for a character; 卖萌 for an animal, or -- a custom
+/// pet on the basic plan has only stand / walk / sleep / feed / play -- the
+/// closest clip it does have; null when it has none of them.
+String? coaxActionFor(Pet pet) {
+  final order = pet.species.isCharacter ? const ['act_coy'] : const ['act_cute', 'lick_paw', 'play'];
+  for (final key in order) {
+    if (pet.actions.contains(key)) return key;
+  }
+  return null;
+}
+
 /// Everything the user does with the pet on the desktop (spec 2026-09-19 E):
 /// actions from the panel or the menu, walking across the screen, roaming
 /// when idle, and what the panel shows.
@@ -268,9 +279,9 @@ class Companion {
   bool _beCute() {
     final pet = pets.currentPet;
     if (_disposed || _hidden || pet == null || _dragging || walker.walking || _walks > 0) return false;
-    final key = pet.species.isCharacter ? 'act_coy' : 'act_cute';
+    final key = coaxActionFor(pet);
     final now = pets.currentAction;
-    if (!pet.actions.contains(key) || (now != 'stand' && now != 'sleep')) return false;
+    if (key == null || (now != 'stand' && now != 'sleep')) return false;
     _napTimer?.cancel();
     _napTimer = null;
     unawaited(pets.playAction(key).then((_) {

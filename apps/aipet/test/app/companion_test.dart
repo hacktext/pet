@@ -93,13 +93,14 @@ void main() {
       bool twoPets = false,
       bool character = false,
       bool lively = false,
-      Random? random}) async {
+      Random? random,
+      List<String> actions = kSeven}) async {
     // Held in a local as well: the step must undo the folder this boot() just
     // made, not whichever one the shared variable points at when it runs.
     final dir = tmp = Directory.systemTemp.createTempSync('companion_');
     teardown.add(() => dir.deleteSync(recursive: true));
     final builtin = Directory('${tmp.path}\\builtin')..createSync();
-    writePet(builtin, id: 'builtin-gold', name: '金毛', actions: kSeven);
+    writePet(builtin, id: 'builtin-gold', name: '金毛', actions: actions);
     if (character) writeCharacter(builtin);
     if (twoPets) writePet(builtin, id: 'builtin-corgi', name: '柯基', actions: kSeven);
     final appData = Directory('${tmp.path}\\appdata');
@@ -550,6 +551,14 @@ void main() {
     c.petEnter();
     await t.pump(const Duration(milliseconds: 300));
     expect(plays('gold/act_cute'), 2);
+    c.petExit();
+  });
+
+  petTest('a pet without 卖萌 (a basic custom pet) coaxes with what it has: 玩耍', (t) async {
+    await boot(lively: true, actions: const ['stand', 'walk', 'sleep', 'feed', 'play']);
+    c.petEnter();
+    await t.pump(const Duration(milliseconds: 300));
+    expect(player.plays.last, 'builtin-gold/play.mp4|once');
     c.petExit();
   });
 
