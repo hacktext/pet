@@ -7,7 +7,7 @@
 ; 用户数据在 %APPDATA%\com.aipet\aipet，卸载不删数据（重装后宠物、账号还在）。
 
 #define AppName "Aipet 桌宠"
-#define AppVersion "1.0.0"
+#define AppVersion "1.0.1"
 #define AppExe "aipet.exe"
 #define Release "..\build\windows\x64\runner\Release"
 #define VcRedist "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Redist\MSVC\14.50.35710\x64\Microsoft.VC145.CRT"
@@ -44,7 +44,7 @@ Name: "chs"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加快捷方式："
 
 [Files]
-Source: "{#Release}\*"; DestDir: "{app}"; Excludes: ".built,native_assets.json"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#Release}\*"; DestDir: "{app}"; Excludes: ".built,native_assets.json,*.locked-*"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; VC++ 运行库放在程序旁边：没装过 VC++ 运行库的电脑也能直接运行。
 Source: "{#VcRedist}\msvcp140.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#VcRedist}\msvcp140_1.dll"; DestDir: "{app}"; Flags: ignoreversion

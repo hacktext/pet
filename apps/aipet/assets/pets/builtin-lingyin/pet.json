@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "id": "builtin-lingyin",
+  "name": "铃音",
+  "species": "anime",
+  "origin": "builtin",
+  "blurb": "地雷系的二次元少女，黏人又爱撒娇",
+  "cover": "cover.png",
+  "actions": [
+    "stand",
+    "act_coy",
+    "dance",
+    "talk"
+  ],
+  "voices": [
+    {
+      "id": "xuemei",
+      "name": "撒娇学妹"
+    },
+    {
+      "id": "vivi",
+      "name": "元气 Vivi"
+    },
+    {
+      "id": "taozi",
+      "name": "甜美桃子"
+    }
+  ]
+}

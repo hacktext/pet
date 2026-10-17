@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "id": "builtin-xiaoyou",
+  "name": "小柚",
+  "species": "girl",
+  "origin": "builtin",
+  "blurb": "元气满满的阳光女孩，笑起来甜甜的",
+  "cover": "cover.png",
+  "actions": [
+    "stand",
+    "act_coy",
+    "dance",
+    "talk"
+  ],
+  "voices": [
+    {
+      "id": "taozi",
+      "name": "甜美桃子"
+    },
+    {
+      "id": "vivi",
+      "name": "元气 Vivi"
+    },
+    {
+      "id": "xiaohe",
+      "name": "清甜小何"
+    }
+  ]
+}

@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
   sdk: ^3.13.2
@@ -85,6 +85,18 @@ flutter:
     - assets/pets/builtin-xiaoya/voices/xuemei/
     - assets/pets/builtin-xiaoya/voices/taozi/
     - assets/pets/builtin-xiaoya/voices/vivi/
+    - assets/pets/builtin-lingyin/
+    - assets/pets/builtin-lingyin/voices/xuemei/
+    - assets/pets/builtin-lingyin/voices/vivi/
+    - assets/pets/builtin-lingyin/voices/taozi/
+    - assets/pets/builtin-linyang/
+    - assets/pets/builtin-linyang/voices/xiaotian/
+    - assets/pets/builtin-linyang/voices/zixin/
+    - assets/pets/builtin-linyang/voices/liufei/
+    - assets/pets/builtin-xiaoyou/
+    - assets/pets/builtin-xiaoyou/voices/taozi/
+    - assets/pets/builtin-xiaoyou/voices/vivi/
+    - assets/pets/builtin-xiaoyou/voices/xiaohe/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

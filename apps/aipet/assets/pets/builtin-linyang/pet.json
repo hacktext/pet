@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "id": "builtin-linyang",
+  "name": "林阳",
+  "species": "boy",
+  "origin": "builtin",
+  "blurb": "阳光干净的邻家男孩，会陪你聊天解闷",
+  "cover": "cover.png",
+  "actions": [
+    "stand",
+    "act_coy",
+    "dance",
+    "talk"
+  ],
+  "voices": [
+    {
+      "id": "xiaotian",
+      "name": "阳光小天"
+    },
+    {
+      "id": "zixin",
+      "name": "少年梓辛"
+    },
+    {
+      "id": "liufei",
+      "name": "温和刘飞"
+    }
+  ]
+}
