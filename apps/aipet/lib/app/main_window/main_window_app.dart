@@ -53,7 +53,7 @@ class _MainWindowAppState extends State<MainWindowApp> {
     final model = widget.model;
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'aipet',
+      title: '桌遇',
       theme: buildAppTheme(),
       scaffoldMessengerKey: _messenger,
       navigatorKey: _navigator,
@@ -82,7 +82,7 @@ class _MainWindowAppState extends State<MainWindowApp> {
   }
 }
 
-/// aipet 桌面陪伴, 发现 / 我的, and at the bottom a way into 定制.
+/// 桌遇 DESKMEET, 发现 / 我的, and at the bottom a way into 定制.
 class _Sidebar extends StatelessWidget {
   const _Sidebar({required this.model});
 
@@ -97,13 +97,22 @@ class _Sidebar extends StatelessWidget {
         ),
         padding: const EdgeInsets.fromLTRB(20, 32, 20, 20),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          const Padding(
-            padding: EdgeInsets.only(left: 8),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('aipet',
-                  style: TextStyle(fontSize: 32, fontWeight: FontWeight.w900, color: AppColors.text, height: 1)),
-              SizedBox(height: 8),
-              Text('桌面陪伴', style: TextStyle(fontSize: 14, color: AppColors.textMuted)),
+          Padding(
+            padding: const EdgeInsets.only(left: 4),
+            child: Row(children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.asset('assets/ui/logo-tile.png',
+                    width: 48, height: 48, errorBuilder: (_, _, _) => const SizedBox(width: 48, height: 48)),
+              ),
+              const SizedBox(width: 12),
+              const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('桌遇',
+                    style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: AppColors.text, height: 1.1)),
+                SizedBox(height: 4),
+                Text('DESKMEET',
+                    style: TextStyle(fontSize: 11, letterSpacing: 3, color: AppColors.textMuted, height: 1)),
+              ]),
             ]),
           ),
           const SizedBox(height: 36),

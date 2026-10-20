@@ -3,8 +3,6 @@ import 'package:flutter/material.dart';
 import 'main_window_model.dart';
 import 'theme.dart';
 
-const _accentDeep = Color(0xFFE0673A);
-
 /// Opens the sign-in page; it closes itself once the account is signed in.
 Future<void> openLogin(BuildContext context, MainWindowModel model, {String? reason}) {
   model.clearAccountError();
@@ -69,7 +67,7 @@ class _LoginPageState extends State<LoginPage> {
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [Color(0xFFFFEFE2), AppColors.page, Color(0xFFFFF3EA)],
+            colors: [Color(0xFFFFFFFF), AppColors.page, AppColors.sidebar],
           ),
         ),
         child: SafeArea(
@@ -88,18 +86,11 @@ class _LoginPageState extends State<LoginPage> {
                 padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                   Center(
-                    child: Container(
-                      width: 76,
-                      height: 76,
-                      decoration: const BoxDecoration(
-                        shape: BoxShape.circle,
-                        gradient: LinearGradient(colors: [AppColors.accent, _accentDeep]),
-                      ),
-                      child: const Icon(Icons.pets, size: 40, color: Colors.white),
-                    ),
+                    child: Image.asset('assets/ui/logo-tile.png',
+                        width: 76, height: 76, errorBuilder: (_, _, _) => const SizedBox(height: 76)),
                   ),
                   const SizedBox(height: 20),
-                  const Text('AI 桌宠',
+                  const Text('桌遇',
                       textAlign: TextAlign.center,
                       style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: AppColors.text)),
                   const SizedBox(height: 8),
@@ -179,8 +170,8 @@ class _Field extends StatelessWidget {
         decoration: BoxDecoration(
           color: AppColors.card,
           borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: const Color(0xFFF5DCC8)),
-          boxShadow: const [BoxShadow(color: Color(0x14F08A3C), blurRadius: 16, offset: Offset(0, 6))],
+          border: Border.all(color: AppColors.line),
+          boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 16, offset: Offset(0, 6))],
         ),
         child: Row(children: [
           Icon(icon, color: AppColors.textMuted),
@@ -204,8 +195,8 @@ class _GradientButton extends StatelessWidget {
         child: DecoratedBox(
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(18),
-            gradient: const LinearGradient(colors: [AppColors.accent, _accentDeep]),
-            boxShadow: const [BoxShadow(color: Color(0x33E0673A), blurRadius: 14, offset: Offset(0, 6))],
+            color: AppColors.accent,
+            boxShadow: const [BoxShadow(color: Color(0x33333333), blurRadius: 14, offset: Offset(0, 6))],
           ),
           child: Material(
             color: Colors.transparent,

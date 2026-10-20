@@ -357,7 +357,7 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
   Future<void> _setUpTray() async {
     // The menu bar wants a PNG; the Windows tray an .ico.
     await trayManager.setIcon(Platform.isMacOS ? 'assets/tray.png' : 'assets/tray.ico');
-    await trayManager.setToolTip('aipet');
+    await trayManager.setToolTip('桌遇');
     await trayManager.setContextMenu(Menu(items: [
       MenuItem(key: 'open', label: '打开宠物库'),
       MenuItem(key: 'toggle', label: '${_hidden ? '显示宠物' : '隐藏宠物'}  $_hotKeyLabel'),

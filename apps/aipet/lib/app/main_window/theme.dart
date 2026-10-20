@@ -6,13 +6,13 @@ abstract final class AppColors {
   static const sidebar = Color(0xFFF2EFEB);
   static const card = Color(0xFFFFFFFF);
 
-  /// Buttons, the chosen tab and chip: near-black.
-  static const accent = Color(0xFF1E1D1C);
+  /// Buttons, the chosen tab and chip: a soft black, #333333.
+  static const accent = Color(0xFF333333);
 
   /// Unchosen pills, tags, image placeholders.
   static const accentSoft = Color(0xFFEFEBE6);
   static const line = Color(0xFFE8E3DD);
-  static const text = Color(0xFF1E1D1C);
+  static const text = Color(0xFF333333);
   static const textMuted = Color(0xFF8A847E);
 
   /// The banner's badge and hand-written line.

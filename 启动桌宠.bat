@@ -1,5 +1,5 @@
 @echo off
-rem 双击启动 AI 桌宠（release 版）。
+rem 双击启动桌遇（release 版）。
 rem 源码比已编译的 aipet.exe 新（或还没编译过）就先 flutter build windows --release，再启动。
 rem 想连本地服务端调试：在下面 AIPET_API_BASE 那行去掉 rem，改成本地地址。
 chcp 65001 >nul
@@ -36,6 +36,8 @@ for /f %%R in ('powershell -NoProfile -ExecutionPolicy Bypass -Command ^
 
 if /I "%STATE%"=="build" (
     echo 源码有更新，正在编译 release 版，第一次大约要几分钟……
+    rem 发布目录里的 exe / dll 若被（正在运行或退出后残留的）aipet.exe 占着，先改名挪开，否则链接报 LNK1104
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%tools\dev\unlock_release.ps1" -Release "%APP%\build\windows\x64\runner\Release"
     pushd "%APP%"
     rem 依赖已经下载过就离线解析，pub.dev 连不上也能编译；离线不够再联网
     call "%FLUTTER%" pub get --offline >nul 2>&1 || call "%FLUTTER%" pub get

@@ -94,9 +94,9 @@ void main() {
     // The 2026-10-19 library redesign: warm off-white, ink-black actions.
     expect(AppColors.page, const Color(0xFFF7F5F2));
     expect(AppColors.card, const Color(0xFFFFFFFF));
-    expect(AppColors.accent, const Color(0xFF1E1D1C));
+    expect(AppColors.accent, const Color(0xFF333333));
     expect(AppColors.accentSoft, const Color(0xFFEFEBE6));
-    expect(AppColors.text, const Color(0xFF1E1D1C));
+    expect(AppColors.text, const Color(0xFF333333));
     expect(AppColors.textMuted, const Color(0xFF8A847E));
     expect(buildAppTheme().scaffoldBackgroundColor, AppColors.page);
   });

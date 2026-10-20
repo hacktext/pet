@@ -121,7 +121,7 @@ class _PlanCard extends StatelessWidget {
     Widget chip(String t, {bool strong = false}) => Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
-        color: strong ? const Color(0xFFFBE3C8) : AppColors.accentSoft,
+        color: strong ? AppColors.warmSoft : AppColors.accentSoft,
         borderRadius: BorderRadius.circular(8),
       ),
       child: Text(

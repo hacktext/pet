@@ -17,7 +17,7 @@ import 'displays.dart';
 abstract class NativeWindow {
   /// This process's top-level window titled [title], or null. Titles must be
   /// unique within the process -- this returns whichever window the OS
-  /// enumerates first -- so the three engines use 'aipet', 'aipet pet' and
+  /// enumerates first -- so the three engines use '桌遇' (the library), 'aipet pet' and
   /// 'aipet hud'.
   static NativeWindow? find(String title) {
     if (Platform.isWindows) return Win32Window.find(title);

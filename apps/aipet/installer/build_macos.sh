@@ -1,12 +1,14 @@
 #!/bin/bash
-# macOS (Apple silicon) package: builds aipet.app and wraps it in
-# dist/Aipet-<version>-arm64.dmg at the repo root (dist/ is git-ignored).
+# macOS (Apple silicon) package of 桌遇 DeskMeet: builds aipet.app and wraps
+# it, named 桌遇.app, in dist/DeskMeet-<version>-arm64.dmg at the repo root
+# (dist/ is git-ignored). The bundle's binary and id stay aipet: renaming
+# those would cut existing installs off their data and settings.
 #
 #   apps/aipet/installer/build_macos.sh
 #
 # Without signing settings the app keeps Flutter's ad-hoc signature: fine on
 # this Mac; on another Mac the first launch needs right-click -> Open (or
-# `xattr -dr com.apple.quarantine /Applications/aipet.app`).
+# `xattr -dr com.apple.quarantine /Applications/桌遇.app`).
 #
 # To ship to other people, sign and notarize (Apple Developer account):
 #   AIPET_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
@@ -20,7 +22,7 @@ APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 REPO_DIR="$(cd "$APP_DIR/../.." && pwd)"
 DIST="$REPO_DIR/dist"
 VERSION="$(sed -n 's/^version: *\([0-9.]*\).*/\1/p' "$APP_DIR/pubspec.yaml")"
-DMG="$DIST/Aipet-$VERSION-arm64.dmg"
+DMG="$DIST/DeskMeet-$VERSION-arm64.dmg"
 
 command -v flutter >/dev/null || export PATH="$HOME/development/flutter/bin:$PATH"
 export LANG="${LANG:-en_US.UTF-8}"  # CocoaPods needs a UTF-8 locale
@@ -44,11 +46,11 @@ codesign --verify --deep --strict "$APP"
 # dmg: the app plus an Applications link to drag it onto.
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
-cp -R "$APP" "$STAGE/"
+cp -R "$APP" "$STAGE/桌遇.app"
 ln -s /Applications "$STAGE/Applications"
 mkdir -p "$DIST"
 rm -f "$DMG"
-hdiutil create -volname "Aipet" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+hdiutil create -volname "桌遇" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
 
 if [ -n "${AIPET_SIGN_IDENTITY:-}" ]; then
   codesign --sign "$AIPET_SIGN_IDENTITY" --timestamp "$DMG"
