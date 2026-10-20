@@ -15,5 +15,11 @@
     "lick_paw",
     "act_cute"
   ],
-  "walkFacing": "right"
+  "walkFacing": "right",
+  "card": "card.jpg",
+  "tags": [
+    "安静",
+    "软萌",
+    "爱撒娇"
+  ]
 }

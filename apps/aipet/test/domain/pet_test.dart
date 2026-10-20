@@ -31,6 +31,28 @@ void main() {
     expect(p.coverFile.path, 'C:\\pets\\builtin-gold\\cover.png');
   });
 
+  test('card and tags are optional; tags keep their order, at most three', () {
+    final plain = parsePet(jsonEncode(valid()), dir);
+    expect(plain.card, isNull);
+    expect(plain.cardFile, isNull);
+    expect(plain.tags, isEmpty);
+    final p = parsePet(jsonEncode(valid()..['card'] = 'card.jpg'..['tags'] = ['温暖', '忠诚', '治愈', '第四个']), dir);
+    expect(p.cardFile!.path, 'C:\\pets\\builtin-gold\\card.jpg');
+    expect(p.tags, ['温暖', '忠诚', '治愈']);
+  });
+
+  for (final bad in <Object?>['../card.jpg', 'a/card.jpg', '', 3]) {
+    test('rejects card $bad', () {
+      expect(() => parsePet(jsonEncode(valid()..['card'] = bad), dir), throwsFormatException);
+    });
+  }
+
+  for (final bad in <Object?>['温暖', [1], ['  ']]) {
+    test('rejects tags $bad', () {
+      expect(() => parsePet(jsonEncode(valid()..['tags'] = bad), dir), throwsFormatException);
+    });
+  }
+
   test('blurb is optional', () {
     final j = valid()..remove('blurb');
     expect(parsePet(jsonEncode(j), dir).blurb, '');

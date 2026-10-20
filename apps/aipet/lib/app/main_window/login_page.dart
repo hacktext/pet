@@ -8,7 +8,7 @@ const _accentDeep = Color(0xFFE0673A);
 /// Opens the sign-in page; it closes itself once the account is signed in.
 Future<void> openLogin(BuildContext context, MainWindowModel model, {String? reason}) {
   model.clearAccountError();
-  return Navigator.of(context).push(MaterialPageRoute<void>(
+  return Navigator.of(context).push(narrowRoute<void>(
     builder: (_) => LoginPage(model: model, reason: reason),
   ));
 }

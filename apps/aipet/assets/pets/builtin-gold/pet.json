@@ -15,5 +15,11 @@
     "lick_paw",
     "act_cute"
   ],
-  "walkFacing": "left"
+  "walkFacing": "left",
+  "card": "card.jpg",
+  "tags": [
+    "温暖",
+    "忠诚",
+    "治愈"
+  ]
 }

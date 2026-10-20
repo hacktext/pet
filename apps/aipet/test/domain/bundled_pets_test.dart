@@ -27,6 +27,8 @@ void main() {
       expect(pet.origin, PetOrigin.builtin);
       expect(pet.isComplete, isTrue);
       expect(pet.actions.first, kIdleAction);
+      expect(pet.cardFile?.existsSync(), isTrue, reason: 'the library card shows its close-up');
+      expect(pet.tags, isNotEmpty);
       expect(pubspec, contains('- assets/pets/${name(d)}/\n'));
       for (final v in pet.voices) {
         expect(pubspec, contains('- assets/pets/${name(d)}/voices/${v.id}/\n'));

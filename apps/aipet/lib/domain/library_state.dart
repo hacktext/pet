@@ -74,13 +74,13 @@ enum Group {
 /// A plaza sub-category; a null [species] is its group's 全部.
 enum Category {
   allPets(Group.pets, '全部'),
-  cat(Group.pets, '猫猫', Species.cat),
   dog(Group.pets, '狗狗', Species.dog),
+  cat(Group.pets, '猫咪', Species.cat),
   other(Group.pets, '其他宠物', Species.other),
   allPeople(Group.people, '全部'),
-  girl(Group.people, '女生', Species.girl),
   boy(Group.people, '男生', Species.boy),
-  anime(Group.people, '动漫角色', Species.anime);
+  girl(Group.people, '女生', Species.girl),
+  anime(Group.people, '二次元', Species.anime);
 
   const Category(this.group, this.label, [this.species]);
   final Group group;

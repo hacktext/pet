@@ -63,6 +63,9 @@ class MainWindowModel extends ChangeNotifier {
   List<Pet> get plazaPets => filterPets(_pets, _category);
   List<Pet> get minePets => adoptedPets(_pets, _state);
 
+  /// Any pet in the library, by id; null when there is none.
+  Pet? petById(String id) => PetLibrary.byId(_pets, id);
+
   /// The account card on 我的; the pet window holds the account itself.
   AccountView get account => _account;
 

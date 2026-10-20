@@ -62,8 +62,8 @@ void main() {
     expect(filterPets(pets, Category.boy), isEmpty);
     expect(filterPets(pets, Category.anime).map((p) => p.id), ['a1']);
     expect(Group.values.map((g) => g.label), ['宠物', '人物']);
-    expect(Group.pets.categories.map((c) => c.label), ['全部', '猫猫', '狗狗', '其他宠物']);
-    expect(Group.people.categories.map((c) => c.label), ['全部', '女生', '男生', '动漫角色']);
+    expect(Group.pets.categories.map((c) => c.label), ['全部', '狗狗', '猫咪', '其他宠物']);
+    expect(Group.people.categories.map((c) => c.label), ['全部', '男生', '女生', '二次元']);
   });
 
   test('every species belongs to exactly one category besides 全部', () {

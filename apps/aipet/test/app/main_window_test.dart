@@ -73,7 +73,7 @@ void main() {
   tearDown(() => tmp.deleteSync(recursive: true));
 
   Future<void> open(WidgetTester tester) async {
-    tester.view.physicalSize = const Size(420, 740);
+    tester.view.physicalSize = const Size(1200, 800);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
     await model.start();
@@ -93,8 +93,8 @@ void main() {
   testWidgets('plaza: banner, categories and one adoptable card per pet', (tester) async {
     await open(tester);
     expect(find.text('定制专属宠物'), findsOneWidget);
-    expect(find.text('上传您的爱宠照片，生成桌面伙伴'), findsOneWidget);
-    for (final label in ['宠物', '人物', '全部', '猫猫', '狗狗', '其他宠物', '宠物广场', '我的']) {
+    expect(find.text('上传你的爱宠照片，生成会陪伴你的桌面伙伴'), findsOneWidget);
+    for (final label in ['宠物', '人物', '全部', '猫咪', '狗狗', '其他宠物', '发现', '我的']) {
       expect(find.text(label), findsOneWidget, reason: label);
     }
     expect(find.text('女生'), findsNothing);
@@ -106,7 +106,7 @@ void main() {
 
   testWidgets('category chips filter the grid', (tester) async {
     await open(tester);
-    await tester.tap(find.text('猫猫'));
+    await tester.tap(find.text('猫咪'));
     await tester.pump();
     expect(find.text('布偶猫'), findsOneWidget);
     expect(find.text('金毛'), findsNothing);
@@ -117,21 +117,21 @@ void main() {
 
   testWidgets('人物 shows the characters, its own sub-categories, and resets to 全部', (tester) async {
     await open(tester);
-    await tester.tap(find.text('猫猫'));
+    await tester.tap(find.text('猫咪'));
     await tester.pump();
     await tester.tap(find.text('人物'));
     await tester.pump();
     expect(find.text('小雅'), findsOneWidget);
     expect(find.text('布偶猫'), findsNothing);
-    for (final label in ['全部', '女生', '男生', '动漫角色']) {
+    for (final label in ['全部', '男生', '女生', '二次元']) {
       expect(find.text(label), findsOneWidget, reason: label);
     }
-    expect(find.text('猫猫'), findsNothing);
-    expect(find.text('定制专属角色'), findsOneWidget);
-    expect(find.text('上传照片，生成桌面角色'), findsOneWidget);
+    expect(find.text('猫咪'), findsNothing);
+    expect(find.text('定制专属人物'), findsOneWidget);
+    expect(find.text('上传你的照片，生成会陪伴你的桌面伙伴'), findsOneWidget);
     expect(find.text('定制专属宠物'), findsNothing);
     // The banner sits under 宠物 | 人物 and above the categories: it belongs to the tab.
-    expect(tester.getTopLeft(find.text('定制专属角色')).dy, greaterThan(tester.getBottomLeft(find.text('人物')).dy));
+    expect(tester.getTopLeft(find.text('定制专属人物')).dy, greaterThan(tester.getBottomLeft(find.text('人物')).dy));
     expect(tester.getBottomLeft(find.text('立即定制')).dy, lessThan(tester.getTopLeft(find.text('女生')).dy));
     await tester.tap(find.text('男生'));
     await tester.pump();
@@ -285,13 +285,13 @@ void main() {
           ])
         : FakeHttp.ok([]);
     await open(tester);
-    tester.view.physicalSize = const Size(420, 1600); // the whole list on screen
+    tester.view.physicalSize = const Size(1200, 1600); // the whole list on screen
     await signIn(tester);
     try {
       model.setTab(1);
       await tester.pumpAndSettle();
       expect(find.text('我的定制'), findsOneWidget);
-      expect(find.text('猫猫 · 标准版'), findsOneWidget);
+      expect(find.text('猫咪 · 标准版'), findsOneWidget);
       for (final t in ['生成中（动作 3/7）', '审核中', '生成失败（我们会联系你处理或退款）', '待生成']) {
         expect(find.text(t), findsOneWidget, reason: t);
       }
@@ -452,7 +452,7 @@ void main() {
     model.setTab(1);
     await tester.pump();
     await tester.pump();
-    final img = tester.widgetList<Image>(find.byType(Image)).first;
+    final img = tester.widgetList<Image>(find.descendant(of: find.byType(ListTile), matching: find.byType(Image))).first;
     expect(img.image, isA<ResizeImage>());
     expect((img.image as ResizeImage).width, 96);
     expect(find.text('宠物50'), findsNothing, reason: 'rows far down are not built');

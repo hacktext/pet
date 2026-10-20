@@ -64,18 +64,40 @@ void main() {
     });
   }
 
+  testWidgets('a character is TA, not 它; tags take the blurb\'s place', (tester) async {
+    final girl = Pet(
+      id: 'builtin-xiaoya',
+      name: '小雅',
+      species: Species.girl,
+      origin: PetOrigin.builtin,
+      blurb: '黑长直的温柔女孩',
+      dir: Directory('C:\\nowhere'),
+      cover: 'cover.png',
+      actions: const ['stand'],
+      tags: const ['温柔', '治愈'],
+    );
+    await pump(tester, CardStatus.adoptable, pet: girl);
+    expect(find.text('带TA回家'), findsOneWidget);
+    expect(find.text('温柔'), findsOneWidget);
+    expect(find.text('治愈'), findsOneWidget);
+    expect(find.text('黑长直的温柔女孩'), findsNothing);
+    await pump(tester, CardStatus.switchable, pet: girl);
+    expect(find.text('换TA陪我'), findsOneWidget);
+  });
+
   testWidgets('preparing shows a spinner', (tester) async {
     await pump(tester, CardStatus.preparing);
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
   });
 
   test('palette matches the spec', () {
-    expect(AppColors.page, const Color(0xFFFFF8F0));
+    // The 2026-10-19 library redesign: warm off-white, ink-black actions.
+    expect(AppColors.page, const Color(0xFFF7F5F2));
     expect(AppColors.card, const Color(0xFFFFFFFF));
-    expect(AppColors.accent, const Color(0xFFF08A3C));
-    expect(AppColors.accentSoft, const Color(0xFFFDEBD9));
-    expect(AppColors.text, const Color(0xFF3D2B1F));
-    expect(AppColors.textMuted, const Color(0xFF8A6E5A));
+    expect(AppColors.accent, const Color(0xFF1E1D1C));
+    expect(AppColors.accentSoft, const Color(0xFFEFEBE6));
+    expect(AppColors.text, const Color(0xFF1E1D1C));
+    expect(AppColors.textMuted, const Color(0xFF8A847E));
     expect(buildAppTheme().scaffoldBackgroundColor, AppColors.page);
   });
 

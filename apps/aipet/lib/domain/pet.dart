@@ -66,6 +66,8 @@ class Pet {
     required this.actions,
     this.walkFacing = Facing.right,
     this.voices = const [],
+    this.card,
+    this.tags = const [],
   });
 
   final String id;
@@ -84,7 +86,16 @@ class Pet {
   /// Empty for a pet that does not speak; otherwise the first is the default.
   final List<PetVoice> voices;
 
+  /// The library card's photo (a close-up with its own background); null
+  /// shows [cover] instead.
+  final String? card;
+
+  /// The card's personality tags (元气, 粘人, ...); at most [kMaxTags].
+  final List<String> tags;
+
   File get coverFile => File('${dir.path}${Platform.pathSeparator}$cover');
+
+  File? get cardFile => card == null ? null : File('${dir.path}${Platform.pathSeparator}$card');
 
   File actionFile(String key) => File('${dir.path}${Platform.pathSeparator}$key.mp4');
 
@@ -103,7 +114,11 @@ class Pet {
   bool get isComplete => coverFile.existsSync() && actions.every((k) => actionFile(k).existsSync());
 }
 
+const int kMaxTags = 3;
+
 final _idPattern = RegExp(r'^[a-z0-9-]+$');
+
+bool _bareFileName(String f) => f.isNotEmpty && !f.contains('/') && !f.contains(r'\') && !f.contains('..');
 final _actionPattern = RegExp(r'^[a-z_]+$');
 
 Pet parsePet(String jsonText, Directory dir) {
@@ -132,8 +147,14 @@ Pet parsePet(String jsonText, Directory dir) {
       (throw const FormatException('unknown origin'));
   final blurb = raw['blurb'] is String ? raw['blurb']! as String : '';
   final cover = field<String>('cover');
-  if (cover.isEmpty || cover.contains('/') || cover.contains('\\') || cover.contains('..')) {
-    throw FormatException('cover must be a bare file name, got "$cover"');
+  if (!_bareFileName(cover)) throw FormatException('cover must be a bare file name, got "$cover"');
+  final card = raw['card'];
+  if (card != null && (card is! String || !_bareFileName(card))) {
+    throw FormatException('card must be a bare file name, got "$card"');
+  }
+  final rawTags = raw['tags'] ?? const <Object?>[];
+  if (rawTags is! List<Object?> || rawTags.any((t) => t is! String || t.trim().isEmpty)) {
+    throw const FormatException('tags must be a list of words');
   }
   final actions = <String>[];
   for (final a in field<List<Object?>>('actions')) {
@@ -172,5 +193,7 @@ Pet parsePet(String jsonText, Directory dir) {
     actions: List.unmodifiable(actions),
     walkFacing: walkFacing,
     voices: List.unmodifiable(voices),
+    card: card as String?,
+    tags: List.unmodifiable(rawTags.cast<String>().take(kMaxTags)),
   );
 }

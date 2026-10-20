@@ -7,7 +7,7 @@
 ; 用户数据在 %APPDATA%\com.aipet\aipet，卸载不删数据（重装后宠物、账号还在）。
 
 #define AppName "Aipet 桌宠"
-#define AppVersion "1.0.1"
+#define AppVersion "1.0.2"
 #define AppExe "aipet.exe"
 #define Release "..\build\windows\x64\runner\Release"
 #define VcRedist "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Redist\MSVC\14.50.35710\x64\Microsoft.VC145.CRT"

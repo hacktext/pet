@@ -14,6 +14,9 @@ import 'main_window_model.dart';
 import 'pet_card.dart';
 import 'theme.dart';
 
+/// The page's side margin, right of the sidebar.
+const double _gutter = 28;
+
 class MainWindowApp extends StatefulWidget {
   const MainWindowApp({super.key, required this.model});
 
@@ -58,19 +61,20 @@ class _MainWindowAppState extends State<MainWindowApp> {
         listenable: model,
         builder: (context, _) => Scaffold(
           body: SafeArea(
-            child: Column(children: [
-              if (model.readyPet case final ready?)
-                _ReadyBanner(pet: ready, onAdopt: model.adoptReady, onDismiss: model.dismissReady),
-              Expanded(child: model.tab == 0 ? _PlazaPage(model: model) : _MinePage(model: model)),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              _Sidebar(model: model),
+              Expanded(
+                child: Column(children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(_gutter, 24, _gutter, 0),
+                    child: _TopBar(model: model),
+                  ),
+                  if (model.readyPet case final ready?)
+                    _ReadyBanner(pet: ready, onAdopt: model.adoptReady, onDismiss: model.dismissReady),
+                  Expanded(child: model.tab == 0 ? _PlazaPage(model: model) : _MinePage(model: model)),
+                ]),
+              ),
             ]),
-          ),
-          bottomNavigationBar: NavigationBar(
-            selectedIndex: model.tab,
-            onDestinationSelected: model.setTab,
-            destinations: const [
-              NavigationDestination(icon: Icon(Icons.explore_outlined), selectedIcon: Icon(Icons.explore), label: '宠物广场'),
-              NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person), label: '我的'),
-            ],
           ),
         ),
       ),
@@ -78,24 +82,265 @@ class _MainWindowAppState extends State<MainWindowApp> {
   }
 }
 
+/// aipet 桌面陪伴, 发现 / 我的, and at the bottom a way into 定制.
+class _Sidebar extends StatelessWidget {
+  const _Sidebar({required this.model});
+
+  final MainWindowModel model;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: 232,
+        decoration: const BoxDecoration(
+          color: AppColors.sidebar,
+          border: Border(right: BorderSide(color: AppColors.line)),
+        ),
+        padding: const EdgeInsets.fromLTRB(20, 32, 20, 20),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          const Padding(
+            padding: EdgeInsets.only(left: 8),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('aipet',
+                  style: TextStyle(fontSize: 32, fontWeight: FontWeight.w900, color: AppColors.text, height: 1)),
+              SizedBox(height: 8),
+              Text('桌面陪伴', style: TextStyle(fontSize: 14, color: AppColors.textMuted)),
+            ]),
+          ),
+          const SizedBox(height: 36),
+          _NavItem(icon: Icons.home_outlined, label: '发现', selected: model.tab == 0, onTap: () => model.setTab(0)),
+          const SizedBox(height: 8),
+          _NavItem(
+              icon: Icons.favorite_border, label: '我的', selected: model.tab == 1, onTap: () => model.setTab(1)),
+          const Spacer(),
+          _Invite(model: model),
+        ]),
+      );
+}
+
+class _NavItem extends StatelessWidget {
+  const _NavItem({required this.icon, required this.label, required this.selected, required this.onTap});
+
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = selected ? Colors.white : AppColors.text;
+    return Material(
+      color: selected ? AppColors.accent : Colors.transparent,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+          child: Row(children: [
+            Icon(icon, color: fg, size: 24),
+            const SizedBox(width: 16),
+            Text(label, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: fg)),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// 让喜欢的TA住进你的桌面 →, under a pet of the chosen group peeking over it.
+class _Invite extends StatelessWidget {
+  const _Invite({required this.model});
+
+  final MainWindowModel model;
+
+  @override
+  Widget build(BuildContext context) {
+    final mascot = model.petById(model.group == Group.pets ? 'builtin-ragdoll' : 'builtin-xiaoya');
+    return Stack(clipBehavior: Clip.none, children: [
+      Material(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(18),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(18),
+          onTap: () => openCustomFlow(context, model),
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(18, mascot == null ? 18 : 64, 14, 18),
+            child: Row(children: [
+              const Expanded(
+                child: Text('让喜欢的TA\n住进你的桌面',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.text, height: 1.6)),
+              ),
+              Container(
+                width: 36,
+                height: 36,
+                decoration: const BoxDecoration(color: AppColors.accent, shape: BoxShape.circle),
+                child: const Icon(Icons.arrow_forward, color: Colors.white, size: 18),
+              ),
+            ]),
+          ),
+        ),
+      ),
+      if (mascot != null)
+        Positioned(
+          left: 12,
+          top: -44,
+          height: 100,
+          child: IgnorePointer(child: _mascot(mascot)),
+        ),
+    ]);
+  }
+
+  /// An animal's cutout stands on the card; a person's full-length cutout
+  /// is too small to read, so a person shows as a round close-up instead.
+  Widget _mascot(Pet p) {
+    Widget none(_, _, _) => const SizedBox();
+    final card = p.cardFile;
+    if (!p.species.isCharacter || card == null) {
+      return Image.file(p.coverFile, fit: BoxFit.contain, errorBuilder: none);
+    }
+    return Container(
+      width: 88,
+      height: 88,
+      margin: const EdgeInsets.only(top: 6),
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: AppColors.card, width: 4),
+        boxShadow: const [BoxShadow(color: Color(0x1A000000), blurRadius: 12, offset: Offset(0, 4))],
+      ),
+      child: ClipOval(child: Image.file(card, fit: BoxFit.cover, cacheWidth: 640, errorBuilder: none)),
+    );
+  }
+}
+
+/// 宠物 | 人物 on 发现 (我的 on its own page), and the account on the right.
+class _TopBar extends StatelessWidget {
+  const _TopBar({required this.model});
+
+  final MainWindowModel model;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        height: 56,
+        child: Row(children: [
+          if (model.tab == 0)
+            _GroupSwitch(model: model)
+          else
+            const Text('我的', style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: AppColors.text)),
+          const Spacer(),
+          _AccountChip(model: model),
+        ]),
+      );
+}
+
+/// 宠物 | 人物: one pill split in two, the chosen half black.
+class _GroupSwitch extends StatelessWidget {
+  const _GroupSwitch({required this.model});
+
+  final MainWindowModel model;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(color: AppColors.accentSoft, borderRadius: BorderRadius.circular(28)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          for (final g in Group.values)
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => model.setGroup(g),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                width: 150,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: model.group == g ? AppColors.accent : Colors.transparent,
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                  Icon(g == Group.pets ? Icons.pets : Icons.person_outline,
+                      size: 22, color: model.group == g ? Colors.white : AppColors.text),
+                  const SizedBox(width: 10),
+                  Text(
+                    g.label,
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                      color: model.group == g ? Colors.white : AppColors.text,
+                    ),
+                  ),
+                ]),
+              ),
+            ),
+        ]),
+      );
+}
+
+/// Signed in: the masked phone, opening 我的; signed out: 登录.
+class _AccountChip extends StatelessWidget {
+  const _AccountChip({required this.model});
+
+  final MainWindowModel model;
+
+  @override
+  Widget build(BuildContext context) {
+    final a = model.account;
+    final signedIn = a.signedIn;
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(28),
+      child: InkWell(
+        key: const Key('account-chip'),
+        borderRadius: BorderRadius.circular(28),
+        onTap: () => signedIn ? model.setTab(1) : openLogin(context, model),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(4, 4, 12, 4),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            const CircleAvatar(
+              radius: 22,
+              backgroundColor: AppColors.accentSoft,
+              child: Icon(Icons.person, color: AppColors.textMuted),
+            ),
+            const SizedBox(width: 10),
+            Text(signedIn ? a.phoneMasked ?? '我的' : '登录',
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.text)),
+            const SizedBox(width: 4),
+            const Icon(Icons.keyboard_arrow_down, size: 20, color: AppColors.text),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// The grid of [pets]: as many ~220 px columns as fit, each card's photo a
+/// little wider than tall.
 class _PetGrid extends StatelessWidget {
   const _PetGrid({required this.model, required this.pets});
 
   final MainWindowModel model;
   final List<Pet> pets;
 
+  static const _gap = 18.0;
+
   @override
   Widget build(BuildContext context) => SliverPadding(
-        padding: const EdgeInsets.all(16),
-        sliver: SliverGrid.count(
-          crossAxisCount: 2,
-          mainAxisSpacing: 12,
-          crossAxisSpacing: 12,
-          childAspectRatio: 0.68,
-          children: [
-            for (final p in pets) PetCard(pet: p, status: model.statusOf(p), onAdopt: () => model.adopt(p.id)),
-          ],
-        ),
+        padding: const EdgeInsets.fromLTRB(_gutter, 16, _gutter, 28),
+        sliver: SliverLayoutBuilder(builder: (context, c) {
+          final width = c.crossAxisExtent;
+          final cols = (width / 220).floor().clamp(2, 6);
+          final cardWidth = (width - _gap * (cols - 1)) / cols;
+          return SliverGrid(
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: cols,
+              mainAxisSpacing: _gap,
+              crossAxisSpacing: _gap,
+              // photo (card width less padding, 1.15 : 1) + name, tags, button
+              mainAxisExtent: (cardWidth - 16) / 1.15 + 138,
+            ),
+            delegate: SliverChildListDelegate([
+              for (final p in pets) PetCard(pet: p, status: model.statusOf(p), onAdopt: () => model.adopt(p.id)),
+            ]),
+          );
+        }),
       );
 }
 
@@ -107,29 +352,18 @@ class _PlazaPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final pets = model.plazaPets;
-    // 宠物 | 人物 first, then the banner of the chosen group (定制专属宠物 /
-    // 定制专属角色), so it reads as belonging to that tab.
     return CustomScrollView(slivers: [
       SliverPadding(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-        sliver: SliverToBoxAdapter(child: _GroupSwitch(model: model)),
-      ),
-      SliverPadding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+        padding: const EdgeInsets.fromLTRB(_gutter, 20, _gutter, 0),
         sliver: SliverToBoxAdapter(
             child: _Banner(group: model.group, onCustom: () => openCustomFlow(context, model))),
       ),
-      SliverToBoxAdapter(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Wrap(spacing: 8, children: [
+      SliverPadding(
+        padding: const EdgeInsets.fromLTRB(_gutter, 20, _gutter, 0),
+        sliver: SliverToBoxAdapter(
+          child: Wrap(spacing: 12, runSpacing: 8, children: [
             for (final c in model.group.categories)
-              ChoiceChip(
-                label: Text(c.label),
-                selected: model.category == c,
-                selectedColor: AppColors.accentSoft,
-                onSelected: (_) => model.setCategory(c),
-              ),
+              _CategoryPill(label: c.label, selected: model.category == c, onTap: () => model.setCategory(c)),
           ]),
         ),
       ),
@@ -144,45 +378,36 @@ class _PlazaPage extends StatelessWidget {
   }
 }
 
-/// 宠物 | 人物: one pill split in two, the chosen half filled in the accent.
-class _GroupSwitch extends StatelessWidget {
-  const _GroupSwitch({required this.model});
+class _CategoryPill extends StatelessWidget {
+  const _CategoryPill({required this.label, required this.selected, required this.onTap});
 
-  final MainWindowModel model;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.all(4),
-        decoration: BoxDecoration(color: AppColors.accentSoft, borderRadius: BorderRadius.circular(24)),
-        child: Row(children: [
-          for (final g in Group.values)
-            Expanded(
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () => model.setGroup(g),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 180),
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                  decoration: BoxDecoration(
-                    color: model.group == g ? AppColors.accent : Colors.transparent,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    g.label,
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                      color: model.group == g ? Colors.white : AppColors.textMuted,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-        ]),
+  Widget build(BuildContext context) => Material(
+        color: selected ? AppColors.accent : AppColors.card,
+        shape: StadiumBorder(side: BorderSide(color: selected ? AppColors.accent : AppColors.line)),
+        child: InkWell(
+          customBorder: const StadiumBorder(),
+          onTap: onTap,
+          child: Container(
+            constraints: const BoxConstraints(minWidth: 112),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 11),
+            child: Text(label,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  color: selected ? Colors.white : AppColors.text,
+                )),
+          ),
+        ),
       );
 }
 
+/// 定制专属宠物 / 定制专属人物 over a photo of the group's own.
 class _Banner extends StatelessWidget {
   const _Banner({required this.group, required this.onCustom});
 
@@ -191,23 +416,79 @@ class _Banner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (title, subtitle) = switch (group) {
-      Group.pets => ('定制专属宠物', '上传您的爱宠照片，生成桌面伙伴'),
-      Group.people => ('定制专属角色', '上传照片，生成桌面角色'),
+    final (title, subtitle, scribble, art, icon) = switch (group) {
+      Group.pets => ('定制专属宠物', '上传你的爱宠照片，生成会陪伴你的桌面伙伴', '把爱宠带进你的桌面~', 'banner-pets', Icons.pets),
+      Group.people => ('定制专属人物', '上传你的照片，生成会陪伴你的桌面伙伴', '把喜欢的TA带进你的桌面~', 'banner-people', Icons.person),
     };
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(color: AppColors.accentSoft, borderRadius: BorderRadius.circular(24)),
-      child: Row(children: [
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: AppColors.text)),
-            const SizedBox(height: 4),
-            Text(subtitle, style: const TextStyle(fontSize: 12, color: AppColors.textMuted)),
-          ]),
-        ),
-        FilledButton(onPressed: onCustom, child: const Text('立即定制')),
-      ]),
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: SizedBox(
+        height: 268,
+        child: Stack(fit: StackFit.expand, children: [
+          Image.asset('assets/ui/$art.jpg',
+              fit: BoxFit.cover,
+              alignment: const Alignment(0.6, -0.2),
+              errorBuilder: (_, _, _) => const ColoredBox(color: AppColors.warmSoft)),
+          // The words sit on the photo's soft left; this keeps them legible.
+          const DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [Color(0xE6FFFFFF), Color(0x99FFFFFF), Color(0x00FFFFFF)],
+                stops: [0, 0.38, 0.62],
+              ),
+            ),
+          ),
+          Align(
+            // Between the button and the photo; the person stands further left than the corgi.
+            alignment: Alignment(group == Group.pets ? -0.1 : -0.24, 0.62),
+            child: Transform.rotate(
+              angle: -0.13,
+              child: Text(scribble,
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontStyle: FontStyle.italic,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.warm,
+                    letterSpacing: 1,
+                  )),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(40, 32, 24, 32),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                decoration: BoxDecoration(color: AppColors.warmSoft, borderRadius: BorderRadius.circular(16)),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(icon, size: 16, color: AppColors.text),
+                  const SizedBox(width: 6),
+                  const Text('AI 定制桌面伙伴',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.text)),
+                ]),
+              ),
+              const SizedBox(height: 14),
+              Text(title,
+                  style: const TextStyle(
+                      fontSize: 40, fontWeight: FontWeight.w900, color: AppColors.text, height: 1.15, letterSpacing: 2)),
+              const SizedBox(height: 10),
+              Text(subtitle, style: const TextStyle(fontSize: 16, color: Color(0xFF4A4541))),
+              const Spacer(),
+              SizedBox(
+                height: 48,
+                child: FilledButton(
+                  onPressed: onCustom,
+                  style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 28)),
+                  child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                    Text('立即定制', style: TextStyle(fontSize: 17)),
+                    SizedBox(width: 10),
+                    Icon(Icons.arrow_forward, size: 20),
+                  ]),
+                ),
+              ),
+            ]),
+          ),
+        ]),
+      ),
     );
   }
 }
@@ -225,10 +506,24 @@ class _MinePage extends StatelessWidget {
       Expanded(
         child: CustomScrollView(slivers: [
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-            sliver: SliverToBoxAdapter(child: _AccountCard(model: model)),
+            padding: const EdgeInsets.fromLTRB(_gutter, 20, _gutter, 0),
+            sliver: SliverToBoxAdapter(
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 560),
+                  child: _AccountCard(model: model),
+                ),
+              ),
+            ),
           ),
           if (model.account.signedIn && model.customs.isNotEmpty) _CustomList(model: model),
+          const SliverPadding(
+            padding: EdgeInsets.fromLTRB(_gutter, 28, _gutter, 0),
+            sliver: SliverToBoxAdapter(
+              child: Text('我领养的', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+            ),
+          ),
           if (pets.isEmpty)
             const SliverFillRemaining(
               hasScrollBody: false,
@@ -242,10 +537,14 @@ class _MinePage extends StatelessWidget {
         ]),
       ),
       Padding(
-        padding: const EdgeInsets.all(16),
-        child: SizedBox(
-          width: double.infinity,
-          child: OutlinedButton(onPressed: model.quit, child: const Text('退出程序')),
+        padding: const EdgeInsets.fromLTRB(_gutter, 0, _gutter, 20),
+        child: Align(
+          alignment: Alignment.centerRight,
+          child: OutlinedButton.icon(
+            onPressed: model.quit,
+            icon: const Icon(Icons.power_settings_new, size: 18),
+            label: const Text('退出程序'),
+          ),
         ),
       ),
     ]);
@@ -262,7 +561,7 @@ void openCustomFlow(BuildContext context, MainWindowModel model) {
     return;
   }
   Navigator.of(context)
-      .push(MaterialPageRoute<void>(
+      .push(narrowRoute<void>(
         builder: (_) => CustomFormPage(
           deps: deps,
           onSubmitted: (ctx, request) => openPlans(ctx, model, request),
@@ -281,19 +580,19 @@ void openPlans(BuildContext context, MainWindowModel model, CustomRequestInfo re
         model.setTab(1);
       });
   Navigator.of(context)
-      .push(MaterialPageRoute<void>(
+      .push(narrowRoute<void>(
     builder: (_) => PlanPage(
       deps: deps,
       request: request,
       onAlreadyPaid: (ctx) =>
-          Navigator.of(ctx).pushReplacement(MaterialPageRoute<void>(builder: (_) => submitted())),
-      onOrder: (ctx, plan, order) => Navigator.of(ctx).push(MaterialPageRoute<void>(
+          Navigator.of(ctx).pushReplacement(narrowRoute<void>(builder: (_) => submitted())),
+      onOrder: (ctx, plan, order) => Navigator.of(ctx).push(narrowRoute<void>(
         builder: (_) => PayPage(
           deps: deps,
           request: request,
           plan: plan,
           order: order,
-          onPaid: (payCtx) => Navigator.of(payCtx).pushReplacement(MaterialPageRoute<void>(
+          onPaid: (payCtx) => Navigator.of(payCtx).pushReplacement(narrowRoute<void>(
             builder: (_) => submitted(),
           )),
         ),
@@ -314,7 +613,7 @@ class _CustomList extends StatelessWidget {
   Widget build(BuildContext context) {
     final rows = model.customs;
     return SliverPadding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      padding: const EdgeInsets.fromLTRB(_gutter, 24, _gutter, 0),
       sliver: SliverList.builder(
         itemCount: rows.length + 1,
         itemBuilder: (context, i) {
@@ -471,7 +770,7 @@ class _ReadyBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+        margin: const EdgeInsets.fromLTRB(_gutter, 16, _gutter, 0),
         padding: const EdgeInsets.fromLTRB(16, 8, 4, 8),
         decoration: BoxDecoration(color: AppColors.accentSoft, borderRadius: BorderRadius.circular(20)),
         child: Row(children: [

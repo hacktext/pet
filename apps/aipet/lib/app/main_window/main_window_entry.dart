@@ -15,7 +15,7 @@ import 'main_window_model.dart';
 Future<void> runMainWindow() async {
   await windowManager.ensureInitialized();
   await windowManager.waitUntilReadyToShow(
-    const WindowOptions(size: Size(420, 740), minimumSize: Size(420, 600), center: true, title: 'aipet'),
+    const WindowOptions(size: Size(1200, 760), minimumSize: Size(960, 640), center: true, title: 'aipet'),
     () async {
       await windowManager.setPreventClose(true);
       await windowManager.show();

@@ -87,7 +87,7 @@ void main() {
     expect(m.category, Category.dog);
     expect(isGroupOpen(Group.pets), isTrue);
     expect(isGroupOpen(Group.people), isFalse);
-    expect([for (final c in Category.values) if (isOpenForCustom(c)) c], [Category.cat, Category.dog]);
+    expect([for (final c in Category.values) if (isOpenForCustom(c)) c], [Category.dog, Category.cat]);
   });
 
   test('submit uploads every photo then creates the request', () async {
@@ -199,7 +199,7 @@ void main() {
     await tester.pumpWidget(MaterialApp(home: CustomFormPage(deps: deps, onSubmitted: (_, r) => done = r)));
     expect(find.text('定制你的专属宠物'), findsOneWidget);
     expect(find.text('0/8'), findsOneWidget);
-    for (final t in ['宠物', '人物', '猫猫', '狗狗', '其他宠物', '点击上传照片']) {
+    for (final t in ['宠物', '人物', '猫咪', '狗狗', '其他宠物', '点击上传照片']) {
       expect(find.text(t), findsOneWidget, reason: t);
     }
     expect(find.text('即将开放'), findsNWidgets(2)); // on 人物 and on 其他宠物

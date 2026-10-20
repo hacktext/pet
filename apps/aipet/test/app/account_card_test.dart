@@ -44,7 +44,7 @@ void main() {
   final code = find.byKey(const Key('account-code'));
 
   Future<void> open(WidgetTester tester) async {
-    tester.view.physicalSize = const Size(420, 740);
+    tester.view.physicalSize = const Size(1200, 800);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
     await model.start();
@@ -139,7 +139,7 @@ void main() {
     await settle(tester);
     await tester.pumpAndSettle(); // the sign-in page closes itself
     expect(account.calls, ['login 13800138000 123456']);
-    expect(find.text('138****1234'), findsOneWidget);
+    expect(find.text('138****1234'), findsNWidgets(2)); // the top bar's chip and the card
     expect(find.text('尚未同步'), findsOneWidget);
     expect(phone, findsNothing);
 
@@ -170,7 +170,7 @@ void main() {
   testWidgets('a pet window already signed in shows the account straight away', (tester) async {
     account.view = const AccountView(phoneMasked: '139****0000', name: 'n', syncing: true);
     await open(tester);
-    expect(find.text('139****0000'), findsOneWidget);
+    expect(find.text('139****0000'), findsNWidgets(2)); // the top bar's chip and the card
     expect(find.text('同步中…'), findsOneWidget);
   });
 }
