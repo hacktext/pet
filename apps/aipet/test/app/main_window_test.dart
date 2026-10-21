@@ -723,6 +723,8 @@ void main() {
         bridge: MainWindowBridge(mainEnd,
             ackTimeout: const Duration(milliseconds: 50), adoptTimeout: const Duration(milliseconds: 200)),
         characters: CharacterService(ApiClient(api, baseUrl: 'https://x', token: () => 't')),
+        characterOrders: CharacterService(ApiClient(api, baseUrl: 'https://x', token: () => 't'),
+            onLoginExpired: () => model.loginExpired()),
         catalogStore: CatalogStore(appData),
         cardTransport: cards,
       );
@@ -778,12 +780,122 @@ void main() {
       expect(find.text('顾沉'), findsNothing);
     });
 
-    testWidgets('locked: 付费 and the price; 解锁 is left to the payment flow', (tester) async {
+    testWidgets('unlock while signed out opens the sign-in page, not a QR', (tester) async {
       await people(tester);
       expect(model.paidStateOf('suwan'), PaidState.locked);
       await tester.tap(find.text('¥19.90 解锁').first);
-      await tester.pump();
+      await tester.pumpAndSettle();
+      expect(model.tab, 1);
+      expect(find.text('登录后即可解锁'), findsOneWidget);
+      expect(find.byKey(const Key('account-phone')), findsOneWidget);
+      expect(find.text('请使用微信扫码支付'), findsNothing);
+      expect(api.to('/api/aipet/characters/suwan/order'), isEmpty);
       expect(paid.owned, {'xiaxia'});
+    });
+
+    /// Signed in on 人物, the server answering the order with [order] and every
+    /// status with [status].
+    Future<void> signedInPeople(WidgetTester tester, {required HttpReply Function() order, String Function()? status}) async {
+      api.reply = (r) => switch (r.url.path) {
+            '/api/aipet/characters' => FakeHttp.ok(catalog),
+            '/api/aipet/characters/suwan/order' => order(),
+            '/api/aipet/characters/orders/PC1' => FakeHttp.ok({'status': status?.call() ?? 'pending'}),
+            _ => FakeHttp.ok(null),
+          };
+      await people(tester);
+      await signIn(tester);
+    }
+
+    HttpReply suwanOrder() => FakeHttp.ok({'order_no': 'PC1', 'amount_cents': 1990, 'code_url': 'weixin://c', 'expires_in': 900});
+
+    testWidgets('unlock → paid → the card says 下载', (tester) async {
+      var status = 'pending';
+      final answer = Completer<void>(); // the pet window's owned, held back
+      paid.onRefresh = () async {
+        await answer.future;
+        paid.owned = {...paid.owned, 'suwan'};
+        await paidSide.pushOwned(paid.owned);
+      };
+      await signedInPeople(tester, order: suwanOrder, status: () => status);
+      await tester.tap(find.text('¥19.90 解锁').first);
+      await tester.pumpAndSettle();
+      expect(find.text('苏晚 · 永久解锁'), findsOneWidget);
+      expect(find.text('¥19.90'), findsOneWidget);
+      expect(find.text('支付完成后会自动跳转'), findsOneWidget);
+      status = 'paid';
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+      expect(find.text('请使用微信扫码支付'), findsNothing);
+      expect(find.text('解锁成功，点下载即可使用'), findsOneWidget);
+      expect(paid.refreshes, 1);
+      // Optimistic: 下载 on the card before the pet window's answer lands.
+      expect(paid.owned, {'xiaxia'});
+      expect(find.text('下载'), findsNWidgets(2)); // 苏晚 and 夏夏
+      expect(find.text('¥19.90 解锁'), findsOneWidget); // 顾沉
+      answer.complete();
+      await tester.pump();
+      await tester.pump();
+      expect(model.owned, {'xiaxia', 'suwan'});
+      expect(find.text('下载'), findsNWidgets(2));
+      expect(api.to('/api/aipet/characters/suwan/order'), hasLength(1));
+    });
+
+    testWidgets('unlocking a character already owned (5016): no QR, owned, and says so', (tester) async {
+      await signedInPeople(tester, order: () => FakeHttp.fail(5016, '已经解锁过了'));
+      await tester.tap(find.text('¥19.90 解锁').first);
+      await tester.pumpAndSettle();
+      expect(find.text('请使用微信扫码支付'), findsNothing);
+      expect(find.text('你已经解锁过这个人物'), findsOneWidget);
+      expect(model.paidStateOf('suwan'), PaidState.owned);
+      expect(paid.refreshes, 1);
+    });
+
+    testWidgets('an order that fails says why and shows no QR', (tester) async {
+      await signedInPeople(tester, order: () => FakeHttp.fail(5015, '这个人物暂不可购买'));
+      await tester.tap(find.text('¥19.90 解锁').first);
+      await tester.pumpAndSettle();
+      expect(find.text('请使用微信扫码支付'), findsNothing);
+      expect(find.text('这个人物暂不可购买'), findsOneWidget);
+      expect(model.paidStateOf('suwan'), PaidState.locked);
+    });
+
+    testWidgets('login expired on the order: back to 我的 with the reason, never a blank QR', (tester) async {
+      await signedInPeople(tester, order: () => FakeHttp.fail(1003, 'token invalid', null, 401));
+      await tester.tap(find.text('¥19.90 解锁').first);
+      await tester.pumpAndSettle();
+      expect(find.text('请使用微信扫码支付'), findsNothing);
+      expect(model.tab, 1);
+      expect(find.text('登录已过期，请重新登录'), findsOneWidget);
+      expect(accountSide.calls, ['logout']);
+      expect(model.account.signedIn, isFalse);
+    });
+
+    testWidgets('login expired while the QR polls: the page closes, back to 我的', (tester) async {
+      await signedInPeople(tester, order: suwanOrder);
+      await tester.tap(find.text('¥19.90 解锁').first);
+      await tester.pumpAndSettle();
+      expect(find.text('请使用微信扫码支付'), findsOneWidget);
+      api.reply = (_) => FakeHttp.fail(1003, 'token invalid', null, 401);
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+      expect(find.text('请使用微信扫码支付'), findsNothing);
+      expect(model.tab, 1);
+      expect(find.text('登录已过期，请重新登录'), findsOneWidget);
+      expect(accountSide.calls, ['logout']);
+      expect(model.paidStateOf('suwan'), PaidState.locked);
+    });
+
+    test('a catalog 1003 stays silent: no sign-out', () async {
+      await model.start();
+      await petSide.pushAccount(const AccountView(phoneMasked: '138****0000', name: 'n'));
+      await Future<void>.delayed(Duration.zero);
+      expect(model.account.signedIn, isTrue);
+      api.reply = (_) => FakeHttp.fail(1003, 'token invalid', null, 401);
+      await expectLater(model.characters!.catalog(), throwsA(isA<CustomFailure>()));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(model.takeMessage(), isNull);
+      expect(model.account.signedIn, isTrue);
+      expect(accountSide.calls, isEmpty);
     });
 
     testWidgets('owned: 已购 and 下载, which shows its progress and ends as 带TA回家', (tester) async {
@@ -874,12 +986,17 @@ class _FakePaid implements PaidHandler {
   Set<String> owned;
 
   Future<bool> Function(String code) onDownload = (_) async => false;
+  Future<void> Function() onRefresh = () async {};
+  var refreshes = 0;
 
   @override
   Future<bool> download(String code) => onDownload(code);
 
   @override
-  Future<void> refresh() async {}
+  Future<void> refresh() {
+    refreshes++;
+    return onRefresh();
+  }
 }
 
 class _KeptVoices implements VoiceHandler {

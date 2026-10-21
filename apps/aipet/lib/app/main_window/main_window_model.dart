@@ -30,12 +30,18 @@ class MainWindowModel extends ChangeNotifier {
     this.custom,
     this.customPollInterval = kCustomPollInterval,
     this.characters,
+    CharacterService? characterOrders,
     this.catalogStore,
     this.cardTransport,
-  });
+  }) : characterOrders = characterOrders ?? characters;
 
-  /// The shop's catalog; null shows the free pets only.
+  /// The shop's catalog; null shows the free pets only. Built without
+  /// onLoginExpired: a catalog failure never says anything.
   final CharacterService? characters;
+
+  /// Unlocking (order and its status): the same endpoints, but a 1003 here
+  /// is [loginExpired]. Defaults to [characters].
+  final CharacterService? characterOrders;
 
   /// The cached catalog and card photos; null caches nothing. This window
   /// writes catalog.json and cards/ only -- owned.json is the pet window's.
@@ -159,8 +165,43 @@ class MainWindowModel extends ChangeNotifier {
     return _installed(code) != null ? PaidState.installed : PaidState.owned;
   }
 
-  /// 「¥… 解锁」. A no-op stub: Task C6 (the payment flow) replaces it.
-  Future<void> unlock(PaidCharacter c) async {}
+  final _ordering = <String>{}; // an unlock order is out for these codes
+
+  /// 「¥… 解锁」, signed in: the order for its QR, or null when there is none
+  /// to show -- already owned (5016: refreshed and said so), another order
+  /// still out, or a failure (said; a 1003 has gone to [loginExpired]).
+  Future<PayOrder?> orderUnlock(PaidCharacter c) async {
+    final service = characterOrders;
+    if (service == null || !_ordering.add(c.code)) return null;
+    try {
+      return await service.order(c.code);
+    } on CustomFailure catch (f) {
+      if (_disposed) return null;
+      if (f.code == kCharacterOwnedCode) {
+        _ownedNow(c.code);
+        _say('你已经解锁过这个人物');
+      } else if (f.code != kLoginExpiredCode) {
+        _say(f.message);
+      }
+      return null;
+    } finally {
+      _ordering.remove(c.code);
+    }
+  }
+
+  /// The QR for [code] was paid: 「下载」 at once, and the pet window is asked
+  /// to fetch what is owned (its ownedChanged push confirms).
+  void unlocked(String code) {
+    if (_disposed) return;
+    _ownedNow(code);
+    _say('解锁成功，点下载即可使用');
+  }
+
+  void _ownedNow(String code) {
+    _owned = {..._owned, code};
+    _bridge.refreshOwned();
+    notifyListeners();
+  }
 
   /// 「下载」: the pet window downloads and installs `paid-<code>`, sending
   /// progress; this window rescans once it is there.

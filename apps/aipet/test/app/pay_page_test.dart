@@ -1,19 +1,17 @@
 import 'dart:async';
 
-import 'package:aipet/app/main_window/custom_flow/custom_deps.dart';
 import 'package:aipet/app/main_window/custom_flow/pay_model.dart';
 import 'package:aipet/app/main_window/custom_flow/pay_page.dart';
 import 'package:aipet/app/main_window/custom_flow/submitted_page.dart';
 import 'package:aipet/domain/custom_order.dart';
 import 'package:aipet/domain/pet.dart';
 import 'package:aipet/services/api_client.dart';
+import 'package:aipet/services/character_service.dart';
 import 'package:aipet/services/custom_service.dart';
-import 'package:aipet/services/oss_uploader.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../support/fake_http.dart';
-import '../support/fake_oss.dart';
 
 /// Waits (real time, 5 ms steps, 2 s cap) until [done]; no fixed sleeps.
 Future<void> until(bool Function() done) async {
@@ -33,7 +31,15 @@ void main() {
   const orders = '/api/aipet/custom/orders/PX1';
   const expiredMsg = '登录已过期，请重新登录';
 
-  CustomDeps deps() => CustomDeps(service: svc, uploader: OssUploader(FakeOss()), pick: () async => []);
+  CustomPayBackend backend() => CustomPayBackend(svc, requestId: 5, planCode: 'standard');
+
+  /// The custom flow's QR page for [request] on [plan].
+  PayPage page({required PayOrder order, required void Function(BuildContext) onPaid}) => PayPage(
+      title: '${request.name} · ${plan.name}',
+      order: order,
+      backend: backend(),
+      hint: '支付完成后会自动跳转；关闭本页也可以在「我的定制」里继续支付',
+      onPaid: onPaid);
 
   setUp(() {
     status = 'pending';
@@ -45,12 +51,12 @@ void main() {
   });
 
   PayModel model({Duration every = const Duration(seconds: 2), PayOrder o = order}) =>
-      PayModel(service: svc, requestId: 5, planCode: 'standard', order: o, pollEvery: every);
+      PayModel(backend: backend(), order: o, pollEvery: every);
 
   testWidgets('polls every 2 s and reports paid', (tester) async {
     var paid = 0;
     await tester.pumpWidget(MaterialApp(
-        home: PayPage(deps: deps(), request: request, plan: plan, order: order, onPaid: (_) => paid++)));
+        home: page(order: order, onPaid: (_) => paid++)));
     expect(find.text('¥39'), findsWidgets);
     expect(find.text('请使用微信扫码支付'), findsOneWidget);
     await tester.pump(const Duration(seconds: 2));
@@ -67,7 +73,7 @@ void main() {
   testWidgets('expiry shows the refresh prompt; refreshing gets a new code', (tester) async {
     const short = PayOrder(orderNo: 'PX1', amountCents: 3900, codeUrl: 'weixin://wxpay/x', expiresIn: Duration(seconds: 3));
     await tester.pumpWidget(MaterialApp(
-        home: PayPage(deps: deps(), request: request, plan: plan, order: short, onPaid: (_) {})));
+        home: page(order: short, onPaid: (_) {})));
     await tester.pump(const Duration(seconds: 4));
     await tester.pump();
     expect(find.text('二维码已过期，点击刷新'), findsOneWidget);
@@ -189,7 +195,7 @@ void main() {
     http.reply = (r) => r.url.path.endsWith('/order') ? held.future : FakeHttp.ok({'status': 'pending'});
     const short = PayOrder(orderNo: 'PX1', amountCents: 3900, codeUrl: 'x', expiresIn: Duration(seconds: 1));
     await tester.pumpWidget(MaterialApp(
-        home: PayPage(deps: deps(), request: request, plan: plan, order: short, onPaid: (_) {})));
+        home: page(order: short, onPaid: (_) {})));
     expect(find.byWidgetPredicate((w) => w is Semantics && w.properties.label == '微信支付二维码'), findsOneWidget);
     await tester.pump(const Duration(seconds: 2));
     await tester.pump();
@@ -207,7 +213,7 @@ void main() {
   testWidgets('a 401 on the page shows the login message', (tester) async {
     http.reply = (_) => FakeHttp.fail(1003, 'unauthorized');
     await tester.pumpWidget(MaterialApp(
-        home: PayPage(deps: deps(), request: request, plan: plan, order: order, onPaid: (_) {})));
+        home: page(order: order, onPaid: (_) {})));
     await tester.pump(const Duration(seconds: 2));
     await tester.pump();
     expect(find.text(expiredMsg), findsOneWidget);
@@ -227,10 +233,7 @@ void main() {
     const short = PayOrder(orderNo: 'PX1', amountCents: 3900, codeUrl: 'x', expiresIn: Duration(seconds: 3));
     await tester.pumpWidget(MaterialApp(
         home: Builder(
-            builder: (ctx) => PayPage(
-                deps: deps(),
-                request: request,
-                plan: plan,
+            builder: (ctx) => page(
                 order: short,
                 onPaid: (c) => Navigator.of(c).pushReplacement(
                     MaterialPageRoute<void>(builder: (_) => SubmittedPage(onDone: (_) {})))))));
@@ -241,6 +244,38 @@ void main() {
     await tester.pump();
     await tester.pumpAndSettle();
     expect(find.text('定制已提交'), findsOneWidget);
+  });
+
+  test('5016 on reorder counts as paid', () async {
+    final chars = CharacterService(ApiClient(http, baseUrl: 'https://x', token: () => 't'));
+    final m = PayModel(backend: CharacterPayBackend(chars, 'suwan'), order: const PayOrder(
+        orderNo: 'PC1', amountCents: 1990, codeUrl: 'x', expiresIn: Duration(seconds: 1)));
+    http.reply = (_) => FakeHttp.fail(5016, '你已经解锁过这个人物');
+    await m.refresh();
+    expect(http.to('/api/aipet/characters/suwan/order'), hasLength(1));
+    expect(m.paid, isTrue);
+    expect(m.message, isNull);
+    m.dispose();
+  });
+
+  testWidgets("a character's QR: its title and hint, polling the character order", (tester) async {
+    final chars = CharacterService(ApiClient(http, baseUrl: 'https://x', token: () => 't'));
+    var paid = 0;
+    status = 'paid';
+    await tester.pumpWidget(MaterialApp(
+        home: PayPage(
+            title: '苏晚 · 永久解锁',
+            order: const PayOrder(orderNo: 'PC1', amountCents: 1990, codeUrl: 'weixin://c', expiresIn: Duration(minutes: 15)),
+            backend: CharacterPayBackend(chars, 'suwan'),
+            hint: '支付完成后会自动跳转',
+            onPaid: (_) => paid++)));
+    expect(find.text('苏晚 · 永久解锁'), findsOneWidget);
+    expect(find.text('支付完成后会自动跳转'), findsOneWidget);
+    expect(find.textContaining('我的定制'), findsNothing);
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pump();
+    expect(http.to('/api/aipet/characters/orders/PC1'), hasLength(1));
+    expect(paid, 1);
   });
 
   test('a refunded order ends polling and says so', () async {

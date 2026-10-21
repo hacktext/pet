@@ -37,6 +37,7 @@ Future<void> runMainWindow() async {
       pick: pickPhotosFromDisk,
     ),
     characters: CharacterService(api),
+    characterOrders: CharacterService(api, onLoginExpired: () => model.loginExpired()),
     catalogStore: CatalogStore(appDataRoot()),
     cardTransport: IoDownloadTransport(),
   );

@@ -9,6 +9,7 @@ import '../../domain/paid_character.dart';
 import '../../domain/pet.dart';
 import '../../services/window_bridge.dart';
 import 'custom_flow/custom_form_page.dart';
+import 'custom_flow/pay_model.dart';
 import 'custom_flow/pay_page.dart';
 import 'custom_flow/plan_page.dart';
 import 'custom_flow/submitted_page.dart';
@@ -407,7 +408,7 @@ class _PetGrid extends StatelessWidget {
                   onVoice: (v) => model.chooseVoice(pet, v),
                   paid: paid,
                   priceCents: character?.priceCents,
-                  onUnlock: character == null ? null : () => model.unlock(character),
+                  onUnlock: character == null ? null : () => openUnlock(context, model, character),
                   onDownload: paid == null ? null : () => model.download(MainWindowModel.codeOf(pet)!),
                   progress: paid == null ? null : model.downloading[MainWindowModel.codeOf(pet)],
                 ),
@@ -666,10 +667,10 @@ void openPlans(BuildContext context, MainWindowModel model, CustomRequestInfo re
           Navigator.of(ctx).pushReplacement(narrowRoute<void>(builder: (_) => submitted())),
       onOrder: (ctx, plan, order) => Navigator.of(ctx).push(narrowRoute<void>(
         builder: (_) => PayPage(
-          deps: deps,
-          request: request,
-          plan: plan,
+          title: '${request.name} · ${plan.name}',
           order: order,
+          backend: CustomPayBackend(deps.service, requestId: request.id, planCode: plan.code),
+          hint: '支付完成后会自动跳转；关闭本页也可以在「我的定制」里继续支付',
           onPaid: (payCtx) => Navigator.of(payCtx).pushReplacement(narrowRoute<void>(
             builder: (_) => submitted(),
           )),
@@ -678,6 +679,32 @@ void openPlans(BuildContext context, MainWindowModel model, CustomRequestInfo re
     ),
   ))
       .then((_) => model.loadCustoms());
+}
+
+/// 「¥… 解锁」: sign in first if need be (and stop there), order, then the QR;
+/// once paid the page closes onto the card, now 「下载」.
+Future<void> openUnlock(BuildContext context, MainWindowModel model, PaidCharacter character) async {
+  final service = model.characterOrders;
+  if (service == null) return;
+  if (!model.account.signedIn) {
+    model.requireLogin();
+    openLogin(context, model, reason: '登录后即可解锁');
+    return;
+  }
+  final order = await model.orderUnlock(character);
+  if (order == null || !context.mounted) return;
+  Navigator.of(context).push(narrowRoute<void>(
+    builder: (_) => PayPage(
+      title: '${character.name} · 永久解锁',
+      order: order,
+      backend: CharacterPayBackend(service, character.code),
+      hint: '支付完成后会自动跳转',
+      onPaid: (payCtx) {
+        Navigator.of(payCtx).pop();
+        model.unlocked(character.code);
+      },
+    ),
+  ));
 }
 
 /// 我的定制: each paid order's first photo, name, category, plan and
