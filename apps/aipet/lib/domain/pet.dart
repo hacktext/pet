@@ -42,7 +42,7 @@ enum Species {
   bool get isCharacter => this == girl || this == boy || this == anime;
 }
 
-enum PetOrigin { builtin, custom }
+enum PetOrigin { builtin, custom, paid }
 
 /// One voice a character can speak in: `voices/<id>/<action>-<n>.wav` in the
 /// pet's folder.

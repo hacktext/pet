@@ -4,7 +4,10 @@ import 'package:window_manager/window_manager.dart';
 import '../../services/account_store.dart';
 import '../../services/api_client.dart';
 import '../../services/app_paths.dart';
+import '../../services/catalog_store.dart';
+import '../../services/character_service.dart';
 import '../../services/custom_service.dart';
+import '../../services/file_download.dart';
 import '../../services/oss_uploader.dart';
 import '../../services/pet_library.dart';
 import '../../services/window_bridge.dart';
@@ -22,19 +25,21 @@ Future<void> runMainWindow() async {
       await windowManager.focus();
     },
   );
+  // Read-only: the pet window is account.json's one writer.
+  final api = ApiClient(IoHttpTransport(), token: AccountStore(appDataRoot()).readToken);
   late final MainWindowModel model;
   model = MainWindowModel(
     library: PetLibrary(builtinRoot: builtinPetsRoot(), customRoot: customPetsRoot(appDataRoot())),
     bridge: MainWindowBridge(WindowChannelTransport()),
     custom: CustomDeps(
-      service: CustomService(
-        // Read-only: the pet window is account.json's one writer.
-        ApiClient(IoHttpTransport(), token: AccountStore(appDataRoot()).readToken),
-        onLoginExpired: () => model.loginExpired(),
-      ),
+      service: CustomService(api, onLoginExpired: () => model.loginExpired()),
       uploader: OssUploader(IoMultipartTransport()),
       pick: pickPhotosFromDisk,
     ),
+    characters: CharacterService(api),
+    characterOrders: CharacterService(api, onLoginExpired: () => model.loginExpired()),
+    catalogStore: CatalogStore(appDataRoot()),
+    cardTransport: IoDownloadTransport(),
   );
   windowManager.addListener(_CloseToHide(model));
   runApp(MainWindowApp(model: model));

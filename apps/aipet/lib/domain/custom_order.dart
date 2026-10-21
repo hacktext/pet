@@ -224,6 +224,11 @@ final _sha256Pattern = RegExp(r'^[0-9a-f]{64}$');
 /// rest of an id (at most 64 characters), never a dot-folder or a built-in's id.
 bool isCustomPetId(String id) => _petIdPattern.hasMatch(id);
 
+final _paidPetIdPattern = RegExp(r'^paid-[a-z0-9_]{1,57}$');
+
+/// The id a bought character installs under: `paid-<code>`.
+bool isPaidPetId(String id) => _paidPetIdPattern.hasMatch(id);
+
 /// `stand.mp4`, `voices/a/stand-1.wav`: relative, forward slashes, and nothing
 /// that could step outside the pet folder, name a Windows device, or collide
 /// with the downloader's `.part` files.
@@ -294,7 +299,7 @@ class CustomAssets {
   static CustomAssets? fromJson(Object? j) {
     if (j is! Map) return null;
     final petId = j['pet_id'], raw = j['files'];
-    if (petId is! String || !isCustomPetId(petId) || raw is! List || raw.isEmpty) return null;
+    if (petId is! String || !(isCustomPetId(petId) || isPaidPetId(petId)) || raw is! List || raw.isEmpty) return null;
     final files = <CustomAsset>[];
     for (final r in raw) {
       final f = CustomAsset.fromJson(r);

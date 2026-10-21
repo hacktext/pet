@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../../../domain/custom_order.dart';
+import '../../../services/character_service.dart';
 import '../../../services/custom_service.dart';
 
 /// The server's code for a missing or rejected token.
@@ -12,26 +13,59 @@ const _authCode = 1003;
 const _alreadyPaidCode = 5011;
 const _loginAgain = '登录已过期，请重新登录';
 
+/// What a QR page asks the server: is [orderNo] paid, and a fresh order
+/// once the QR has expired. Failures are [CustomFailure]s.
+abstract interface class PayBackend {
+  Future<PayStatus> status(String orderNo);
+
+  Future<PayOrder> reorder();
+}
+
+/// A custom pet's order: [requestId] on [planCode].
+class CustomPayBackend implements PayBackend {
+  const CustomPayBackend(this.service, {required this.requestId, required this.planCode});
+
+  final CustomService service;
+  final int requestId;
+  final String planCode;
+
+  @override
+  Future<PayStatus> status(String orderNo) => service.status(orderNo);
+
+  @override
+  Future<PayOrder> reorder() => service.order(requestId, planCode);
+}
+
+/// A paid character's one-off unlock.
+class CharacterPayBackend implements PayBackend {
+  const CharacterPayBackend(this.service, this.code);
+
+  final CharacterService service;
+  final String code;
+
+  @override
+  Future<PayStatus> status(String orderNo) => service.status(orderNo);
+
+  @override
+  Future<PayOrder> reorder() => service.order(code);
+}
+
 /// The WeChat QR and its order: asks every [pollEvery] whether it is paid,
 /// stops when paid, expired, signed out or disposed (custom order spec 3,
 /// step 4). Time left counts down by ticks, not by the wall clock: widget
 /// tests run on fake time, and DateTime.now() does not follow it.
 class PayModel extends ChangeNotifier {
   PayModel({
-    required CustomService service,
-    required this.requestId,
-    required this.planCode,
+    required PayBackend backend,
     required PayOrder order,
     this.pollEvery = const Duration(seconds: 2),
   })
       // ignore: prefer_initializing_formals
-      : _service = service,
+      : _backend = backend,
         _order = order,
         _left = order.expiresIn;
 
-  final CustomService _service;
-  final int requestId;
-  final String planCode;
+  final PayBackend _backend;
   final Duration pollEvery;
 
   PayOrder _order;
@@ -80,7 +114,7 @@ class PayModel extends ChangeNotifier {
     _asking = true;
     final asked = _order.orderNo;
     try {
-      final s = await _service.status(asked);
+      final s = await _backend.status(asked);
       if (_disposed || asked != _order.orderNo) return; // a newer QR took over
       if (s == PayStatus.paid) {
         _expiring = false;
@@ -126,7 +160,7 @@ class PayModel extends ChangeNotifier {
     _message = null;
     notifyListeners();
     try {
-      final o = await _service.order(requestId, planCode);
+      final o = await _backend.reorder();
       if (_disposed) return;
       _order = o;
       _expiring = false;
@@ -134,7 +168,7 @@ class PayModel extends ChangeNotifier {
       _expired = false;
       start();
     } on CustomFailure catch (f) {
-      if (f.code == _alreadyPaidCode) {
+      if (f.code == _alreadyPaidCode || f.code == kCharacterOwnedCode) {
         // The QR was paid after all (e.g. at the boundary); go on as paid.
         _paid = true;
         _expired = false;

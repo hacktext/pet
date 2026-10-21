@@ -125,6 +125,14 @@ class Server:
     def finish(self, job_id: int, walk_facing: str, files: list[dict]) -> None:
         self._post_idempotent(f"jobs/{job_id}/finish", {"walk_facing": walk_facing, "files": files})
 
+    def character_upload_urls(self, code: str, files: list[dict]) -> dict[str, str]:
+        res = self._post_idempotent(f"characters/{code}/upload-urls", {"files": files})
+        return {x["path"]: x["url"] for x in res}
+
+    def character_finish(self, code: str, files: list[dict]) -> dict:
+        """Replaces the character's whole asset list: always send every file."""
+        return self._post_idempotent(f"characters/{code}/finish", {"files": files})
+
     def fail(self, job_id: int, stage: str, reason: str) -> None:
         self._post_idempotent(f"jobs/{job_id}/fail", {"stage": stage, "reason": reason[:255]})
 

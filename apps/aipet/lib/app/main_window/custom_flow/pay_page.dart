@@ -3,24 +3,26 @@ import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../../domain/custom_order.dart';
 import '../theme.dart';
-import 'custom_deps.dart';
 import 'pay_model.dart';
 
 /// 微信扫码支付: QR, amount, countdown; [onPaid] once the server says paid.
 class PayPage extends StatefulWidget {
   const PayPage({
     super.key,
-    required this.deps,
-    required this.request,
-    required this.plan,
+    required this.title,
     required this.order,
+    required this.backend,
+    required this.hint,
     required this.onPaid,
   });
 
-  final CustomDeps deps;
-  final CustomRequestInfo request;
-  final CustomPlan plan;
+  /// What is being paid for, above the amount.
+  final String title;
   final PayOrder order;
+  final PayBackend backend;
+
+  /// Under the QR: what happens once paid.
+  final String hint;
   final void Function(BuildContext context) onPaid;
 
   @override
@@ -28,12 +30,7 @@ class PayPage extends StatefulWidget {
 }
 
 class _PayPageState extends State<PayPage> {
-  late final PayModel _m = PayModel(
-    service: widget.deps.service,
-    requestId: widget.request.id,
-    planCode: widget.plan.code,
-    order: widget.order,
-  )
+  late final PayModel _m = PayModel(backend: widget.backend, order: widget.order)
     ..addListener(_onChange)
     ..start();
   var _reported = false;
@@ -63,7 +60,7 @@ class _PayPageState extends State<PayPage> {
             final mm = left.inMinutes.toString().padLeft(2, '0');
             final ss = (left.inSeconds % 60).toString().padLeft(2, '0');
             return ListView(padding: const EdgeInsets.all(24), children: [
-              Text('${widget.request.name} · ${widget.plan.name}',
+              Text(widget.title,
                   textAlign: TextAlign.center, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
               const SizedBox(height: 8),
               Text(yuan(_m.order.amountCents),
@@ -92,8 +89,8 @@ class _PayPageState extends State<PayPage> {
               if (!_m.expired)
                 Text('二维码 $mm:$ss 后过期', textAlign: TextAlign.center, style: const TextStyle(color: AppColors.textMuted)),
               const SizedBox(height: 8),
-              const Text('支付完成后会自动跳转；关闭本页也可以在「我的定制」里继续支付',
-                  textAlign: TextAlign.center, style: TextStyle(color: AppColors.textMuted, fontSize: 12)),
+              Text(widget.hint,
+                  textAlign: TextAlign.center, style: const TextStyle(color: AppColors.textMuted, fontSize: 12)),
               if (_m.message != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 8),

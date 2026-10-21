@@ -7,7 +7,11 @@ import 'package:aipet/app/main_window/main_window_app.dart';
 import 'package:aipet/app/main_window/main_window_model.dart';
 import 'package:aipet/domain/account_view.dart';
 import 'package:aipet/domain/library_state.dart';
+import 'package:aipet/domain/paid_character.dart';
+import 'package:aipet/domain/pet.dart';
 import 'package:aipet/services/api_client.dart';
+import 'package:aipet/services/catalog_store.dart';
+import 'package:aipet/services/character_service.dart';
 import 'package:aipet/services/custom_service.dart';
 import 'package:aipet/services/oss_uploader.dart';
 import 'package:aipet/services/pet_library.dart';
@@ -16,6 +20,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../support/fake_account.dart';
+import '../support/fake_downloads.dart';
 import '../support/fake_http.dart';
 import '../support/fake_oss.dart';
 import '../support/fake_transport.dart';
@@ -28,6 +33,7 @@ void main() {
   late PetWindowBridge petSide;
   late MainWindowModel model;
   late FakeTransport petEnd;
+  late FakeTransport mainEnd;
   late FakeHttp api;
   late FakeAccount accountSide;
   late List<PickedFile> picks;
@@ -43,8 +49,9 @@ void main() {
     writePet(builtin, id: 'builtin-gold', name: '金毛');
     writePet(builtin, id: 'builtin-ragdoll', species: 'cat', name: '布偶猫');
     writePet(builtin, id: 'builtin-xiaoya', species: 'girl', name: '小雅');
-    final (pe, mainEnd) = FakeTransport.pair();
+    final (pe, me) = FakeTransport.pair();
     petEnd = pe;
+    mainEnd = me;
     petState = LibraryState.empty;
     quits = 0;
     refreshes = 0;
@@ -253,7 +260,7 @@ void main() {
     gate.complete();
     await starting;
     expect(replied, isTrue);
-    expect(model.statusOf(model.plazaPets.firstWhere((p) => p.id == 'builtin-gold')), CardStatus.companion);
+    expect(model.statusOf(_plaza(model).firstWhere((p) => p.id == 'builtin-gold')), CardStatus.companion);
   });
   Future<void> signIn(WidgetTester tester) async {
     await petSide.pushAccount(const AccountView(phoneMasked: '138****0000', name: 'n'));
@@ -619,12 +626,12 @@ void main() {
     await petSide.pushReady([const ReadyPet(petId: 'custom-7', name: '豆豆')]);
     await tester.pump();
     expect(find.text('你的「豆豆」做好了'), findsOneWidget);
-    expect(model.plazaPets.map((p) => p.id), contains('custom-7')); // rescanned: in the plaza like the others
+    expect(_plaza(model).map((p) => p.id), contains('custom-7')); // rescanned: in the plaza like the others
     await tester.tap(find.text('换它陪我'));
     await tester.pump();
     await tester.pump();
     expect(find.text('你的「豆豆」做好了'), findsNothing);
-    expect(model.statusOf(model.plazaPets.firstWhere((p) => p.id == 'custom-7')), CardStatus.companion);
+    expect(model.statusOf(_plaza(model).firstWhere((p) => p.id == 'custom-7')), CardStatus.companion);
   });
 
   testWidgets('pets that finished while the library was closed are announced when it opens', (tester) async {
@@ -661,11 +668,11 @@ void main() {
     await tester.pump();
     await tester.tap(find.byTooltip('知道了'));
     await tester.pump();
-    expect(model.plazaPets.map((p) => p.id), isNot(contains('custom-7')));
+    expect(_plaza(model).map((p) => p.id), isNot(contains('custom-7')));
     writePet(Directory('${tmp.path}\\custom'), id: 'custom-7', origin: 'custom', species: 'cat', name: '豆豆');
     await petSide.pushReady([ready]);
     await tester.pump();
-    expect(model.plazaPets.map((p) => p.id), contains('custom-7'));
+    expect(_plaza(model).map((p) => p.id), contains('custom-7'));
     expect(find.text('你的「豆豆」做好了'), findsNothing);
   });
 
@@ -686,6 +693,398 @@ void main() {
     expect(model.readyPet, ready);
     expect(shown, 1);
   });
+
+  group('paid characters', () {
+    late _FakePaid paid;
+    late FakeDownloads cards;
+    late Directory appData;
+    late PetWindowBridge paidSide;
+    late DateTime clockNow;
+
+    Map<String, Object?> item(String code, String name, String species, {String? card}) =>
+        {'code': code, 'name': name, 'species': species, 'price_cents': 1990, 'card_url': card, 'tags': ['温柔']};
+
+    final catalog = [item('suwan', '苏晚', 'girl'), item('guchen', '顾沉', 'boy'), item('xiaxia', '夏夏', 'girl')];
+
+    setUp(() {
+      appData = Directory('${tmp.path}\\appdata')..createSync();
+      paid = _FakePaid({'xiaxia'});
+      clockNow = DateTime(2026, 10, 21, 12);
+      cards = FakeDownloads();
+      paidSide = PetWindowBridge(petEnd,
+          state: () => petState,
+          onAdopt: (id) => adoptImpl(id),
+          onMainWindowClosing: () async {},
+          onQuit: () async {},
+          account: accountSide,
+          paid: paid)
+        ..start();
+      api.reply = (r) => r.url.path == '/api/aipet/characters' ? FakeHttp.ok(catalog) : FakeHttp.ok(null);
+      model = MainWindowModel(
+        library: PetLibrary(builtinRoot: Directory('${tmp.path}\\builtin'), customRoot: Directory('${tmp.path}\\custom')),
+        bridge: MainWindowBridge(mainEnd,
+            ackTimeout: const Duration(milliseconds: 50), adoptTimeout: const Duration(milliseconds: 200)),
+        characters: CharacterService(ApiClient(api, baseUrl: 'https://x', token: () => 't')),
+        characterOrders: CharacterService(ApiClient(api, baseUrl: 'https://x', token: () => 't'),
+            onLoginExpired: () => model.loginExpired()),
+        catalogStore: CatalogStore(appData),
+        cardTransport: cards,
+        clock: () => clockNow,
+      );
+    });
+
+    Future<void> people(WidgetTester tester) async {
+      await open(tester);
+      await tester.tap(find.text('人物'));
+      await tester.pump();
+    }
+
+    void installPaid(String code, String name, {String species = 'girl'}) =>
+        writePet(Directory('${tmp.path}\\custom'), id: 'paid-$code', origin: 'paid', species: species, name: name);
+
+    testWidgets('the catalog failing with nothing cached: only the free characters, and no error', (tester) async {
+      api.reply = (r) => throw const SocketException('offline');
+      await people(tester);
+      expect(find.text('小雅'), findsOneWidget);
+      expect(find.text('苏晚'), findsNothing);
+      expect(find.text('付费'), findsNothing);
+      expect(find.textContaining('解锁'), findsNothing);
+      expect(find.byType(SnackBar), findsNothing);
+      expect(model.plazaPets.whereType<RemoteEntry>(), isEmpty);
+    });
+
+    testWidgets('the catalog failing with a cache: the cached characters, priced', (tester) async {
+      CatalogStore(appData).save(paidCatalogFrom(catalog));
+      api.reply = (r) => FakeHttp.fail(500, '服务器错误');
+      await people(tester);
+      expect(find.text('苏晚'), findsOneWidget);
+      expect(find.text('顾沉'), findsOneWidget);
+      expect(find.text('¥19.90 解锁'), findsNWidgets(2));
+      expect(find.text('付费'), findsNWidgets(2));
+      expect(find.text('已购'), findsOneWidget); // 夏夏, owned
+      expect(find.text('下载'), findsOneWidget);
+      expect(find.byType(SnackBar), findsNothing);
+    });
+
+    testWidgets('free characters first, then the catalog in its order; each in its own category', (tester) async {
+      await people(tester);
+      final names = [
+        for (final e in model.plazaPets)
+          switch (e) { InstalledEntry(:final pet) => pet.name, RemoteEntry(:final character) => character.name },
+      ];
+      expect(names, ['小雅', '苏晚', '顾沉', '夏夏']);
+      await tester.tap(find.text('男生'));
+      await tester.pump();
+      expect(find.text('顾沉'), findsOneWidget);
+      expect(find.text('苏晚'), findsNothing);
+      await tester.tap(find.text('女生'));
+      await tester.pump();
+      expect(find.text('苏晚'), findsOneWidget);
+      expect(find.text('顾沉'), findsNothing);
+    });
+
+    testWidgets('unlock while signed out opens the sign-in page, not a QR', (tester) async {
+      await people(tester);
+      expect(model.paidStateOf('suwan'), PaidState.locked);
+      await tester.tap(find.text('¥19.90 解锁').first);
+      await tester.pumpAndSettle();
+      expect(model.tab, 1);
+      expect(find.text('登录后即可解锁'), findsOneWidget);
+      expect(find.byKey(const Key('account-phone')), findsOneWidget);
+      expect(find.text('请使用微信扫码支付'), findsNothing);
+      expect(api.to('/api/aipet/characters/suwan/order'), isEmpty);
+      expect(paid.owned, {'xiaxia'});
+    });
+
+    /// Signed in on 人物, the server answering the order with [order] and every
+    /// status with [status].
+    Future<void> signedInPeople(WidgetTester tester, {required HttpReply Function() order, String Function()? status}) async {
+      api.reply = (r) => switch (r.url.path) {
+            '/api/aipet/characters' => FakeHttp.ok(catalog),
+            '/api/aipet/characters/suwan/order' => order(),
+            '/api/aipet/characters/orders/PC1' => FakeHttp.ok({'status': status?.call() ?? 'pending'}),
+            _ => FakeHttp.ok(null),
+          };
+      await people(tester);
+      await signIn(tester);
+    }
+
+    HttpReply suwanOrder() => FakeHttp.ok({'order_no': 'PC1', 'amount_cents': 1990, 'code_url': 'weixin://c', 'expires_in': 900});
+
+    testWidgets('unlock → paid → the card says 下载', (tester) async {
+      var status = 'pending';
+      final answer = Completer<void>(); // the pet window's owned, held back
+      paid.onRefresh = () async {
+        await answer.future;
+        paid.owned = {...paid.owned, 'suwan'};
+        await paidSide.pushOwned(paid.owned);
+      };
+      await signedInPeople(tester, order: suwanOrder, status: () => status);
+      await tester.tap(find.text('¥19.90 解锁').first);
+      await tester.pumpAndSettle();
+      expect(find.text('苏晚 · 永久解锁'), findsOneWidget);
+      expect(find.text('¥19.90'), findsOneWidget);
+      expect(find.text('支付完成后会自动跳转'), findsOneWidget);
+      status = 'paid';
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+      expect(find.text('请使用微信扫码支付'), findsNothing);
+      expect(find.text('解锁成功，点下载即可使用'), findsOneWidget);
+      expect(paid.refreshes, 1);
+      // Optimistic: 下载 on the card before the pet window's answer lands.
+      expect(paid.owned, {'xiaxia'});
+      expect(find.text('下载'), findsNWidgets(2)); // 苏晚 and 夏夏
+      expect(find.text('¥19.90 解锁'), findsOneWidget); // 顾沉
+      answer.complete();
+      await tester.pump();
+      await tester.pump();
+      expect(model.owned, {'xiaxia', 'suwan'});
+      expect(find.text('下载'), findsNWidgets(2));
+      expect(api.to('/api/aipet/characters/suwan/order'), hasLength(1));
+    });
+
+    testWidgets('unlocking a character already owned (5016): no QR, owned, and says so', (tester) async {
+      await signedInPeople(tester, order: () => FakeHttp.fail(5016, '已经解锁过了'));
+      await tester.tap(find.text('¥19.90 解锁').first);
+      await tester.pumpAndSettle();
+      expect(find.text('请使用微信扫码支付'), findsNothing);
+      expect(find.text('你已经解锁过这个人物'), findsOneWidget);
+      expect(model.paidStateOf('suwan'), PaidState.owned);
+      expect(paid.refreshes, 1);
+    });
+
+    testWidgets('an order that fails says why and shows no QR', (tester) async {
+      await signedInPeople(tester, order: () => FakeHttp.fail(5015, '这个人物暂不可购买'));
+      await tester.tap(find.text('¥19.90 解锁').first);
+      await tester.pumpAndSettle();
+      expect(find.text('请使用微信扫码支付'), findsNothing);
+      expect(find.text('这个人物暂不可购买'), findsOneWidget);
+      expect(model.paidStateOf('suwan'), PaidState.locked);
+    });
+
+    testWidgets('login expired on the order: back to 我的 with the reason, never a blank QR', (tester) async {
+      await signedInPeople(tester, order: () => FakeHttp.fail(1003, 'token invalid', null, 401));
+      await tester.tap(find.text('¥19.90 解锁').first);
+      await tester.pumpAndSettle();
+      expect(find.text('请使用微信扫码支付'), findsNothing);
+      expect(model.tab, 1);
+      expect(find.text('登录已过期，请重新登录'), findsOneWidget);
+      expect(accountSide.calls, ['logout']);
+      expect(model.account.signedIn, isFalse);
+    });
+
+    testWidgets('login expired while the QR polls: the page closes, back to 我的', (tester) async {
+      await signedInPeople(tester, order: suwanOrder);
+      await tester.tap(find.text('¥19.90 解锁').first);
+      await tester.pumpAndSettle();
+      expect(find.text('请使用微信扫码支付'), findsOneWidget);
+      api.reply = (_) => FakeHttp.fail(1003, 'token invalid', null, 401);
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+      expect(find.text('请使用微信扫码支付'), findsNothing);
+      expect(model.tab, 1);
+      expect(find.text('登录已过期，请重新登录'), findsOneWidget);
+      expect(accountSide.calls, ['logout']);
+      expect(model.paidStateOf('suwan'), PaidState.locked);
+    });
+
+    test('a catalog 1003 stays silent: no sign-out', () async {
+      await model.start();
+      await petSide.pushAccount(const AccountView(phoneMasked: '138****0000', name: 'n'));
+      await Future<void>.delayed(Duration.zero);
+      expect(model.account.signedIn, isTrue);
+      api.reply = (_) => FakeHttp.fail(1003, 'token invalid', null, 401);
+      await expectLater(model.characters!.catalog(), throwsA(isA<CustomFailure>()));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(model.takeMessage(), isNull);
+      expect(model.account.signedIn, isTrue);
+      expect(accountSide.calls, isEmpty);
+    });
+
+    testWidgets('owned: 已购 and 下载, which shows its progress and ends as 带TA回家', (tester) async {
+      final hold = Completer<void>();
+      paid.onDownload = (code) async {
+        await paidSide.pushCharacterProgress(code, 5, 12);
+        await hold.future;
+        installPaid(code, '夏夏');
+        return true;
+      };
+      await people(tester);
+      expect(model.paidStateOf('xiaxia'), PaidState.owned);
+      await tester.tap(find.text('下载'));
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('下载中 42%'), findsOneWidget);
+      final button = find.ancestor(of: find.text('下载中 42%'), matching: find.byType(FilledButton));
+      expect(tester.widget<FilledButton>(button).onPressed, isNull);
+      hold.complete();
+      await tester.pump();
+      await tester.pump();
+      expect(model.paidStateOf('xiaxia'), PaidState.installed);
+      expect(find.text('带TA回家'), findsNWidgets(2)); // 小雅 and 夏夏
+      expect(find.text('已购'), findsOneWidget);
+      expect(find.text('下载'), findsNothing);
+      expect(model.plazaPets[3], isA<InstalledEntry>());
+    });
+
+    testWidgets('a failed download says 下载失败，请重试 and offers 下载 again', (tester) async {
+      paid.onDownload = (_) async => false;
+      await people(tester);
+      await tester.tap(find.text('下载'));
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('下载失败，请重试'), findsOneWidget);
+      expect(find.text('下载'), findsOneWidget);
+      expect(model.downloading, isEmpty);
+    });
+
+    testWidgets('installed but no longer owned is locked: never an adopt button', (tester) async {
+      installPaid('suwan', '苏晚');
+      await people(tester);
+      expect(model.paidStateOf('suwan'), PaidState.locked);
+      expect(model.plazaPets[1], isA<RemoteEntry>());
+      expect(find.text('带TA回家'), findsOneWidget); // 小雅 only
+      expect(find.text('¥19.90 解锁'), findsNWidgets(2));
+    });
+
+    testWidgets('what is owned follows the pet window', (tester) async {
+      await people(tester);
+      expect(find.text('已购'), findsOneWidget);
+      await paidSide.pushOwned({'xiaxia', 'suwan'});
+      await tester.pump();
+      expect(find.text('已购'), findsNWidgets(2));
+      await paidSide.pushOwned({});
+      await tester.pump();
+      expect(find.text('已购'), findsNothing);
+      expect(find.text('付费'), findsNWidgets(3));
+    });
+
+    testWidgets('a delisted character the account owns still shows 下载', (tester) async {
+      api.reply = (r) => switch (r.url.path) {
+            '/api/aipet/characters' => FakeHttp.ok([item('suwan', '苏晚', 'girl')]),
+            '/api/aipet/characters/owned' => FakeHttp.ok([item('xiaxia', '夏夏', 'girl', card: 'https://oss/x.jpg')]),
+            _ => FakeHttp.ok(null),
+          };
+      await people(tester);
+      await tester.pump();
+      expect(find.text('夏夏'), findsOneWidget);
+      expect(model.paidStateOf('xiaxia'), PaidState.owned);
+      expect(find.text('下载'), findsOneWidget);
+      expect(find.text('¥19.90 解锁'), findsOneWidget); // 苏晚 only
+    });
+
+    test('a delisted owned character is cached with the catalog, card photo included', () async {
+      api.reply = (r) => switch (r.url.path) {
+            '/api/aipet/characters' => FakeHttp.ok([item('suwan', '苏晚', 'girl')]),
+            '/api/aipet/characters/owned' => FakeHttp.ok([item('xiaxia', '夏夏', 'girl', card: 'https://oss/x.jpg')]),
+            _ => FakeHttp.ok(null),
+          };
+      cards.serve = (_) => kTinyPng;
+      await model.start();
+      for (var i = 0; i < 50 && !CatalogStore(appData).cardFile('xiaxia').existsSync(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(CatalogStore(appData).load()!.items.map((c) => c.code), ['suwan', 'xiaxia']);
+      expect(cards.requested, ['https://oss/x.jpg']);
+    });
+
+    testWidgets('a delisted character the account owns and has installed still offers 带TA回家', (tester) async {
+      installPaid('xiaxia', '夏夏');
+      api.reply = (r) => switch (r.url.path) {
+            '/api/aipet/characters' => FakeHttp.ok([item('suwan', '苏晚', 'girl')]),
+            '/api/aipet/characters/owned' => FakeHttp.ok([item('xiaxia', '夏夏', 'girl')]),
+            _ => FakeHttp.ok(null),
+          };
+      await people(tester);
+      await tester.pump();
+      expect(model.paidStateOf('xiaxia'), PaidState.installed);
+      expect(find.text('带TA回家'), findsNWidgets(2)); // 小雅 and 夏夏
+      expect(model.characterOf('xiaxia')?.name, '夏夏');
+    });
+
+    testWidgets('owned not fetched (offline, signed out): the cached delisted ones stay while owned', (tester) async {
+      CatalogStore(appData)
+        ..save(paidCatalogFrom([item('suwan', '苏晚', 'girl'), item('xiaxia', '夏夏', 'girl'), item('guchen', '顾沉', 'boy')]))
+        ..saveOwned({'xiaxia'});
+      api.reply = (r) => r.url.path == '/api/aipet/characters'
+          ? FakeHttp.ok([item('suwan', '苏晚', 'girl')])
+          : FakeHttp.fail(500, '服务器错误');
+      await people(tester);
+      await tester.pump();
+      expect(model.catalog.map((c) => c.code), ['suwan', 'xiaxia']); // 顾沉: delisted and not owned
+      expect(find.text('下载'), findsOneWidget);
+    });
+
+    test('showing the library again fetches the catalog again, at most once a minute', () async {
+      var listed = [item('suwan', '苏晚', 'girl')];
+      api.reply = (r) => switch (r.url.path) {
+            '/api/aipet/characters' => FakeHttp.ok(listed),
+            _ => FakeHttp.ok(null),
+          };
+      await model.start();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(api.to('/api/aipet/characters'), hasLength(1));
+      expect(api.to('/api/aipet/characters/owned'), hasLength(1));
+      listed = [...listed, item('guchen', '顾沉', 'boy')];
+      clockNow = clockNow.add(const Duration(seconds: 59));
+      model.setVisible(false);
+      model.setVisible(true);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(api.to('/api/aipet/characters'), hasLength(1), reason: 'under a minute: not again');
+      clockNow = clockNow.add(const Duration(seconds: 1));
+      model.setVisible(false);
+      model.setVisible(true);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(api.to('/api/aipet/characters'), hasLength(2));
+      expect(api.to('/api/aipet/characters/owned'), hasLength(2));
+      expect(model.catalog.map((c) => c.code), ['suwan', 'guchen']);
+      model.setVisible(false);
+      model.setVisible(true);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(api.to('/api/aipet/characters'), hasLength(2));
+    });
+
+    test('a fetched catalog is cached with its card photos', () async {
+      api.reply = (r) => r.url.path == '/api/aipet/characters'
+          ? FakeHttp.ok([item('suwan', '苏晚', 'girl', card: 'https://oss/suwan.jpg')])
+          : FakeHttp.ok(null);
+      cards.serve = (_) => kTinyPng;
+      var changes = 0;
+      model.addListener(() => changes++);
+      await model.start();
+      for (var i = 0; i < 50 && !CatalogStore(appData).cardFile('suwan').existsSync(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(CatalogStore(appData).load()!.items.single.code, 'suwan');
+      expect(CatalogStore(appData).cardFile('suwan').existsSync(), isTrue);
+      expect(cards.requested, ['https://oss/suwan.jpg']);
+      expect(model.catalog.single.name, '苏晚');
+      expect(changes, greaterThan(0));
+      expect(File('${appData.path}\\catalog\\owned.json').existsSync(), isFalse, reason: "the pet window's file");
+    });
+  });
+}
+
+List<Pet> _plaza(MainWindowModel m) => [for (final e in m.plazaPets) if (e is InstalledEntry) e.pet];
+
+class _FakePaid implements PaidHandler {
+  _FakePaid(this.owned);
+
+  @override
+  Set<String> owned;
+
+  Future<bool> Function(String code) onDownload = (_) async => false;
+  Future<void> Function() onRefresh = () async {};
+  var refreshes = 0;
+
+  @override
+  Future<bool> download(String code) => onDownload(code);
+
+  @override
+  Future<void> refresh() {
+    refreshes++;
+    return onRefresh();
+  }
 }
 
 class _KeptVoices implements VoiceHandler {

@@ -1,0 +1,87 @@
+import 'dart:convert';
+import 'dart:developer' as developer;
+import 'dart:io';
+
+import '../domain/paid_character.dart';
+import 'file_download.dart';
+
+/// `<appData>/catalog/`: the last paid-character catalog the backend sent
+/// (catalog.json), which of them the account owns (owned.json) and their card
+/// photos (`cards/<code>.jpg`), so the library works offline.
+class CatalogStore {
+  CatalogStore(Directory appData) : _dir = Directory('${appData.path}${Platform.pathSeparator}catalog');
+
+  final Directory _dir;
+
+  File _file(String name) => File('${_dir.path}${Platform.pathSeparator}$name');
+
+  /// Null when no catalog was ever cached (or catalog.json is unreadable);
+  /// an unreadable owned.json is nothing owned. Never throws.
+  ({List<PaidCharacter> items, Set<String> owned})? load() {
+    final List<PaidCharacter> items;
+    try {
+      final f = _file('catalog.json');
+      if (!f.existsSync()) return null;
+      items = paidCatalogFrom(jsonDecode(f.readAsStringSync()));
+    } catch (e) {
+      developer.log('catalog.json unreadable ($e); nothing cached', name: 'aipet.catalog');
+      return null;
+    }
+    return (items: items, owned: loadOwned());
+  }
+
+  /// owned.json on its own, with or without a cached catalog: a missing or
+  /// broken catalog.json must not take away what was bought. Missing or
+  /// unreadable is nothing owned. Never throws.
+  Set<String> loadOwned() => loadOwnedBy().owned;
+
+  /// owned.json with the id of the user it belongs to: `{user_id, owned}`.
+  /// The older bare list (and a null user_id) is an unknown owner.
+  ({int? userId, Set<String> owned}) loadOwnedBy() {
+    try {
+      final f = _file('owned.json');
+      if (!f.existsSync()) return (userId: null, owned: <String>{});
+      final j = jsonDecode(f.readAsStringSync());
+      final list = j is Map ? j['owned'] : j;
+      if (list is! List<Object?>) throw const FormatException('not a list');
+      final id = j is Map ? j['user_id'] : null;
+      return (userId: id is int ? id : null, owned: {for (final c in list) if (c is String) c});
+    } catch (e) {
+      developer.log('owned.json unreadable ($e); nothing owned', name: 'aipet.catalog');
+      return (userId: null, owned: <String>{});
+    }
+  }
+
+  void save(List<PaidCharacter> items) => _write('catalog.json', [for (final c in items) c.toJson()]);
+
+  /// [userId]: whose [owned] it is; null when not known.
+  void saveOwned(Set<String> owned, {int? userId}) =>
+      _write('owned.json', {'user_id': userId, 'owned': owned.toList()..sort()});
+
+  File cardFile(String code) =>
+      File('${_dir.path}${Platform.pathSeparator}cards${Platform.pathSeparator}$code.jpg');
+
+  /// Downloads the card photo unless it is already there; never throws.
+  Future<void> cacheCard(PaidCharacter c, DownloadTransport t) async {
+    final url = c.cardUrl;
+    if (url == null) return;
+    try {
+      final f = cardFile(c.code);
+      if (f.existsSync() && f.lengthSync() > 0) return;
+      f.parent.createSync(recursive: true);
+      final part = File('${f.path}.part');
+      await t.download(Uri.parse(url), part);
+      part.renameSync(f.path);
+    } catch (e) {
+      developer.log('card ${c.code} not cached ($e)', name: 'aipet.catalog');
+    }
+  }
+
+  void _write(String name, Object json) {
+    _dir.createSync(recursive: true);
+    final f = _file(name);
+    final tmp = File('${f.path}.tmp');
+    tmp.writeAsStringSync(jsonEncode(json), flush: true);
+    tmp.renameSync(f.path);
+  }
+}
