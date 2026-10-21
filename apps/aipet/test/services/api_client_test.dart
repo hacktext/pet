@@ -131,4 +131,19 @@ void main() {
     expect(http.sent.last.headers['Authorization'], 'Bearer 1|t');
     expect(http.sent.last.body, isNull);
   });
+
+  test('paid character calls: method and path, the order number encoded', () async {
+    await api.characters();
+    await api.ownedCharacters();
+    await api.characterOrder('suwan');
+    await api.characterOrderStatus('a/b');
+    await api.characterAssets('suwan');
+    expect([for (final r in http.sent) '${r.method} ${r.url.path}'], [
+      'GET /api/aipet/characters',
+      'GET /api/aipet/characters/owned',
+      'POST /api/aipet/characters/suwan/order',
+      'GET /api/aipet/characters/orders/a%2Fb',
+      'GET /api/aipet/characters/suwan/assets',
+    ]);
+  });
 }

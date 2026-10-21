@@ -159,6 +159,21 @@ class ApiClient {
 
   Future<ApiResult> customAssets(int requestId) => _call('GET', '/api/aipet/custom/requests/$requestId/assets');
 
+  // Paid characters: the shop, what the account owns, the order and the files of
+  // a bought one.
+
+  Future<ApiResult> characters() => _call('GET', '/api/aipet/characters');
+
+  Future<ApiResult> ownedCharacters() => _call('GET', '/api/aipet/characters/owned');
+
+  Future<ApiResult> characterOrder(String code) =>
+      _call('POST', '/api/aipet/characters/$code/order', const <String, Object?>{});
+
+  Future<ApiResult> characterOrderStatus(String orderNo) =>
+      _call('GET', '/api/aipet/characters/orders/${Uri.encodeComponent(orderNo)}');
+
+  Future<ApiResult> characterAssets(String code) => _call('GET', '/api/aipet/characters/$code/assets');
+
   Future<ApiResult> _call(String method, String path, [Object? body]) async {
     final HttpReply reply;
     String? token;
