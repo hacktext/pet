@@ -55,6 +55,13 @@ void main() {
     expect(lib.scan(), isEmpty);
   });
 
+  test('a paid pet under the custom root is listed, under the built-in root it is skipped', () {
+    writePet(custom, id: 'paid-x', origin: 'paid');
+    writePet(builtin, id: 'paid-y', origin: 'paid');
+    expect(lib.scan().map((p) => p.id), ['paid-x']);
+    expect(lib.scan().single.origin, PetOrigin.paid);
+  });
+
   test('duplicate ids: the built-in wins', () {
     writePet(builtin, id: 'twin', name: '系统');
     writePet(custom, id: 'twin', origin: 'custom', name: '定制');

@@ -16,8 +16,11 @@ class PetLibrary {
   List<Pet> scan() {
     final pets = <Pet>[];
     final seen = <String>{};
-    for (final (root, origin) in [(builtinRoot, PetOrigin.builtin), (customRoot, PetOrigin.custom)]) {
-      for (final pet in _scanRoot(root, origin)) {
+    for (final (root, allowed) in [
+      (builtinRoot, {PetOrigin.builtin}),
+      (customRoot, {PetOrigin.custom, PetOrigin.paid}),
+    ]) {
+      for (final pet in _scanRoot(root, allowed)) {
         if (seen.add(pet.id)) pets.add(pet);
       }
     }
@@ -35,7 +38,7 @@ class PetLibrary {
   // every other pet, so failures are logged and skipped. A root that cannot
   // be listed at all (e.g. access denied) counts as empty: boot() must not
   // throw, or a first run would never open the library.
-  List<Pet> _scanRoot(Directory root, PetOrigin origin) {
+  List<Pet> _scanRoot(Directory root, Set<PetOrigin> allowed) {
     final List<Directory> dirs;
     try {
       if (!root.existsSync()) return const [];
@@ -51,7 +54,9 @@ class PetLibrary {
         final json = File('${dir.path}${Platform.pathSeparator}pet.json');
         if (!json.existsSync()) continue;
         final pet = parsePet(json.readAsStringSync(), dir);
-        if (pet.origin != origin) throw FormatException('origin ${pet.origin.name} under the ${origin.name} root');
+        if (!allowed.contains(pet.origin)) {
+          throw FormatException('origin ${pet.origin.name} under the ${allowed.first.name} root');
+        }
         out.add(pet);
       } catch (e) {
         developer.log('skipping ${dir.path}: $e', name: 'aipet.library');
