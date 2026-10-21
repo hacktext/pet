@@ -27,18 +27,23 @@ class CatalogStore {
       developer.log('catalog.json unreadable ($e); nothing cached', name: 'aipet.catalog');
       return null;
     }
-    var owned = <String>{};
+    return (items: items, owned: loadOwned());
+  }
+
+  /// owned.json on its own, with or without a cached catalog: a missing or
+  /// broken catalog.json must not take away what was bought. Missing or
+  /// unreadable is nothing owned. Never throws.
+  Set<String> loadOwned() {
     try {
       final f = _file('owned.json');
-      if (f.existsSync()) {
-        final j = jsonDecode(f.readAsStringSync());
-        if (j is! List<Object?>) throw const FormatException('not a list');
-        owned = {for (final c in j) if (c is String) c};
-      }
+      if (!f.existsSync()) return <String>{};
+      final j = jsonDecode(f.readAsStringSync());
+      if (j is! List<Object?>) throw const FormatException('not a list');
+      return {for (final c in j) if (c is String) c};
     } catch (e) {
       developer.log('owned.json unreadable ($e); nothing owned', name: 'aipet.catalog');
+      return <String>{};
     }
-    return (items: items, owned: owned);
   }
 
   void save(List<PaidCharacter> items) => _write('catalog.json', [for (final c in items) c.toJson()]);

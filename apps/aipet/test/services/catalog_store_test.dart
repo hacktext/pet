@@ -63,6 +63,17 @@ void main() {
     expect(store.load(), isNull);
   });
 
+  test('loadOwned reads owned.json without catalog.json; missing or unreadable is empty', () {
+    expect(store.loadOwned(), isEmpty);
+    store.saveOwned({'suwan', 'guchen'});
+    expect(f('catalog.json').existsSync(), isFalse);
+    expect(store.loadOwned(), {'suwan', 'guchen'});
+    f('catalog.json').writeAsStringSync('{nope');
+    expect(store.loadOwned(), {'suwan', 'guchen'});
+    f('owned.json').writeAsStringSync('{"a": 1}');
+    expect(store.loadOwned(), isEmpty);
+  });
+
   test('cardFile path', () {
     expect(store.cardFile('suwan').path, endsWith('catalog${Platform.pathSeparator}cards${Platform.pathSeparator}suwan.jpg'));
   });

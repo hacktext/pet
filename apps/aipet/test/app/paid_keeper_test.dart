@@ -3,17 +3,21 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:aipet/app/pet_window/paid_keeper.dart';
+import 'package:aipet/app/pet_window/pet_window_controller.dart';
+import 'package:aipet/domain/library_state.dart';
 import 'package:aipet/domain/pet.dart';
 import 'package:aipet/services/api_client.dart';
 import 'package:aipet/services/catalog_store.dart';
 import 'package:aipet/services/character_service.dart';
 import 'package:aipet/services/pet_installer.dart';
 import 'package:aipet/services/pet_library.dart';
+import 'package:aipet/services/settings_store.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../support/fake_downloads.dart';
 import '../support/fake_http.dart';
+import '../support/fake_player.dart';
 import '../support/pet_fixtures.dart';
 
 Map<String, List<int>> _package(String petId) => {
@@ -95,6 +99,30 @@ void main() {
     expect(notified, 1);
   });
 
+  test('owned.json alone is enough: with catalog.json gone, boot keeps the paid pet', () async {
+    store.saveOwned({'suwan'});
+    File('${appData.path}/catalog/catalog.json').deleteSync();
+    final k = make();
+    expect(k.owned, {'suwan'});
+
+    writePet(pets, id: 'paid-suwan', origin: 'paid', species: 'girl');
+    final settings = SettingsStore(appData)
+      ..save(const LibraryState(currentPetId: 'paid-suwan', adoptedPetIds: ['builtin-gold', 'paid-suwan']));
+    final builtin = Directory('${tmp.path}/builtin')..createSync();
+    writePet(builtin, id: 'builtin-gold');
+    final c = PetWindowController(
+      library: PetLibrary(builtinRoot: builtin, customRoot: pets),
+      settings: settings,
+      ensure: (f) async => f,
+      player: FakePlayer(),
+      push: (_) async {},
+      allows: k.allows,
+    );
+    await c.boot();
+    expect(c.currentPet?.id, 'paid-suwan');
+    expect(settings.load().currentPetId, 'paid-suwan');
+  });
+
   test('offline, or with the login expired, a refresh keeps the cached owned', () async {
     store.saveOwned({'suwan'});
     final k = make();
@@ -150,6 +178,9 @@ void main() {
     expect(k.allows(pet('paid-suwan')), isTrue);
     expect(k.allows(pet('paid-guchen')), isFalse);
     expect(k.allows(pet('custom-1')), isTrue);
+    writePet(pets, id: 'x', origin: 'paid'); // a hand-made folder not named paid-<code>
+    final odd = PetLibrary(builtinRoot: Directory('${tmp.path}/none'), customRoot: pets).scan();
+    expect(k.allows(odd.firstWhere((p) => p.id == 'x')), isFalse); // no RangeError
   });
 
   test('download of a character not owned is false and asks nothing', () async {

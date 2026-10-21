@@ -355,12 +355,41 @@ void main() {
       final adopting = c.adopt('paid-a');
       await Future<void>.delayed(Duration.zero);
       owned = {};
-      await c.evictLocked(); // the owned change: the pet on the desktop is still allowed
+      final evicting = c.evictLocked(); // the owned change: waits for the switch under way
       player.gate!.complete();
       await expectLater(adopting, throwsA(isA<AdoptError>().having((e) => e.code, 'code', 'locked')));
-      await c.evictLocked(); // queued behind the one the adopt started
+      await evicting;
+      await c.evictLocked(); // and the one the adopt queued
       expect(c.currentPet?.id, 'builtin-gold');
       expect(c.state.preparingPetId, isNull);
+      expect(player.plays.last, 'builtin-gold/stand.mp4|loop');
+    });
+
+    test('an eviction while an action clip is being prepared waits for it, then switches', () async {
+      settings.save(const LibraryState(currentPetId: 'paid-a', adoptedPetIds: ['paid-a', 'builtin-gold']));
+      await c.boot();
+      player.gate = Completer<void>();
+      final acting = c.playAction('walk');
+      await Future<void>.delayed(Duration.zero);
+      owned = {};
+      final evicting = c.evictLocked();
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      expect(c.currentPet?.id, 'paid-a', reason: 'not cleared while busy');
+      player.gate!.complete();
+      await acting;
+      await evicting;
+      expect(c.currentPet?.id, 'builtin-gold');
+      expect(player.plays.last, 'builtin-gold/stand.mp4|loop');
+      await c.playAction('walk');
+      expect(player.plays.last, 'builtin-gold/walk.mp4|loop');
+    });
+
+    test('a locked pet starts no new action', () async {
+      settings.save(const LibraryState(currentPetId: 'paid-a', adoptedPetIds: ['paid-a']));
+      await c.boot();
+      owned = {};
+      await c.playAction('walk');
+      expect(player.plays, ['paid-a/stand.mp4|loop']);
     });
   });
 }

@@ -25,7 +25,7 @@ class PaidKeeper extends ChangeNotifier implements PaidHandler {
     required this._signedIn,
     this.onProgress,
     this.onInstalled,
-  }) : _owned = _cached(_store);
+  }) : _owned = _store.loadOwned(); // not through load(): it needs catalog.json too
 
   final CharacterService _service;
   final PetInstaller _installer;
@@ -46,13 +46,12 @@ class PaidKeeper extends ChangeNotifier implements PaidHandler {
   int _generation = 0;
   final _downloads = <String, Future<bool>>{};
 
-  static Set<String> _cached(CatalogStore store) => {...?store.load()?.owned};
-
   @override
   Set<String> get owned => Set.unmodifiable(_owned);
 
   /// [p] may be shown: not a paid pet, or one the account owns.
-  bool allows(Pet p) => p.origin != PetOrigin.paid || _owned.contains(p.id.substring(5));
+  bool allows(Pet p) =>
+      p.origin != PetOrigin.paid || (p.id.startsWith('paid-') && _owned.contains(p.id.substring(5)));
 
   /// Asks the server what the account owns. Signed out, or on any failure,
   /// the owned set stays as it is.

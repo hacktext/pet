@@ -167,26 +167,39 @@ class PetWindowController extends ChangeNotifier {
       });
 
   Future<void> _evict() async {
-    final pet = currentPet;
-    if (pet == null || _allows(pet)) return;
-    for (final id in _state.adoptedPetIds) {
-      final p = PetLibrary.byId(_pets, id);
-      if (p == null || !p.isComplete || !_allows(p)) continue;
-      try {
-        await _adopt(id, byUser: false);
-        return;
-      } on AdoptError catch (e) {
-        developer.log('$id not put on in place of ${pet.id}: $e', name: 'aipet.pet_window');
+    // An action clip or a switch being prepared (up to prepareTimeout) makes
+    // every adopt busy: wait for it, then look again. A locked pet starts no
+    // new action meanwhile (playAction), so the wait ends.
+    retry:
+    while (true) {
+      while (_switching || _state.preparingPetId != null) {
+        await Future<void>.delayed(_settlePoll);
       }
+      final pet = currentPet;
+      if (pet == null || _allows(pet)) return;
+      for (final id in _state.adoptedPetIds) {
+        final p = PetLibrary.byId(_pets, id);
+        if (p == null || !p.isComplete || !_allows(p)) continue;
+        try {
+          await _adopt(id, byUser: false);
+          return;
+        } on AdoptError catch (e) {
+          if (e.code == 'busy') continue retry;
+          developer.log('$id not put on in place of ${pet.id}: $e', name: 'aipet.pet_window');
+        }
+      }
+      if (currentPet case final p? when _allows(p)) return; // someone else got on meanwhile
+      // Nobody allowed to take its place.
+      _state = LibraryState(adoptedPetIds: _state.adoptedPetIds, preparingPetId: _state.preparingPetId);
+      _currentAction = null;
+      _persist(_state);
+      notifyListeners();
+      await _push(_state);
+      return;
     }
-    if (currentPet case final p? when _allows(p)) return; // someone else got on meanwhile
-    _state = LibraryState(adoptedPetIds: _state.adoptedPetIds, preparingPetId: _state.preparingPetId);
-    _currentAction = null;
-    _persist(_state);
-    notifyListeners();
-    await _push(_state);
   }
 
+  static const _settlePoll = Duration(milliseconds: 20);
   Future<void> _evicting = Future.value();
 
   /// The account's settings won a sync (web platform spec 4.2): its adopted
@@ -219,6 +232,7 @@ class PetWindowController extends ChangeNotifier {
   Future<void> playAction(String key) async {
     final pet = currentPet;
     if (pet == null || !pet.actions.contains(key)) return;
+    if (!_allows(pet)) return; // locked: on its way off the desktop (evictLocked)
     if (_switching || _state.preparingPetId != null) return;
     if (key == _currentAction && isLooping(key)) return;
     await _show(key);
