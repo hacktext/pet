@@ -33,22 +33,30 @@ class CatalogStore {
   /// owned.json on its own, with or without a cached catalog: a missing or
   /// broken catalog.json must not take away what was bought. Missing or
   /// unreadable is nothing owned. Never throws.
-  Set<String> loadOwned() {
+  Set<String> loadOwned() => loadOwnedBy().owned;
+
+  /// owned.json with the id of the user it belongs to: `{user_id, owned}`.
+  /// The older bare list (and a null user_id) is an unknown owner.
+  ({int? userId, Set<String> owned}) loadOwnedBy() {
     try {
       final f = _file('owned.json');
-      if (!f.existsSync()) return <String>{};
+      if (!f.existsSync()) return (userId: null, owned: <String>{});
       final j = jsonDecode(f.readAsStringSync());
-      if (j is! List<Object?>) throw const FormatException('not a list');
-      return {for (final c in j) if (c is String) c};
+      final list = j is Map ? j['owned'] : j;
+      if (list is! List<Object?>) throw const FormatException('not a list');
+      final id = j is Map ? j['user_id'] : null;
+      return (userId: id is int ? id : null, owned: {for (final c in list) if (c is String) c});
     } catch (e) {
       developer.log('owned.json unreadable ($e); nothing owned', name: 'aipet.catalog');
-      return <String>{};
+      return (userId: null, owned: <String>{});
     }
   }
 
   void save(List<PaidCharacter> items) => _write('catalog.json', [for (final c in items) c.toJson()]);
 
-  void saveOwned(Set<String> owned) => _write('owned.json', owned.toList()..sort());
+  /// [userId]: whose [owned] it is; null when not known.
+  void saveOwned(Set<String> owned, {int? userId}) =>
+      _write('owned.json', {'user_id': userId, 'owned': owned.toList()..sort()});
 
   File cardFile(String code) =>
       File('${_dir.path}${Platform.pathSeparator}cards${Platform.pathSeparator}$code.jpg');

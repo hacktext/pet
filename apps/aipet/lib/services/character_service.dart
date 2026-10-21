@@ -21,10 +21,17 @@ class CharacterService {
 
   Future<List<PaidCharacter>> catalog() async => paidCatalogFrom(_data(await _api.characters()));
 
-  /// The codes the account owns.
-  Future<Set<String>> owned() async {
+  /// What the account owns: each owned character as a catalog item (delisted
+  /// ones too, so a buyer keeps seeing them) and every owned code -- an item
+  /// this app cannot show (say, an unknown species) is still owned.
+  Future<({List<PaidCharacter> items, Set<String> codes})> owned() async {
     final d = _data(await _api.ownedCharacters());
-    return {if (d is List) for (final c in d) if (c is String) c};
+    final codes = <String>{
+      if (d is List)
+        for (final c in d)
+          if (c is Map && c['code'] is String) c['code'] as String else if (c is String) c, // a bare code: older server
+    };
+    return (items: paidCatalogFrom(d), codes: codes);
   }
 
   Future<PayOrder> order(String code) async =>

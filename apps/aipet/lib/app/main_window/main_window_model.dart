@@ -21,6 +21,9 @@ import 'custom_flow/custom_deps.dart';
 /// is on screen (generation spec 6.2).
 const kCustomPollInterval = Duration(seconds: 30);
 
+/// Showing the library fetches the catalog again, at most this often.
+const kCatalogRefetchInterval = Duration(minutes: 1);
+
 /// Main-window state. Reads pet folders itself (read-only); everything about
 /// who is adopted or on the desktop comes from the pet window (spec 4.3).
 class MainWindowModel extends ChangeNotifier {
@@ -33,7 +36,12 @@ class MainWindowModel extends ChangeNotifier {
     CharacterService? characterOrders,
     this.catalogStore,
     this.cardTransport,
-  }) : characterOrders = characterOrders ?? characters;
+    DateTime Function()? clock,
+  })  : characterOrders = characterOrders ?? characters,
+        _clock = clock ?? DateTime.now;
+
+  final DateTime Function() _clock;
+  DateTime? _catalogAskedAt; // the last catalog fetch began then
 
   /// The shop's catalog; null shows the free pets only. Built without
   /// onLoginExpired: a catalog failure never says anything.
@@ -242,19 +250,36 @@ class MainWindowModel extends ChangeNotifier {
     _owned = cached.owned;
   }
 
-  /// The shop's catalog, in the background. A failure keeps the cache and
-  /// says nothing: the free pets are the library either way.
+  /// The shop's catalog, in the background, followed by the owned
+  /// characters it no longer lists (delisted: a buyer still downloads and
+  /// adopts them). A failure keeps the cache and says nothing: the free pets
+  /// are the library either way. Signed out or offline, the owned ones
+  /// already shown stay while they are owned.
   Future<void> _fetchCatalog() async {
     final service = characters;
     if (service == null) return;
-    final List<PaidCharacter> items;
+    _catalogAskedAt = _clock();
+    final List<PaidCharacter> listed;
     try {
-      items = await service.catalog();
+      listed = await service.catalog();
     } catch (e) {
       developer.log('catalog not fetched ($e); keeping the cache', name: 'aipet.catalog');
       return;
     }
+    List<PaidCharacter>? mine;
+    try {
+      mine = (await service.owned()).items;
+    } catch (e) {
+      developer.log('owned characters not fetched ($e)', name: 'aipet.catalog');
+    }
     if (_disposed) return;
+    final codes = {for (final c in listed) c.code};
+    final extra = mine ?? [for (final c in _catalog) if (_owned.contains(c.code)) c];
+    final items = [
+      ...listed,
+      for (final c in extra)
+        if (codes.add(c.code)) c,
+    ];
     _catalog = items;
     notifyListeners();
     final store = catalogStore;
@@ -446,6 +471,10 @@ class MainWindowModel extends ChangeNotifier {
     if (visible) {
       unawaited(_loadVoices()); // a voice may have changed from the pet's menu meanwhile
       unawaited(_loadOwned()); // and what is owned (a sign-out, a refund)
+      final asked = _catalogAskedAt;
+      if (asked == null || _clock().difference(asked) >= kCatalogRefetchInterval) {
+        unawaited(_fetchCatalog()); // and what the shop sells (a new character, a price, a delisting)
+      }
     }
   }
 

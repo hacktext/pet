@@ -146,6 +146,7 @@ Future<void> runPetWindow() async {
     PetInstaller(petsRoot: customPetsRoot(appData), transport: IoDownloadTransport()),
     CatalogStore(appData),
     signedIn: () => account.signedIn,
+    userId: () => account.userId,
     onProgress: (code, done, total) => unawaited(bridge.pushCharacterProgress(code, done, total)),
     onInstalled: (code) async {
       try {
@@ -204,6 +205,7 @@ Future<void> runPetWindow() async {
       unawaited(paid.refresh());
     },
     onLoggedOut: paid.signedOut,
+    onSignedIn: (id) => unawaited(paid.signedIn(id)), // another account: its owned, not the cached one
   );
   // Below the account: both calls carry its token when there is one, which
   // binds this device (and its events) to the user on the server.

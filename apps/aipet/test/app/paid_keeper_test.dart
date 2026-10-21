@@ -34,12 +34,17 @@ Map<String, List<int>> _package(String petId) => {
       'stand.mp4': utf8.encode('stand clip of $petId'),
     };
 
+/// One owned character as GET /api/aipet/characters/owned sends it.
+Map<String, Object?> _item(String code) =>
+    {'code': code, 'name': code, 'species': 'girl', 'price_cents': 1990, 'card_url': null};
+
 void main() {
   late Directory tmp, appData, pets;
   late FakeHttp http;
   late FakeDownloads files;
   late CatalogStore store;
   late bool signedIn;
+  late int? userId;
   late Map<String, List<int>> pkg;
   late List<String> progress, installed;
 
@@ -48,6 +53,7 @@ void main() {
         PetInstaller(petsRoot: pets, transport: files),
         store,
         signedIn: () => signedIn,
+        userId: () => userId,
         onProgress: (code, done, total) => progress.add('$code $done/$total'),
         onInstalled: (code) async => installed.add(code),
       );
@@ -73,12 +79,13 @@ void main() {
     http = FakeHttp();
     files = FakeDownloads();
     signedIn = true;
+    userId = 7;
     progress = [];
     installed = [];
     pkg = _package('paid-suwan');
     files.serve = (u) => pkg[u.pathSegments.last];
     http.reply = (r) => switch (r.url.path) {
-          '/api/aipet/characters/owned' => FakeHttp.ok(['suwan']),
+          '/api/aipet/characters/owned' => FakeHttp.ok([_item('suwan')]),
           '/api/aipet/characters/suwan/assets' => FakeHttp.ok(assetsJson()),
           _ => const HttpReply(403, 'Forbidden'),
         };
@@ -152,7 +159,7 @@ void main() {
     k.signedOut();
     expect(k.owned, isEmpty);
     expect(store.load()!.owned, isEmpty);
-    slow.complete(FakeHttp.ok(['suwan']));
+    slow.complete(FakeHttp.ok([_item('suwan')]));
     await pending;
     expect(k.owned, isEmpty);
     expect(notified, 1);
@@ -183,11 +190,68 @@ void main() {
     expect(k.allows(odd.firstWhere((p) => p.id == 'x')), isFalse); // no RangeError
   });
 
-  test('download of a character not owned is false and asks nothing', () async {
+  test('download of a character not owned asks the server once, and is false when it is not', () async {
     final k = make();
+    http.reply = (r) => r.url.path.endsWith('/owned') ? FakeHttp.ok([_item('guchen')]) : const HttpReply(403, 'Forbidden');
     expect(await k.download('suwan'), isFalse);
-    expect(http.sent, isEmpty);
+    expect([for (final r in http.sent) r.url.path], ['/api/aipet/characters/owned']);
     expect(files.requested, isEmpty);
+    expect(k.owned, {'guchen'});
+  });
+
+  test('download of a code bought a moment ago (owned not refreshed yet) refreshes, then downloads', () async {
+    final k = make();
+    expect(k.owned, isEmpty);
+    expect(await k.download('suwan'), isTrue);
+    expect([for (final r in http.sent) r.url.path],
+        ['/api/aipet/characters/owned', '/api/aipet/characters/suwan/assets']);
+    expect(installed, ['suwan']);
+  });
+
+  test('signed out, download of a code not owned is false and asks nothing', () async {
+    signedIn = false;
+    expect(await make().download('suwan'), isFalse);
+    expect(http.sent, isEmpty);
+  });
+
+  test('owned.json records whose it is; the older bare list reads as an unknown owner', () async {
+    final k = make();
+    await k.refresh();
+    expect(store.loadOwnedBy().userId, 7);
+    expect(store.loadOwnedBy().owned, {'suwan'});
+    File('${appData.path}/catalog/owned.json').writeAsStringSync('["guchen"]');
+    expect(store.loadOwnedBy().userId, null);
+    expect(store.loadOwnedBy().owned, {'guchen'});
+    expect(make().owned, {'guchen'});
+  });
+
+  test('another user signing in: the cached owned goes before the server is asked', () async {
+    store.saveOwned({'guchen'}, userId: 7);
+    final k = make();
+    expect(k.owned, {'guchen'});
+    final slow = Completer<HttpReply>();
+    http.reply = (_) => slow.future;
+    userId = 8;
+    final pending = k.signedIn(8);
+    expect(k.owned, isEmpty); // not the previous account's, even offline
+    expect(store.loadOwnedBy().owned, isEmpty);
+    slow.complete(FakeHttp.ok([_item('suwan')]));
+    await pending;
+    expect(k.owned, {'suwan'});
+    expect(store.loadOwnedBy().userId, 8);
+    expect(store.loadOwnedBy().owned, {'suwan'});
+  });
+
+  test('the same user, or an unknown owner, signing in keeps the cached owned while asking', () async {
+    store.saveOwned({'guchen'}, userId: 7);
+    final k = make();
+    http.reply = (_) => throw Exception('down');
+    await k.signedIn(7);
+    expect(k.owned, {'guchen'});
+    File('${appData.path}/catalog/owned.json').writeAsStringSync('["guchen"]');
+    final old = make();
+    await old.signedIn(8);
+    expect(old.owned, {'guchen'});
   });
 
   test('download installs paid-<code> with progress per file, then onInstalled, then true', () async {
@@ -220,7 +284,7 @@ void main() {
     await k.refresh();
     files.serve = (_) => null;
     expect(await k.download('suwan'), isFalse);
-    http.reply = (r) => r.url.path.endsWith('/owned') ? FakeHttp.ok(['suwan']) : const HttpReply(403, 'Forbidden');
+    http.reply = (r) => r.url.path.endsWith('/owned') ? FakeHttp.ok([_item('suwan')]) : const HttpReply(403, 'Forbidden');
     expect(await k.download('suwan'), isFalse);
     expect(installed, isEmpty);
     expect(Directory('${pets.path}/paid-suwan').existsSync(), isFalse);
@@ -231,7 +295,7 @@ void main() {
     await k.refresh();
     pkg = _package('paid-other');
     http.reply = (r) => r.url.path.endsWith('/owned')
-        ? FakeHttp.ok(['suwan'])
+        ? FakeHttp.ok([_item('suwan')])
         : FakeHttp.ok({...assetsJson(), 'pet_id': 'paid-other'});
     expect(await k.download('suwan'), isFalse);
     expect(files.requested, isEmpty);

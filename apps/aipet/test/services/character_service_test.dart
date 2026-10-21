@@ -24,13 +24,17 @@ void main() {
               {'code': 'suwan', 'name': '苏晚', 'species': 'girl', 'price_cents': 1990},
               {'nope': 1},
             ]),
-          '/api/aipet/characters/owned' => FakeHttp.ok(['suwan']),
+          '/api/aipet/characters/owned' => FakeHttp.ok([
+              {'code': 'suwan', 'name': '苏晚', 'species': 'girl', 'price_cents': 1990, 'card_url': 'https://oss/s.jpg'},
+            ]),
           '/api/aipet/characters/suwan/order' =>
             FakeHttp.ok({'order_no': 'PX9', 'amount_cents': 1990, 'code_url': 'weixin://x', 'expires_in': 900}),
           _ => FakeHttp.ok({'status': 'paid'}),
         };
     expect((await svc.catalog()).map((c) => c.code), ['suwan']);
-    expect(await svc.owned(), {'suwan'});
+    final owned = await svc.owned();
+    expect(owned.codes, {'suwan'});
+    expect(owned.items.single.cardUrl, 'https://oss/s.jpg');
     expect((await svc.order('suwan')).orderNo, 'PX9');
     expect(await svc.status('PX9'), PayStatus.paid);
     expect([for (final r in http.sent) '${r.method} ${r.url.path}'], [
@@ -39,6 +43,18 @@ void main() {
       'POST /api/aipet/characters/suwan/order',
       'GET /api/aipet/characters/orders/PX9',
     ]);
+  });
+
+  test('owned: an item this app cannot show is still owned; a bare code (older server) too', () async {
+    http.reply = (_) => FakeHttp.ok([
+          {'code': 'suwan', 'name': '苏晚', 'species': 'girl', 'price_cents': 1990},
+          {'code': 'robo', 'name': 'R', 'species': 'robot', 'price_cents': 1990},
+          'guchen',
+          {'nope': 1},
+        ]);
+    final owned = await svc.owned();
+    expect(owned.codes, {'suwan', 'robo', 'guchen'});
+    expect(owned.items.map((c) => c.code), ['suwan']);
   });
 
   test('ordering what is already owned fails with 5016', () async {

@@ -22,6 +22,7 @@ class AccountKeeper implements AccountHandler {
     required this._push,
     this.onSynced,
     this.onLoggedOut,
+    this.onSignedIn,
   })  : _store = store,
         _account = store.load();
 
@@ -39,9 +40,15 @@ class AccountKeeper implements AccountHandler {
   /// The user signed out on purpose (not a refused token: an expired login
   /// keeps what this computer knew, paid characters included).
   final void Function()? onLoggedOut;
+
+  /// A login succeeded, for this user id; before the sync it starts.
+  final void Function(int userId)? onSignedIn;
   Account? _account;
 
   String? get token => _account?.token;
+
+  /// The signed-in user's id; null when signed out.
+  int? get userId => _account?.user.id;
   bool get signedIn => _account != null;
 
   @override
@@ -96,6 +103,7 @@ class AccountKeeper implements AccountHandler {
       developer.log('account save failed: $e', name: 'aipet.account');
     }
     _track('login');
+    onSignedIn?.call(a.user.id);
     unawaited(_push(view));
     unawaited(syncNow()); // the account's pets, stats and voices come down
     return const AccountReply(ok: true);

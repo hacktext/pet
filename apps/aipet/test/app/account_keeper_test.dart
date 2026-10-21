@@ -25,7 +25,7 @@ void main() {
   late AccountKeeper keeper;
   late SyncService sync;
 
-  AccountKeeper make({void Function()? onSynced, void Function()? onLoggedOut}) {
+  AccountKeeper make({void Function()? onSynced, void Function()? onLoggedOut, void Function(int)? onSignedIn}) {
     late final AccountKeeper k;
     final api = ApiClient(http, baseUrl: 'https://x.test', token: () => k.token, onUnauthorized: () => k.expired());
     sync = SyncService(root, api: api, local: FakeLocal(), signedIn: () => k.signedIn, now: () => now);
@@ -39,6 +39,7 @@ void main() {
       push: (v) async => pushed.add(v),
       onSynced: onSynced,
       onLoggedOut: onLoggedOut,
+      onSignedIn: onSignedIn,
     );
   }
 
@@ -135,6 +136,19 @@ void main() {
     expect(keeper.signedIn, isFalse);
     expect(AccountStore(root).file.existsSync(), isFalse);
     expect(pushed.last, AccountView.signedOut);
+  });
+
+  test('onSignedIn hears a login with its user id, before the sync; a failed login is not heard', () async {
+    final heard = <String>[];
+    keeper = make(onSignedIn: (id) => heard.add('$id ${http.to('/api/aipet/sync').length}'));
+    expect(keeper.userId, isNull);
+    http.reply = (_) => FakeHttp.fail(5002, 'x');
+    await keeper.login('13800138000', '000000');
+    expect(heard, isEmpty);
+    http.reply = (r) => r.url.path == '/api/aipet/auth/login' ? FakeHttp.ok(_login) : FakeHttp.ok(null);
+    await keeper.login('13800138000', '123456');
+    expect(heard, ['9 0']);
+    expect(keeper.userId, 9);
   });
 
   test('onLoggedOut hears a logout, not a refused token', () async {

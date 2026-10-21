@@ -699,6 +699,7 @@ void main() {
     late FakeDownloads cards;
     late Directory appData;
     late PetWindowBridge paidSide;
+    late DateTime clockNow;
 
     Map<String, Object?> item(String code, String name, String species, {String? card}) =>
         {'code': code, 'name': name, 'species': species, 'price_cents': 1990, 'card_url': card, 'tags': ['温柔']};
@@ -708,6 +709,7 @@ void main() {
     setUp(() {
       appData = Directory('${tmp.path}\\appdata')..createSync();
       paid = _FakePaid({'xiaxia'});
+      clockNow = DateTime(2026, 10, 21, 12);
       cards = FakeDownloads();
       paidSide = PetWindowBridge(petEnd,
           state: () => petState,
@@ -727,6 +729,7 @@ void main() {
             onLoginExpired: () => model.loginExpired()),
         catalogStore: CatalogStore(appData),
         cardTransport: cards,
+        clock: () => clockNow,
       );
     });
 
@@ -954,6 +957,91 @@ void main() {
       await tester.pump();
       expect(find.text('已购'), findsNothing);
       expect(find.text('付费'), findsNWidgets(3));
+    });
+
+    testWidgets('a delisted character the account owns still shows 下载', (tester) async {
+      api.reply = (r) => switch (r.url.path) {
+            '/api/aipet/characters' => FakeHttp.ok([item('suwan', '苏晚', 'girl')]),
+            '/api/aipet/characters/owned' => FakeHttp.ok([item('xiaxia', '夏夏', 'girl', card: 'https://oss/x.jpg')]),
+            _ => FakeHttp.ok(null),
+          };
+      await people(tester);
+      await tester.pump();
+      expect(find.text('夏夏'), findsOneWidget);
+      expect(model.paidStateOf('xiaxia'), PaidState.owned);
+      expect(find.text('下载'), findsOneWidget);
+      expect(find.text('¥19.90 解锁'), findsOneWidget); // 苏晚 only
+    });
+
+    test('a delisted owned character is cached with the catalog, card photo included', () async {
+      api.reply = (r) => switch (r.url.path) {
+            '/api/aipet/characters' => FakeHttp.ok([item('suwan', '苏晚', 'girl')]),
+            '/api/aipet/characters/owned' => FakeHttp.ok([item('xiaxia', '夏夏', 'girl', card: 'https://oss/x.jpg')]),
+            _ => FakeHttp.ok(null),
+          };
+      cards.serve = (_) => kTinyPng;
+      await model.start();
+      for (var i = 0; i < 50 && !CatalogStore(appData).cardFile('xiaxia').existsSync(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(CatalogStore(appData).load()!.items.map((c) => c.code), ['suwan', 'xiaxia']);
+      expect(cards.requested, ['https://oss/x.jpg']);
+    });
+
+    testWidgets('a delisted character the account owns and has installed still offers 带TA回家', (tester) async {
+      installPaid('xiaxia', '夏夏');
+      api.reply = (r) => switch (r.url.path) {
+            '/api/aipet/characters' => FakeHttp.ok([item('suwan', '苏晚', 'girl')]),
+            '/api/aipet/characters/owned' => FakeHttp.ok([item('xiaxia', '夏夏', 'girl')]),
+            _ => FakeHttp.ok(null),
+          };
+      await people(tester);
+      await tester.pump();
+      expect(model.paidStateOf('xiaxia'), PaidState.installed);
+      expect(find.text('带TA回家'), findsNWidgets(2)); // 小雅 and 夏夏
+      expect(model.characterOf('xiaxia')?.name, '夏夏');
+    });
+
+    testWidgets('owned not fetched (offline, signed out): the cached delisted ones stay while owned', (tester) async {
+      CatalogStore(appData)
+        ..save(paidCatalogFrom([item('suwan', '苏晚', 'girl'), item('xiaxia', '夏夏', 'girl'), item('guchen', '顾沉', 'boy')]))
+        ..saveOwned({'xiaxia'});
+      api.reply = (r) => r.url.path == '/api/aipet/characters'
+          ? FakeHttp.ok([item('suwan', '苏晚', 'girl')])
+          : FakeHttp.fail(500, '服务器错误');
+      await people(tester);
+      await tester.pump();
+      expect(model.catalog.map((c) => c.code), ['suwan', 'xiaxia']); // 顾沉: delisted and not owned
+      expect(find.text('下载'), findsOneWidget);
+    });
+
+    test('showing the library again fetches the catalog again, at most once a minute', () async {
+      var listed = [item('suwan', '苏晚', 'girl')];
+      api.reply = (r) => switch (r.url.path) {
+            '/api/aipet/characters' => FakeHttp.ok(listed),
+            _ => FakeHttp.ok(null),
+          };
+      await model.start();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(api.to('/api/aipet/characters'), hasLength(1));
+      expect(api.to('/api/aipet/characters/owned'), hasLength(1));
+      listed = [...listed, item('guchen', '顾沉', 'boy')];
+      clockNow = clockNow.add(const Duration(seconds: 59));
+      model.setVisible(false);
+      model.setVisible(true);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(api.to('/api/aipet/characters'), hasLength(1), reason: 'under a minute: not again');
+      clockNow = clockNow.add(const Duration(seconds: 1));
+      model.setVisible(false);
+      model.setVisible(true);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(api.to('/api/aipet/characters'), hasLength(2));
+      expect(api.to('/api/aipet/characters/owned'), hasLength(2));
+      expect(model.catalog.map((c) => c.code), ['suwan', 'guchen']);
+      model.setVisible(false);
+      model.setVisible(true);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(api.to('/api/aipet/characters'), hasLength(2));
     });
 
     test('a fetched catalog is cached with its card photos', () async {
