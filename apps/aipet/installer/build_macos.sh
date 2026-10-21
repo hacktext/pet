@@ -43,6 +43,16 @@ if [ -n "${AIPET_SIGN_IDENTITY:-}" ]; then
 fi
 codesign --verify --deep --strict "$APP"
 
+# Staple the app itself too, so it still opens once copied out of the dmg on a
+# Mac that cannot reach Apple's servers.
+if [ -n "${AIPET_SIGN_IDENTITY:-}" ] && [ -n "${AIPET_NOTARY_PROFILE:-}" ]; then
+  ZIP="$(mktemp -d)/aipet.zip"
+  ditto -c -k --keepParent "$APP" "$ZIP"
+  xcrun notarytool submit "$ZIP" --keychain-profile "$AIPET_NOTARY_PROFILE" --wait
+  rm -f "$ZIP"
+  xcrun stapler staple "$APP"
+fi
+
 # dmg: the app plus an Applications link to drag it onto.
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
