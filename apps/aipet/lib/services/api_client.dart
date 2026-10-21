@@ -5,7 +5,7 @@ import 'dart:io';
 
 /// The app's version as the server records it (pubspec `version`, without the
 /// build number).
-const kAppVersion = '1.0.3';
+const kAppVersion = '1.0.4';
 
 const kDefaultApiBase = 'https://aipei.pixpickai.com';
 
