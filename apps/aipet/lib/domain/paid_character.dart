@@ -96,3 +96,25 @@ List<PaidCharacter> paidCatalogFrom(Object? data) {
       ?PaidCharacter.fromJson(item),
   ];
 }
+
+/// A paid character's card, from 未购 to 已装 (paid characters spec 5.1).
+/// An installed character the account no longer owns is [locked].
+enum PaidState { locked, owned, downloading, installed }
+
+/// One card in the plaza: a pet folder on disk, or a paid character that is
+/// only in the catalog (not bought, not downloaded, or no longer owned).
+sealed class PlazaEntry {
+  const PlazaEntry();
+}
+
+class InstalledEntry extends PlazaEntry {
+  const InstalledEntry(this.pet);
+
+  final Pet pet;
+}
+
+class RemoteEntry extends PlazaEntry {
+  const RemoteEntry(this.character);
+
+  final PaidCharacter character;
+}

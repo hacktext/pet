@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:aipet/app/main_window/pet_card.dart';
 import 'package:aipet/app/main_window/theme.dart';
 import 'package:aipet/domain/library_state.dart';
+import 'package:aipet/domain/paid_character.dart';
 import 'package:aipet/domain/pet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -100,6 +101,95 @@ void main() {
     expect(AppColors.text, const Color(0xFF5A3423));
     expect(AppColors.textMuted, const Color(0xFFA2826F));
     expect(buildAppTheme().scaffoldBackgroundColor, AppColors.page);
+  });
+
+  group('a paid character', () {
+    final suwan = Pet(
+      id: 'paid-suwan',
+      name: '苏晚',
+      species: Species.girl,
+      origin: PetOrigin.paid,
+      blurb: '',
+      dir: Directory('C:\\nowhere'),
+      cover: 'suwan.jpg',
+      actions: const [],
+      tags: const ['温柔'],
+      voices: const [PetVoice(id: 'suwan', name: '苏晚')],
+    );
+
+    Future<({List<String> unlocks, List<String> downloads})> pumpPaid(WidgetTester tester, PaidState paid,
+        {double? progress, CardStatus status = CardStatus.adoptable}) async {
+      final unlocks = <String>[], downloads = <String>[];
+      await tester.pumpWidget(MaterialApp(
+        theme: buildAppTheme(),
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 200,
+              height: 330,
+              child: PetCard(
+                pet: suwan,
+                status: status,
+                onAdopt: () {},
+                onVoice: (_) {},
+                paid: paid,
+                priceCents: 1990,
+                onUnlock: () => unlocks.add('suwan'),
+                onDownload: () => downloads.add('suwan'),
+                progress: progress,
+              ),
+            ),
+          ),
+        ),
+      ));
+      return (unlocks: unlocks, downloads: downloads);
+    }
+
+    BoxDecoration badge(WidgetTester tester, String label) => tester
+        .widget<Container>(find.ancestor(of: find.text(label), matching: find.byType(Container)).first)
+        .decoration! as BoxDecoration;
+
+    testWidgets('locked: 付费 on apricot, ¥19.90 解锁, no voice line', (tester) async {
+      final taps = await pumpPaid(tester, PaidState.locked);
+      expect(find.text('付费'), findsOneWidget);
+      expect(badge(tester, '付费').gradient, AppColors.orangeGradient);
+      expect(tester.widget<Text>(find.text('付费')).style!.color, Colors.white);
+      expect(find.textContaining('声音：'), findsNothing);
+      await tester.tap(find.text('¥19.90 解锁'));
+      expect(taps.unlocks, ['suwan']);
+      expect(taps.downloads, isEmpty);
+    });
+
+    testWidgets('owned: 已购 on coffee and 下载', (tester) async {
+      final taps = await pumpPaid(tester, PaidState.owned);
+      expect(find.text('已购'), findsOneWidget);
+      expect(badge(tester, '已购').color, AppColors.accent);
+      expect(find.text('付费'), findsNothing);
+      await tester.tap(find.text('下载'));
+      expect(taps.downloads, ['suwan']);
+    });
+
+    testWidgets('downloading: 下载中 42%, disabled', (tester) async {
+      await pumpPaid(tester, PaidState.downloading, progress: 5 / 12);
+      expect(find.text('已购'), findsOneWidget);
+      expect(find.text('下载中 42%'), findsOneWidget);
+      expect(tester.widget<FilledButton>(find.byType(FilledButton)).onPressed, isNull);
+    });
+
+    testWidgets('installed: 已购 and the usual buttons, with its voice line', (tester) async {
+      await pumpPaid(tester, PaidState.installed);
+      expect(find.text('已购'), findsOneWidget);
+      expect(find.text('带TA回家'), findsOneWidget);
+      expect(find.text('声音：静音'), findsOneWidget);
+      await pumpPaid(tester, PaidState.installed, status: CardStatus.companion);
+      expect(find.text('陪伴中'), findsOneWidget);
+    });
+  });
+
+  testWidgets('a free pet wears no badge', (tester) async {
+    await pump(tester, CardStatus.adoptable);
+    expect(find.text('付费'), findsNothing);
+    expect(find.text('已购'), findsNothing);
   });
 
   testWidgets('a long name stays on one line and leaves room for the cover', (tester) async {

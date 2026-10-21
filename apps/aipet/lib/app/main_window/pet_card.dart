@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../../domain/custom_order.dart';
 import '../../domain/library_state.dart';
+import '../../domain/paid_character.dart';
 import '../../domain/pet.dart';
 import 'theme.dart';
 
@@ -9,10 +11,22 @@ const double kVoiceLineHeight = 30;
 
 /// One pet in the plaza / 我的 grid, in one of the five states of spec 5:
 /// its photo, name, tags and one button; a character that speaks also gets a
-/// voice line (静音 until a voice is chosen).
+/// voice line (静音 until a voice is chosen). A paid character also wears a
+/// 付费 / 已购 badge, and until it is installed (and owned) its button is
+/// 解锁, 下载 or 下载中 instead (paid characters spec 5.1).
 class PetCard extends StatelessWidget {
   const PetCard(
-      {super.key, required this.pet, required this.status, required this.onAdopt, this.voice, this.onVoice});
+      {super.key,
+      required this.pet,
+      required this.status,
+      required this.onAdopt,
+      this.voice,
+      this.onVoice,
+      this.paid,
+      this.priceCents,
+      this.onUnlock,
+      this.onDownload,
+      this.progress});
 
   final Pet pet;
   final CardStatus status;
@@ -24,7 +38,21 @@ class PetCard extends StatelessWidget {
   /// A voice picked on the card, null for 静音; null hides the line.
   final ValueChanged<String?>? onVoice;
 
-  bool get _speaks => pet.voices.isNotEmpty && onVoice != null;
+  /// Null for a free pet.
+  final PaidState? paid;
+
+  /// The 解锁 button's price; null says just 解锁.
+  final int? priceCents;
+  final VoidCallback? onUnlock;
+  final VoidCallback? onDownload;
+
+  /// The download's progress, 0..1, while [paid] is downloading.
+  final double? progress;
+
+  /// A paid character that is not (or no longer) the user's to adopt.
+  bool get _remote => paid != null && paid != PaidState.installed;
+
+  bool get _speaks => pet.voices.isNotEmpty && onVoice != null && !_remote;
 
   @override
   Widget build(BuildContext context) {
@@ -41,7 +69,10 @@ class PetCard extends StatelessWidget {
           Expanded(
             child: ClipRRect(
               borderRadius: BorderRadius.circular(14),
-              child: Opacity(opacity: status == CardStatus.missing ? 0.35 : 1, child: _photo()),
+              child: Stack(fit: StackFit.expand, children: [
+                Opacity(opacity: !_remote && status == CardStatus.missing ? 0.35 : 1, child: _photo()),
+                if (paid != null) Positioned(top: 8, right: 8, child: _badge(paid!)),
+              ]),
             ),
           ),
           Padding(
@@ -69,6 +100,7 @@ class PetCard extends StatelessWidget {
   Widget _photo() {
     Widget fallback(_, _, _) => const Center(child: Icon(Icons.pets, size: 48, color: AppColors.textMuted));
     final card = pet.cardFile;
+    if (card == null && _remote) return Container(color: AppColors.accentSoft, child: fallback(null, null, null));
     if (card != null) {
       return SizedBox.expand(
           child: Image.file(card, fit: BoxFit.cover, cacheWidth: 640, errorBuilder: fallback));
@@ -128,7 +160,33 @@ class PetCard extends StatelessWidget {
     );
   }
 
+  /// 付费 until bought, 已购 after.
+  static Widget _badge(PaidState s) {
+    final locked = s == PaidState.locked;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: locked ? null : AppColors.accent,
+        gradient: locked ? AppColors.orangeGradient : null,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(locked ? '付费' : '已购',
+          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white, height: 1.3)),
+    );
+  }
+
   Widget _button() {
+    final price = priceCents;
+    switch (paid) {
+      case PaidState.locked:
+        return FilledButton(onPressed: onUnlock, child: Text(price == null ? '解锁' : '${yuan(price)} 解锁'));
+      case PaidState.owned:
+        return FilledButton(onPressed: onDownload, child: const Text('下载'));
+      case PaidState.downloading:
+        return FilledButton(onPressed: null, child: Text('下载中 ${((progress ?? 0) * 100).round()}%'));
+      case PaidState.installed || null:
+        break;
+    }
     final it = pet.species.isCharacter ? 'TA' : '它';
     return switch (status) {
       CardStatus.adoptable => FilledButton(onPressed: onAdopt, child: Text('带$it回家')),

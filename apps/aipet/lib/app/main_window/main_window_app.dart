@@ -1,8 +1,11 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../../domain/account_view.dart';
 import '../../domain/custom_order.dart';
 import '../../domain/library_state.dart';
+import '../../domain/paid_character.dart';
 import '../../domain/pet.dart';
 import '../../services/window_bridge.dart';
 import 'custom_flow/custom_form_page.dart';
@@ -332,7 +335,44 @@ class _PetGrid extends StatelessWidget {
   const _PetGrid({required this.model, required this.pets});
 
   final MainWindowModel model;
-  final List<Pet> pets;
+  final List<PlazaEntry> pets;
+
+  /// What a card shows: the pet (for a catalog-only character, one made from
+  /// the catalog, with the cached card photo when there is one), its paid
+  /// state (null when free) and its price.
+  ({Pet pet, PaidState? paid, PaidCharacter? character}) _cardOf(PlazaEntry e) {
+    switch (e) {
+      case InstalledEntry(:final pet):
+        final code = MainWindowModel.codeOf(pet);
+        if (code == null) return (pet: pet, paid: null, character: null);
+        return (pet: pet, paid: model.paidStateOf(code), character: model.characterOf(code));
+      case RemoteEntry(:final character):
+        final state = model.paidStateOf(character.code);
+        return (
+          pet: _remotePet(character),
+          // Installed but no longer owned is locked too: never an adopt button.
+          paid: state == PaidState.installed ? PaidState.locked : state,
+          character: character,
+        );
+    }
+  }
+
+  Pet _remotePet(PaidCharacter c) {
+    final File? card = model.catalogStore?.cardFile(c.code);
+    final has = card != null && card.existsSync();
+    return Pet(
+      id: c.petId,
+      name: c.name,
+      species: c.species,
+      origin: PetOrigin.paid,
+      blurb: c.blurb,
+      dir: card?.parent ?? Directory.current,
+      cover: '${c.code}.jpg',
+      card: has ? '${c.code}.jpg' : null,
+      actions: const [],
+      tags: c.tags.take(kMaxTags).toList(),
+    );
+  }
 
   static const _gap = 18.0;
 
@@ -343,6 +383,7 @@ class _PetGrid extends StatelessWidget {
           final width = c.crossAxisExtent;
           final cols = (width / 220).floor().clamp(2, 6);
           final cardWidth = (width - _gap * (cols - 1)) / cols;
+          final cards = [for (final e in pets) _cardOf(e)];
           return SliverGrid(
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: cols,
@@ -350,17 +391,25 @@ class _PetGrid extends StatelessWidget {
               crossAxisSpacing: _gap,
               // photo (card width less padding, 1.15 : 1) + name, tags, button,
               // and the voice line when a card here has one
-              mainAxisExtent:
-                  (cardWidth - 16) / 1.15 + 138 + (pets.any((p) => p.voices.isNotEmpty) ? kVoiceLineHeight : 0),
+              mainAxisExtent: (cardWidth - 16) / 1.15 +
+                  138 +
+                  (cards.any((c) => c.pet.voices.isNotEmpty && (c.paid == null || c.paid == PaidState.installed))
+                      ? kVoiceLineHeight
+                      : 0),
             ),
             delegate: SliverChildListDelegate([
-              for (final p in pets)
+              for (final (:pet, :paid, :character) in cards)
                 PetCard(
-                  pet: p,
-                  status: model.statusOf(p),
-                  onAdopt: () => model.adopt(p.id),
-                  voice: model.voiceOf(p),
-                  onVoice: (v) => model.chooseVoice(p, v),
+                  pet: pet,
+                  status: model.statusOf(pet),
+                  onAdopt: () => model.adopt(pet.id),
+                  voice: model.voiceOf(pet),
+                  onVoice: (v) => model.chooseVoice(pet, v),
+                  paid: paid,
+                  priceCents: character?.priceCents,
+                  onUnlock: character == null ? null : () => model.unlock(character),
+                  onDownload: paid == null ? null : () => model.download(MainWindowModel.codeOf(pet)!),
+                  progress: paid == null ? null : model.downloading[MainWindowModel.codeOf(pet)],
                 ),
             ]),
           );
@@ -562,7 +611,7 @@ class _MinePage extends StatelessWidget {
               ),
             )
           else
-            _PetGrid(model: model, pets: pets),
+            _PetGrid(model: model, pets: [for (final p in pets) InstalledEntry(p)]),
         ]),
       ),
       Padding(

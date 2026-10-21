@@ -1,12 +1,17 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 
 import 'package:flutter/foundation.dart' hide Category;
 
 import '../../domain/account_view.dart';
 import '../../domain/custom_order.dart';
 import '../../domain/library_state.dart';
+import '../../domain/paid_character.dart';
 import '../../domain/pet.dart';
+import '../../services/catalog_store.dart';
+import '../../services/character_service.dart';
 import '../../services/custom_service.dart';
+import '../../services/file_download.dart';
 import '../../services/pet_library.dart';
 import '../../services/voice_store.dart';
 import '../../services/window_bridge.dart';
@@ -24,7 +29,20 @@ class MainWindowModel extends ChangeNotifier {
     required this._bridge,
     this.custom,
     this.customPollInterval = kCustomPollInterval,
+    this.characters,
+    this.catalogStore,
+    this.cardTransport,
   });
+
+  /// The shop's catalog; null shows the free pets only.
+  final CharacterService? characters;
+
+  /// The cached catalog and card photos; null caches nothing. This window
+  /// writes catalog.json and cards/ only -- owned.json is the pet window's.
+  final CatalogStore? catalogStore;
+
+  /// Fetches the card photos into [catalogStore]; null leaves them uncached.
+  final DownloadTransport? cardTransport;
 
   final Duration customPollInterval;
   Timer? _customPoll;
@@ -39,6 +57,11 @@ class MainWindowModel extends ChangeNotifier {
   StreamSubscription<AccountView>? _accountSub;
   StreamSubscription<List<ReadyPet>>? _readySub;
   StreamSubscription<VoiceChoices>? _voiceSub;
+  StreamSubscription<Set<String>>? _ownedSub;
+  StreamSubscription<({String code, int done, int total})>? _progressSub;
+  List<PaidCharacter> _catalog = const [];
+  Set<String> _owned = const {};
+  Map<String, double> _downloading = const {};
   VoiceChoices _voices = const {};
   ReadyPet? _ready;
   final _announced = <String>{}; // a pet is announced once; resends are not news
@@ -63,7 +86,28 @@ class MainWindowModel extends ChangeNotifier {
   Category get category => _category;
   Group get group => _category.group;
   int get tab => _tab;
-  List<Pet> get plazaPets => filterPets(_pets, _category);
+
+  /// The free pets of the category, then its paid characters in catalog
+  /// order: installed and owned as [InstalledEntry], the rest as
+  /// [RemoteEntry]. Owned, installed characters the catalog does not list
+  /// (it was never fetched) follow.
+  List<PlazaEntry> get plazaPets {
+    final inCategory = filterPets(_pets, _category);
+    final listed = {for (final c in _catalog) c.petId};
+    return [
+      for (final p in inCategory)
+        if (p.origin != PetOrigin.paid) InstalledEntry(p),
+      for (final c in _catalog)
+        if (_inCategory(c.species))
+          paidStateOf(c.code) == PaidState.installed ? InstalledEntry(_installed(c.code)!) : RemoteEntry(c),
+      for (final p in inCategory)
+        if (p.origin == PetOrigin.paid && !listed.contains(p.id) && paidStateOf(codeOf(p)!) == PaidState.installed)
+          InstalledEntry(p),
+    ];
+  }
+
+  bool _inCategory(Species s) => _category.species == null ? Group.of(s) == _category.group : s == _category.species;
+
   List<Pet> get minePets => adoptedPets(_pets, _state);
 
   /// Any pet in the library, by id; null when there is none.
@@ -86,6 +130,108 @@ class MainWindowModel extends ChangeNotifier {
 
   /// A custom pet that just arrived (generation spec 6.2): 你的「…」做好了.
   ReadyPet? get readyPet => _ready;
+
+  /// The paid characters the shop sells, as last fetched or cached.
+  List<PaidCharacter> get catalog => _catalog;
+
+  /// The codes the account owns, as the pet window says.
+  Set<String> get owned => _owned;
+
+  /// Downloads under way: code to progress, 0..1.
+  Map<String, double> get downloading => _downloading;
+
+  /// The catalog's [code]; null when it is not (or no longer) listed.
+  PaidCharacter? characterOf(String code) => _catalog.where((c) => c.code == code).firstOrNull;
+
+  /// A paid pet's code (`paid-<code>`); null for any other pet.
+  static String? codeOf(Pet p) => p.origin == PetOrigin.paid && p.id.startsWith('paid-') ? p.id.substring(5) : null;
+
+  /// `paid-<code>` when it is on disk whole; a half-installed folder is still
+  /// to be downloaded (the download picks up where it stopped).
+  Pet? _installed(String code) {
+    final p = PetLibrary.byId(_pets, 'paid-$code');
+    return p != null && p.isComplete ? p : null;
+  }
+
+  PaidState paidStateOf(String code) {
+    if (_downloading.containsKey(code)) return PaidState.downloading;
+    if (!_owned.contains(code)) return PaidState.locked;
+    return _installed(code) != null ? PaidState.installed : PaidState.owned;
+  }
+
+  /// 「¥… 解锁」. A no-op stub: Task C6 (the payment flow) replaces it.
+  Future<void> unlock(PaidCharacter c) async {}
+
+  /// 「下载」: the pet window downloads and installs `paid-<code>`, sending
+  /// progress; this window rescans once it is there.
+  Future<void> download(String code) async {
+    if (_downloading.containsKey(code)) return;
+    _downloading = {..._downloading, code: 0};
+    notifyListeners();
+    final ok = await _bridge.downloadCharacter(code);
+    if (_disposed) return;
+    _downloading = {..._downloading}..remove(code);
+    if (ok) {
+      _pets = _library.scan();
+      notifyListeners();
+    } else {
+      _say('下载失败，请重试');
+    }
+  }
+
+  void _progressed(({String code, int done, int total}) p) {
+    if (_disposed || !_downloading.containsKey(p.code) || p.total <= 0) return;
+    _downloading = {..._downloading, p.code: (p.done / p.total).clamp(0.0, 1.0)};
+    notifyListeners();
+  }
+
+  Future<void> _loadOwned() async {
+    final o = await _bridge.getOwned();
+    if (_disposed || o == null) return;
+    _owned = o;
+    notifyListeners();
+  }
+
+  /// The cached catalog, before the first frame; owned.json stands in until
+  /// the pet window answers.
+  void _loadCachedCatalog() {
+    final cached = catalogStore?.load();
+    if (cached == null) return;
+    _catalog = cached.items;
+    _owned = cached.owned;
+  }
+
+  /// The shop's catalog, in the background. A failure keeps the cache and
+  /// says nothing: the free pets are the library either way.
+  Future<void> _fetchCatalog() async {
+    final service = characters;
+    if (service == null) return;
+    final List<PaidCharacter> items;
+    try {
+      items = await service.catalog();
+    } catch (e) {
+      developer.log('catalog not fetched ($e); keeping the cache', name: 'aipet.catalog');
+      return;
+    }
+    if (_disposed) return;
+    _catalog = items;
+    notifyListeners();
+    final store = catalogStore;
+    if (store == null) return;
+    try {
+      store.save(items);
+    } catch (e) {
+      developer.log('catalog not saved ($e)', name: 'aipet.catalog');
+    }
+    final t = cardTransport;
+    if (t == null) return;
+    for (final c in items) {
+      final had = store.cardFile(c.code).existsSync();
+      await store.cacheCard(c, t);
+      if (_disposed) return;
+      if (!had && store.cardFile(c.code).existsSync()) notifyListeners(); // its photo landed
+    }
+  }
 
   CardStatus statusOf(Pet p) => cardStatusFor(petId: p.id, complete: p.isComplete, state: _state);
 
@@ -121,9 +267,17 @@ class MainWindowModel extends ChangeNotifier {
 
   Future<void> start() async {
     _pets = _library.scan();
+    _loadCachedCatalog();
     _bridge.start();
     // Before any await: the stream is broadcast and drops what nobody hears.
     _readySub = _bridge.readyPets.listen(_petsArrived);
+    _ownedSub = _bridge.owned.listen((o) {
+      if (_disposed) return;
+      _owned = o;
+      notifyListeners();
+    });
+    _progressSub = _bridge.characterProgress.listen(_progressed);
+    unawaited(_fetchCatalog());
     _voiceSub = _bridge.voices.listen((v) {
       if (_disposed) return;
       _voices = v;
@@ -153,6 +307,7 @@ class MainWindowModel extends ChangeNotifier {
     final a = await _bridge.getAccount();
     if (a != null && !accountPushed) _account = a;
     await _loadVoices();
+    await _loadOwned();
     // What arrived while this window was closed (may overlap a live push).
     final waiting = await _bridge.takeReady();
     if (_disposed) return;
@@ -247,7 +402,10 @@ class MainWindowModel extends ChangeNotifier {
     if (_visible == visible) return;
     _visible = visible;
     _updateCustomPoll();
-    if (visible) unawaited(_loadVoices()); // a voice may have changed from the pet's menu meanwhile
+    if (visible) {
+      unawaited(_loadVoices()); // a voice may have changed from the pet's menu meanwhile
+      unawaited(_loadOwned()); // and what is owned (a sign-out, a refund)
+    }
   }
 
   void _updateCustomPoll() {
@@ -410,6 +568,8 @@ class MainWindowModel extends ChangeNotifier {
     _accountSub?.cancel();
     _readySub?.cancel();
     _voiceSub?.cancel();
+    _ownedSub?.cancel();
+    _progressSub?.cancel();
     _stopCodeWait();
     _bridge.dispose();
     super.dispose();
