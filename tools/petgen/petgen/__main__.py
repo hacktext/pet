@@ -292,6 +292,68 @@ def cmd_worker(a) -> int:
         fh.close()
 
 
+PUBLISH_TYPES = {".json": "application/json", ".mp4": "video/mp4", ".wav": "audio/wav",
+                 ".png": "image/png", ".jpg": "image/jpeg"}
+
+
+def _publish_check(d: Path, code: str) -> str | None:
+    """Why this folder is not a finished paid pet, or None."""
+    pj = d / "pet.json"
+    if not pj.is_file():
+        return f"{d}: no pet.json"
+    try:
+        meta = json.loads(pj.read_text(encoding="utf-8"))
+    except ValueError as e:
+        return f"{pj}: not valid JSON ({e})"
+    if not isinstance(meta, dict) or meta.get("id") != f"paid-{code}":
+        return f"pet.json id must be 'paid-{code}'"
+    if meta.get("origin") != "paid":
+        return "pet.json origin must be 'paid'"
+    if not (d / "card.jpg").is_file():
+        return f"{d}: no card.jpg"
+    return None
+
+
+def cmd_publish(a) -> int:
+    """Upload a finished paid-character folder; the server keeps exactly this file set."""
+    import hashlib
+    from petgen.config import ConfigError, load_worker_config
+    from petgen.server import Server, ServerError
+    d = Path(a.dir)
+    why = _publish_check(d, a.code)
+    if why:
+        print(f"FAIL publish: {why}")
+        return 1
+    files = []
+    for p in sorted(x for x in d.rglob("*") if x.is_file()):
+        rel = p.relative_to(d).as_posix()
+        ctype = PUBLISH_TYPES.get(p.suffix.lower())
+        if ctype is None:
+            print(f"FAIL publish: {rel}: unsupported file type")
+            return 1
+        data = p.read_bytes()
+        files.append({"path": rel, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+                      "content_type": ctype})
+    try:
+        cfg = load_worker_config(a.config)
+    except ConfigError as e:
+        print(f"FAIL publish: {e}")
+        return 1
+    server = Server(a.server, cfg.key)
+    try:
+        urls = server.character_upload_urls(
+            a.code, [{k: f[k] for k in ("path", "bytes", "content_type")} for f in files])
+        for f in files:
+            server.put(urls[f["path"]], d / f["path"], f["content_type"])
+            print(f"uploaded {f['path']} ({f['bytes']} bytes)")
+        server.character_finish(a.code, files)
+    except (ServerError, KeyError) as e:
+        print(f"FAIL publish: {e}")
+        return 1
+    print(f"published {a.code}: {len(files)} files")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(prog="petgen")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -310,6 +372,12 @@ def main() -> int:
     wp.add_argument("--props", type=Path, default=None, help="bowl-cutout.png / ball-cutout.png; default <work>/props")
     wp.add_argument("--once", action="store_true", help="exit after one job (manual checks)")
     wp.set_defaults(fn=cmd_worker)
+    pb = sub.add_parser("publish", help="upload a finished paid-character folder to the backend")
+    pb.add_argument("dir", type=Path, help="folder with pet.json, card.jpg, clips ...")
+    pb.add_argument("--code", required=True, help="character code, e.g. suwan")
+    pb.add_argument("--server", required=True, help="e.g. https://aipei.pixpickai.com")
+    pb.add_argument("--config", type=Path, default=None, help="worker.env; default <secrets>/worker.env")
+    pb.set_defaults(fn=cmd_publish)
     ip = sub.add_parser("import-spike")
     ip.add_argument("--from", dest="src", type=Path, default=None,
                     help="the spike's out folder; default $PETGEN_SPIKE_OUT")

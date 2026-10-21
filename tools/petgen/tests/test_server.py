@@ -207,3 +207,17 @@ def test_put_retries_ssl_and_os_errors(tmp_path):
 
 def test_repr_hides_the_key():
     assert "secret" not in repr(srv(Opener()))
+
+
+def test_character_upload_urls_and_finish_bodies():
+    files = [{"path": "card.jpg", "bytes": 3, "content_type": "image/jpeg"}]
+    o = Opener(ok([{"path": "card.jpg", "url": "https://oss.invalid/c"}]), ok({"ok": True, "files": 1}))
+    s = srv(o)
+    assert s.character_upload_urls("suwan", files) == {"card.jpg": "https://oss.invalid/c"}
+    assert o.reqs[0].full_url == "https://api.invalid/internal/aipet/characters/suwan/upload-urls"
+    assert json.loads(o.reqs[0].data) == {"files": files}
+    fin = [{"path": "card.jpg", "bytes": 3, "sha256": "a" * 64, "content_type": "image/jpeg"}]
+    assert s.character_finish("suwan", fin) == {"ok": True, "files": 1}
+    assert o.reqs[1].full_url == "https://api.invalid/internal/aipet/characters/suwan/finish"
+    assert json.loads(o.reqs[1].data) == {"files": fin}
+    assert o.reqs[1].get_header("X-worker-key") == "secret-key-1"
