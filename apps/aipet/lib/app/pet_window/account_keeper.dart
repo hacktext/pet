@@ -21,6 +21,7 @@ class AccountKeeper implements AccountHandler {
     required this.deviceName,
     required this._push,
     this.onSynced,
+    this.onLoggedOut,
   })  : _store = store,
         _account = store.load();
 
@@ -34,6 +35,10 @@ class AccountKeeper implements AccountHandler {
   /// After every sync (generation spec 6.1: delivered custom pets are looked
   /// for then). The sync after login counts, so this covers signing in too.
   final void Function()? onSynced;
+
+  /// The user signed out on purpose (not a refused token: an expired login
+  /// keeps what this computer knew, paid characters included).
+  final void Function()? onLoggedOut;
   Account? _account;
 
   String? get token => _account?.token;
@@ -105,6 +110,7 @@ class AccountKeeper implements AccountHandler {
     final told = _api.logout();
     _track('logout');
     _forget();
+    onLoggedOut?.call();
     await told;
   }
 

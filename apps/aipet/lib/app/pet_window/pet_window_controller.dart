@@ -38,7 +38,14 @@ class PetWindowController extends ChangeNotifier {
     required this._push,
     this.prepareTimeout = kPrepareTimeout,
     this.onAdopted,
-  });
+    bool Function(Pet)? allows,
+  }) : _allows = allows ?? _everyone;
+
+  static bool _everyone(Pet _) => true;
+
+  /// Whether a pet may be on the desktop: a paid one only while it is owned
+  /// (PaidKeeper.allows). One that may not is refused and [evictLocked].
+  final bool Function(Pet) _allows;
 
   final Duration prepareTimeout;
 
@@ -80,7 +87,11 @@ class PetWindowController extends ChangeNotifier {
   Future<void> boot() async {
     _pets = _library.scan();
     final saved = _settings.load();
-    bool usable(String id) => PetLibrary.byId(_pets, id)?.isComplete ?? false;
+    bool usable(String id) {
+      final p = PetLibrary.byId(_pets, id);
+      return p != null && p.isComplete && _allows(p);
+    }
+
     var s = saved;
     if (saved.currentPetId != null && !usable(saved.currentPetId!)) {
       s = LibraryState(
@@ -107,6 +118,7 @@ class PetWindowController extends ChangeNotifier {
   Future<void> _adopt(String petId, {required bool byUser}) async {
     final pet = PetLibrary.byId(_pets, petId);
     if (pet == null) throw const AdoptError('unknown_pet');
+    if (!_allows(pet)) throw const AdoptError('locked', '请先解锁');
     if (!pet.isComplete) throw const AdoptError('missing_assets');
     if (_state.currentPetId == petId && _state.preparingPetId == null) {
       await _push(_state); // the main window waits for a state naming this pet
@@ -136,7 +148,46 @@ class PetWindowController extends ChangeNotifier {
     notifyListeners();
     if (byUser) onAdopted?.call(petId, firstTime);
     await _push(_state);
+    if (!_allows(pet)) {
+      // Signed out (or refunded) while it was being prepared: it is on screen
+      // and in the state now, so it leaves the way any locked pet does.
+      unawaited(evictLocked());
+      throw const AdoptError('locked', '请先解锁');
+    }
   }
+
+  /// A pet no longer allowed (a paid one after sign-out or a refund) leaves the
+  /// desktop for the first adopted pet that is allowed, as an adopt would put
+  /// it on; with none, nobody is on the desktop (as on a first run). The
+  /// adopted list stays: owning it again makes the pet usable again. Runs one
+  /// at a time; call it after every change of what is allowed.
+  Future<void> evictLocked() => _evicting = _evicting.then((_) => _evict()).catchError((Object e) {
+        // Logged, not thrown: a failed one must not stop the ones queued after it.
+        developer.log('evicting a locked pet failed: $e', name: 'aipet.pet_window');
+      });
+
+  Future<void> _evict() async {
+    final pet = currentPet;
+    if (pet == null || _allows(pet)) return;
+    for (final id in _state.adoptedPetIds) {
+      final p = PetLibrary.byId(_pets, id);
+      if (p == null || !p.isComplete || !_allows(p)) continue;
+      try {
+        await _adopt(id, byUser: false);
+        return;
+      } on AdoptError catch (e) {
+        developer.log('$id not put on in place of ${pet.id}: $e', name: 'aipet.pet_window');
+      }
+    }
+    if (currentPet case final p? when _allows(p)) return; // someone else got on meanwhile
+    _state = LibraryState(adoptedPetIds: _state.adoptedPetIds, preparingPetId: _state.preparingPetId);
+    _currentAction = null;
+    _persist(_state);
+    notifyListeners();
+    await _push(_state);
+  }
+
+  Future<void> _evicting = Future.value();
 
   /// The account's settings won a sync (web platform spec 4.2): its adopted
   /// list replaces ours, and its pet goes on the desktop when this computer

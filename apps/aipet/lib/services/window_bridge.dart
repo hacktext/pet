@@ -35,6 +35,15 @@ abstract final class BridgeMethods {
   static const voicesChanged = 'voicesChanged';
   static const takeReady = 'takeReady';
   static const refreshCustom = 'refreshCustom';
+
+  // Paid characters: the pet window knows what the account owns (and pushes
+  // every change), downloads a character when the library asks, and is told
+  // to ask the server again after a payment.
+  static const getOwned = 'getOwned';
+  static const refreshOwned = 'refreshOwned';
+  static const ownedChanged = 'ownedChanged';
+  static const downloadCharacter = 'downloadCharacter';
+  static const characterProgress = 'characterProgress';
 }
 
 /// A custom pet that has just been downloaded and installed.
@@ -79,6 +88,24 @@ abstract class VoiceHandler {
 
   /// [voice] null for 静音.
   void choose(String petId, String? voice);
+}
+
+/// What the pet window does for paid characters; PaidKeeper in production.
+abstract class PaidHandler {
+  /// The codes the account owns.
+  Set<String> get owned;
+
+  /// True once `paid-<code>` is installed and listed.
+  Future<bool> download(String code);
+
+  /// Asks the server again what the account owns.
+  Future<void> refresh();
+}
+
+/// `{owned: [codes]}` as it crosses the channel.
+Set<String> ownedFrom(Object? j) {
+  final raw = j is Map ? j['owned'] : null;
+  return {for (final c in (raw is List ? raw : const [])) if (c is String) c};
 }
 
 /// What the pet window does for the account card; AccountKeeper in production.
@@ -139,9 +166,13 @@ class PetWindowBridge {
     this.account,
     this.onRefreshCustom,
     this.voices,
+    this.paid,
   });
 
   final BridgeTransport _transport;
+
+  /// Null: nothing is owned and nothing downloads.
+  final PaidHandler? paid;
 
   /// Null: no character speaks, the library shows them all silent.
   final VoiceHandler? voices;
@@ -209,10 +240,30 @@ class PetWindowBridge {
           }));
         }
         return null;
+      case BridgeMethods.getOwned:
+        return _ownedJson(paid?.owned ?? const {});
+      case BridgeMethods.refreshOwned:
+        final p = paid;
+        if (p != null) {
+          unawaited(p.refresh().catchError((Object e) {
+            developer.log('refreshOwned failed: $e', name: 'aipet.paid');
+          }));
+        }
+        return null;
+      case BridgeMethods.downloadCharacter:
+        try {
+          final code = (args! as Map<Object?, Object?>)['code']! as String;
+          return {'ok': await paid?.download(code) ?? false};
+        } catch (e) {
+          developer.log('downloadCharacter failed: $e', name: 'aipet.paid');
+          return {'ok': false};
+        }
       default:
         return null;
     }
   }
+
+  static Map<String, Object?> _ownedJson(Set<String> owned) => {'owned': owned.toList()..sort()};
 
   Future<AccountReply> _accountRequest(String method, Object? args) async {
     final a = account;
@@ -247,6 +298,22 @@ class PetWindowBridge {
   Future<void> pushVoices(VoiceChoices choices) async {
     try {
       await _transport.invoke(BridgeMethods.voicesChanged, choices).timeout(const Duration(seconds: 3));
+    } catch (_) {}
+  }
+
+  /// Best effort, like [pushState].
+  Future<void> pushOwned(Set<String> owned) async {
+    try {
+      await _transport.invoke(BridgeMethods.ownedChanged, _ownedJson(owned)).timeout(const Duration(seconds: 3));
+    } catch (_) {}
+  }
+
+  /// Best effort, like [pushState]: a lost one is made up by the next.
+  Future<void> pushCharacterProgress(String code, int done, int total) async {
+    try {
+      await _transport
+          .invoke(BridgeMethods.characterProgress, {'code': code, 'done': done, 'total': total})
+          .timeout(const Duration(seconds: 3));
     } catch (_) {}
   }
 
@@ -295,11 +362,19 @@ class MainWindowBridge {
   final _accounts = StreamController<AccountView>.broadcast();
   final _readies = StreamController<List<ReadyPet>>.broadcast();
   final _voices = StreamController<VoiceChoices>.broadcast();
+  final _owned = StreamController<Set<String>>.broadcast();
+  final _progress = StreamController<({String code, int done, int total})>.broadcast();
 
   Stream<LibraryState> get states => _states.stream;
   Stream<VoiceChoices> get voices => _voices.stream;
   Stream<AccountView> get accounts => _accounts.stream;
   Stream<List<ReadyPet>> get readyPets => _readies.stream;
+
+  /// Every change of what the account owns.
+  Stream<Set<String>> get owned => _owned.stream;
+
+  /// A running download's verified files, after each one.
+  Stream<({String code, int done, int total})> get characterProgress => _progress.stream;
 
   void start() => _transport.setHandler((method, args) async {
         if (method == BridgeMethods.stateChanged && !_states.isClosed) {
@@ -315,8 +390,40 @@ class MainWindowBridge {
           final pets = ReadyPet.listFrom(args);
           if (pets.isNotEmpty) _readies.add(pets);
         }
+        if (method == BridgeMethods.ownedChanged && !_owned.isClosed) {
+          _owned.add(ownedFrom(args));
+        }
+        if (method == BridgeMethods.characterProgress && !_progress.isClosed && args is Map) {
+          final code = args['code'], done = args['done'], total = args['total'];
+          if (code is String && done is int && total is int) _progress.add((code: code, done: done, total: total));
+        }
         return null;
       });
+
+  /// What the account owns; null when the pet window does not answer.
+  Future<Set<String>?> getOwned() async {
+    try {
+      return ownedFrom(await _transport.invoke(BridgeMethods.getOwned).timeout(ackTimeout));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Ask the pet window to ask the server what the account owns (after a
+  /// payment); the answer comes as an [owned] push. Fire and forget.
+  void refreshOwned() => _transport.invoke(BridgeMethods.refreshOwned).ignore();
+
+  /// True once `paid-<code>` is installed; false on any failure, a pet window
+  /// that does not answer included. A download may take minutes, so the wait
+  /// is ten [adoptTimeout]s.
+  Future<bool> downloadCharacter(String code) async {
+    try {
+      final r = await _transport.invoke(BridgeMethods.downloadCharacter, {'code': code}).timeout(adoptTimeout * 10);
+      return r is Map && r['ok'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
 
   /// What arrived while this window was not running; empty when nothing did
   /// or the pet window does not answer.
@@ -431,5 +538,7 @@ class MainWindowBridge {
     await _accounts.close();
     await _readies.close();
     await _voices.close();
+    await _owned.close();
+    await _progress.close();
   }
 }

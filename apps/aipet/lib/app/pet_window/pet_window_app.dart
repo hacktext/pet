@@ -18,6 +18,8 @@ import '../../services/account_store.dart';
 import '../../services/api_client.dart';
 import '../../services/app_paths.dart';
 import '../../services/autostart.dart';
+import '../../services/catalog_store.dart';
+import '../../services/character_service.dart';
 import '../../services/device_identity.dart';
 import '../../services/custom_downloader.dart';
 import '../../services/file_download.dart';
@@ -25,6 +27,7 @@ import '../../services/hud_bridge.dart';
 import '../../services/matte_cache.dart';
 import '../../services/native_window.dart';
 import '../../services/needs_store.dart';
+import '../../services/pet_installer.dart';
 import '../../services/pet_library.dart';
 import '../../services/pet_size_store.dart';
 import '../../services/settings_store.dart';
@@ -42,6 +45,7 @@ import 'clip_player.dart';
 import 'close_policy.dart';
 import 'companion.dart';
 import 'library_launcher.dart';
+import 'paid_keeper.dart';
 import 'pet_dragger.dart';
 import 'pet_menu.dart';
 import 'pet_sync_local.dart';
@@ -100,6 +104,7 @@ Future<void> runPetWindow() async {
   final player = AlphaClipPlayer();
   final launcher = LibraryLauncher();
   late final PetWindowBridge bridge;
+  late final PaidKeeper paid;
   final controller = PetWindowController(
     library: PetLibrary(builtinRoot: builtinPetsRoot(), customRoot: customPetsRoot(appData)),
     settings: SettingsStore(appData),
@@ -107,6 +112,7 @@ Future<void> runPetWindow() async {
     player: player,
     push: (s) => bridge.pushState(s),
     onAdopted: (id, firstTime) => telemetry.track(firstTime ? 'pet_adopt' : 'pet_switch', petId: id),
+    allows: (p) => paid.allows(p),
   );
 
   // Delivered custom pets (generation spec 6.1). This window is the only
@@ -131,6 +137,29 @@ Future<void> runPetWindow() async {
       }
     },
   );
+
+  // Paid characters: what the account owns (owned.json until the server
+  // answers) and their downloads, asked for from the library. Installed next
+  // to the custom pets; a paid pet no longer owned leaves the desktop.
+  paid = PaidKeeper(
+    CharacterService(api),
+    PetInstaller(petsRoot: customPetsRoot(appData), transport: IoDownloadTransport()),
+    CatalogStore(appData),
+    signedIn: () => account.signedIn,
+    onProgress: (code, done, total) => unawaited(bridge.pushCharacterProgress(code, done, total)),
+    onInstalled: (code) async {
+      try {
+        controller.rescan();
+      } catch (e) {
+        developer.log('rescan after installing $code failed: $e', name: 'aipet.paid');
+      }
+      await bridge.pushState(controller.state); // the library lists it
+    },
+  );
+  paid.addListener(() {
+    unawaited(controller.evictLocked());
+    unawaited(bridge.pushOwned(paid.owned));
+  });
 
   final mover = DesktopWindowMover(kPetTitle);
   final stats = StatsKeeper(StatsStore(appData), onSaved: () => sync.statsChanged());
@@ -170,7 +199,11 @@ Future<void> runPetWindow() async {
     deviceId: device.id,
     deviceName: _deviceName(),
     push: (v) => bridge.pushAccount(v),
-    onSynced: () => unawaited(downloads.run()),
+    onSynced: () {
+      unawaited(downloads.run());
+      unawaited(paid.refresh());
+    },
+    onLoggedOut: paid.signedOut,
   );
   // Below the account: both calls carry its token when there is one, which
   // binds this device (and its events) to the user on the server.
@@ -216,6 +249,7 @@ Future<void> runPetWindow() async {
     account: account,
     onRefreshCustom: downloads.run,
     voices: _Voices(voices, companion),
+    paid: paid,
   )..start();
 
   runApp(PetWindowApp(
@@ -239,9 +273,11 @@ Future<void> runPetWindow() async {
   unawaited(WindowController.create(WindowConfiguration(arguments: kHudWindowArgs, hiddenAtLaunch: true))
       .then<void>((_) {}, onError: (Object e) => developer.log('panel window failed: $e', name: 'aipet.hud')));
   await controller.boot();
+  await controller.evictLocked(); // normally nothing: boot already passes over a locked pet
   // After boot: loading settings.json is not the user changing them.
   syncLocal.watchSettings(sync.settingsChanged);
   account.start();
+  unawaited(paid.refresh()); // signed in: what the account owns now, without waiting for the sync
   unawaited(downloads.run()); // after boot: a pet installed now is scanned on top of boot's list
   if (controller.currentPet == null) await launcher.open();
 }

@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:aipet/app/pet_window/pet_window_controller.dart';
 import 'package:aipet/domain/library_state.dart';
+import 'package:aipet/domain/pet.dart';
 import 'package:aipet/services/pet_library.dart';
 import 'package:aipet/services/settings_store.dart';
 import 'package:aipet/services/window_bridge.dart';
@@ -20,7 +21,8 @@ void main() {
   late PetWindowController c;
   late List<String> adoptions;
 
-  PetWindowController make({Duration prepareTimeout = kPrepareTimeout}) => PetWindowController(
+  PetWindowController make({Duration prepareTimeout = kPrepareTimeout, bool Function(Pet)? allows}) =>
+      PetWindowController(
         library: PetLibrary(builtinRoot: builtin, customRoot: Directory('${tmp.path}\\custom')),
         settings: settings,
         ensure: (f) => ensure(f),
@@ -28,6 +30,7 @@ void main() {
         push: (s) async => pushed.add(s),
         prepareTimeout: prepareTimeout,
         onAdopted: (id, firstTime) => adoptions.add('$id ${firstTime ? 'adopt' : 'switch'}'),
+        allows: allows,
       );
   const short = Duration(milliseconds: 50);
   const failFast = Timeout(Duration(seconds: 5)); // a missing cap must fail, not hang for 30 s
@@ -271,5 +274,93 @@ void main() {
     c.rescan();
     expect(c.pets.map((p) => p.id), contains('custom-7'));
     expect(notified, 1);
+  });
+
+  group('paid pets', () {
+    late Set<String> owned;
+    bool allows(Pet p) => p.origin != PetOrigin.paid || owned.contains(p.id.substring(5));
+
+    setUp(() {
+      owned = {'a'};
+      writePet(Directory('${tmp.path}\\custom'), id: 'paid-a', origin: 'paid', species: 'girl');
+      c = make(allows: allows);
+    });
+
+    test('a paid pet that is no longer owned leaves the desktop', () async {
+      settings.save(const LibraryState(currentPetId: 'paid-a', adoptedPetIds: ['builtin-broken', 'builtin-gold', 'paid-a']));
+      await c.boot();
+      expect(c.currentPet?.id, 'paid-a');
+      pushed.clear();
+      owned = {};
+      await c.evictLocked();
+      expect(c.currentPet?.id, 'builtin-gold');
+      expect(player.plays.last, 'builtin-gold/stand.mp4|loop');
+      expect(pushed.last, const LibraryState(currentPetId: 'builtin-gold', adoptedPetIds: ['builtin-broken', 'builtin-gold', 'paid-a']));
+      expect(settings.load(), pushed.last, reason: 'the adopted list stays; owning it again makes it usable');
+      expect(adoptions, isEmpty, reason: 'not the user adopting');
+      await expectLater(
+          c.adopt('paid-a'),
+          throwsA(isA<AdoptError>()
+              .having((e) => e.code, 'code', 'locked')
+              .having((e) => e.message, 'message', '请先解锁')));
+      expect(c.currentPet?.id, 'builtin-gold');
+
+      owned = {'a'};
+      await c.adopt('paid-a');
+      expect(c.currentPet?.id, 'paid-a');
+    });
+
+    test('with no other pet allowed, nobody is on the desktop', () async {
+      settings.save(const LibraryState(currentPetId: 'paid-a', adoptedPetIds: ['paid-a']));
+      await c.boot();
+      owned = {};
+      await c.evictLocked();
+      expect(c.currentPet, isNull);
+      expect(c.state, const LibraryState(adoptedPetIds: ['paid-a']));
+      expect(settings.load(), c.state);
+      expect(pushed.last, c.state);
+    });
+
+    test('evictLocked leaves an allowed pet alone', () async {
+      settings.save(const LibraryState(currentPetId: 'paid-a', adoptedPetIds: ['builtin-gold', 'paid-a']));
+      await c.boot();
+      pushed.clear();
+      await c.evictLocked();
+      expect(c.currentPet?.id, 'paid-a');
+      expect(pushed, isEmpty);
+      expect(player.plays, hasLength(1));
+    });
+
+    test('boot passes over a saved paid pet that is not owned, without playing it', () async {
+      owned = {};
+      settings.save(const LibraryState(currentPetId: 'paid-a', adoptedPetIds: ['paid-a', 'builtin-ragdoll']));
+      await c.boot();
+      expect(c.currentPet?.id, 'builtin-ragdoll');
+      expect(player.plays, ['builtin-ragdoll/stand.mp4|loop']);
+    });
+
+    test('a sync naming a locked pet does not put it on', () async {
+      owned = {};
+      settings.save(const LibraryState(currentPetId: 'builtin-gold', adoptedPetIds: ['builtin-gold']));
+      await c.boot();
+      await c.applySynced(const LibraryState(currentPetId: 'paid-a', adoptedPetIds: ['paid-a']));
+      expect(c.currentPet?.id, 'builtin-gold');
+      expect(player.plays, hasLength(1));
+    });
+
+    test('owned lost while it was being prepared: refused, and it leaves again', () async {
+      settings.save(const LibraryState(currentPetId: 'builtin-gold', adoptedPetIds: ['builtin-gold']));
+      await c.boot();
+      player.gate = Completer<void>();
+      final adopting = c.adopt('paid-a');
+      await Future<void>.delayed(Duration.zero);
+      owned = {};
+      await c.evictLocked(); // the owned change: the pet on the desktop is still allowed
+      player.gate!.complete();
+      await expectLater(adopting, throwsA(isA<AdoptError>().having((e) => e.code, 'code', 'locked')));
+      await c.evictLocked(); // queued behind the one the adopt started
+      expect(c.currentPet?.id, 'builtin-gold');
+      expect(c.state.preparingPetId, isNull);
+    });
   });
 }

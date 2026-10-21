@@ -300,6 +300,110 @@ void main() {
       {'g': 'vivi', 'b': 'off'},
     ]);
   });
+
+  group('paid characters', () {
+    late _Paid paid;
+    late PetWindowBridge petSide;
+    late MainWindowBridge lib;
+
+    setUp(() {
+      final (pe, me) = FakeTransport.pair();
+      paid = _Paid();
+      petSide = PetWindowBridge(pe,
+          state: () => state,
+          onAdopt: (_) async {},
+          onMainWindowClosing: () async {},
+          onQuit: () async {},
+          paid: paid)
+        ..start();
+      lib = MainWindowBridge(me, ackTimeout: const Duration(milliseconds: 50))..start();
+    });
+    tearDown(() => lib.dispose());
+
+    test('getOwned, and owned pushes arrive on owned', () async {
+      paid.owned = {'suwan', 'guchen'};
+      expect(await lib.getOwned(), {'suwan', 'guchen'});
+      final seen = <Set<String>>[];
+      lib.owned.listen(seen.add);
+      await petSide.pushOwned({'luyu'});
+      await Future<void>.delayed(Duration.zero);
+      expect(seen, [
+        {'luyu'},
+      ]);
+    });
+
+    test('downloadCharacter: the answer, progress on the way, a throw is false', () async {
+      paid.owned = {'suwan'};
+      final progress = <String>[];
+      lib.characterProgress.listen((p) => progress.add('${p.code} ${p.done}/${p.total}'));
+      paid.onDownload = (code) async {
+        await petSide.pushCharacterProgress(code, 1, 2);
+        await petSide.pushCharacterProgress(code, 2, 2);
+        return true;
+      };
+      expect(await lib.downloadCharacter('suwan'), isTrue);
+      expect(paid.downloads, ['suwan']);
+      expect(progress, ['suwan 1/2', 'suwan 2/2']);
+
+      paid.onDownload = (_) async => false;
+      expect(await lib.downloadCharacter('suwan'), isFalse);
+      paid.onDownload = (_) async => throw StateError('boom');
+      expect(await lib.downloadCharacter('suwan'), isFalse);
+    });
+
+    test('refreshOwned reaches the pet window; a throwing refresh does not escape', () async {
+      lib.refreshOwned();
+      await Future<void>.delayed(Duration.zero);
+      expect(paid.refreshes, 1);
+      paid.onRefresh = () async => throw StateError('boom');
+      lib.refreshOwned();
+      await Future<void>.delayed(Duration.zero);
+      expect(paid.refreshes, 2);
+    });
+
+    test('garbled progress is dropped', () async {
+      final progress = [];
+      main.characterProgress.listen(progress.add);
+      await petEnd.invoke(BridgeMethods.characterProgress, {'code': 1});
+      await Future<void>.delayed(Duration.zero);
+      expect(progress, isEmpty);
+    });
+  });
+
+  test('without a paid handler nothing is owned and nothing downloads', () async {
+    expect(await main.getOwned(), isEmpty);
+    expect(await main.downloadCharacter('suwan'), isFalse);
+    main.refreshOwned(); // ignored
+  });
+
+  test('a pet window that does not answer: getOwned is null, downloadCharacter false', () async {
+    petEnd.silent = true;
+    expect(await main.getOwned(), isNull);
+    final quick = MainWindowBridge(mainEnd, adoptTimeout: const Duration(milliseconds: 5));
+    expect(await quick.downloadCharacter('suwan'), isFalse);
+    await quick.dispose();
+  });
+}
+
+class _Paid implements PaidHandler {
+  @override
+  Set<String> owned = {};
+  final downloads = <String>[];
+  var refreshes = 0;
+  Future<bool> Function(String code) onDownload = (_) async => true;
+  Future<void> Function() onRefresh = () async {};
+
+  @override
+  Future<bool> download(String code) {
+    downloads.add(code);
+    return onDownload(code);
+  }
+
+  @override
+  Future<void> refresh() {
+    refreshes++;
+    return onRefresh();
+  }
 }
 
 class _Voices implements VoiceHandler {

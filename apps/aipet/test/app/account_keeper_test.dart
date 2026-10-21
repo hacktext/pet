@@ -25,7 +25,7 @@ void main() {
   late AccountKeeper keeper;
   late SyncService sync;
 
-  AccountKeeper make({void Function()? onSynced}) {
+  AccountKeeper make({void Function()? onSynced, void Function()? onLoggedOut}) {
     late final AccountKeeper k;
     final api = ApiClient(http, baseUrl: 'https://x.test', token: () => k.token, onUnauthorized: () => k.expired());
     sync = SyncService(root, api: api, local: FakeLocal(), signedIn: () => k.signedIn, now: () => now);
@@ -38,6 +38,7 @@ void main() {
       deviceName: 'MY-PC',
       push: (v) async => pushed.add(v),
       onSynced: onSynced,
+      onLoggedOut: onLoggedOut,
     );
   }
 
@@ -134,6 +135,21 @@ void main() {
     expect(keeper.signedIn, isFalse);
     expect(AccountStore(root).file.existsSync(), isFalse);
     expect(pushed.last, AccountView.signedOut);
+  });
+
+  test('onLoggedOut hears a logout, not a refused token', () async {
+    var out = 0;
+    keeper = make(onLoggedOut: () => out++);
+    await keeper.login('13800138000', '123456');
+    await keeper.syncNow();
+    http.reply = (_) => FakeHttp.fail(1003, 'Unauthenticated.', null, 401);
+    await keeper.syncNow();
+    expect(keeper.signedIn, isFalse);
+    expect(out, 0, reason: 'an expired login keeps what this computer knew');
+    http.reply = (r) => r.url.path == '/api/aipet/auth/login' ? FakeHttp.ok(_login) : FakeHttp.ok(null);
+    await keeper.login('13800138000', '123456');
+    await keeper.logout();
+    expect(out, 1);
   });
 
   test('syncNow signed out asks to sign in first', () async {
