@@ -157,11 +157,12 @@ class Companion {
     return HudView(
       name: pet.name,
       cover: pet.coverFile.path,
-      status: _need?.kind.status ?? statusText(s),
+      status: _need?.kind.status ?? statusText(s, hungers: !pet.species.isCharacter),
       companionDays: companionDays(s, stats.now),
       todayInteractions: s.todayInteractions,
       intimacy: s.intimacy.round(),
-      satiety: s.satiety.round(),
+      // A character is not fed: no 饱食度 bar (null).
+      satiety: pet.species.isCharacter ? null : s.satiety.round(),
       health: s.health.round(),
       buttons: buttons,
       enabled: {for (final b in buttons) if (pet.actions.contains(b)) b},
@@ -195,24 +196,31 @@ class Companion {
   /// The current pet's voices; empty for one that does not speak.
   List<PetVoice> get availableVoices => pets.currentPet?.voices ?? const [];
 
-  /// The voice the current pet speaks in: the one chosen for it, else its
-  /// first; null when it has none or was set to 静音.
+  /// The voice the current pet speaks in: the one chosen for it; null -- 静音
+  /// -- when it has none, was set to 静音, or nothing was chosen yet (a
+  /// character starts silent; the right-click menu or its library card turns
+  /// a voice on).
   String? get currentVoice {
     final pet = pets.currentPet;
     if (pet == null || pet.voices.isEmpty) return null;
     final chosen = voices.choice(pet.id);
-    if (chosen == kVoiceOff) return null;
-    return pet.voices.any((v) => v.id == chosen) ? chosen : pet.voices.first.id;
+    return pet.voices.any((v) => v.id == chosen) ? chosen : null;
   }
 
   /// From the right-click menu: a voice id, or null for 静音.
   void chooseVoice(String? voice) {
     final pet = pets.currentPet;
-    if (_disposed || pet == null) return;
-    final before = voices.choice(pet.id);
-    voices.choose(pet.id, voice ?? kVoiceOff);
-    if (before != (voice ?? kVoiceOff)) onVoiceChosen?.call(pet.id, voice ?? kVoiceOff);
-    if (voice == null) voicePlayer.stop();
+    if (pet != null) chooseVoiceFor(pet.id, voice);
+  }
+
+  /// From the menu or a library card: [voice] for [petId], null for 静音.
+  void chooseVoiceFor(String petId, String? voice) {
+    if (_disposed) return;
+    final want = voice ?? kVoiceOff;
+    final before = voices.choice(petId);
+    voices.choose(petId, want);
+    if (before != want) onVoiceChosen?.call(petId, want);
+    if (voice == null && pets.currentPet?.id == petId) voicePlayer.stop();
   }
 
   /// One of the lines for [action] in the current voice; an action with none
@@ -404,7 +412,7 @@ class Companion {
     final id = pets.currentPet?.id;
     if (id != _petId) {
       _petId = id;
-      stats.select(id);
+      stats.select(id, hungers: !(pets.currentPet?.species.isCharacter ?? false));
       voicePlayer.stop(); // the last pet's line does not carry over
       // Adopting goes through the controller, not through us, so a walk can
       // still be sliding the window while the new pet stands on screen. The

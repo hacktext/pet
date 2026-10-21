@@ -54,7 +54,7 @@ class HudView {
         companionDays: j['companionDays']! as int,
         todayInteractions: j['todayInteractions']! as int,
         intimacy: j['intimacy']! as int,
-        satiety: j['satiety']! as int,
+        satiety: j['satiety'] as int?,
         health: j['health']! as int,
         buttons: [for (final v in j['buttons']! as List<Object?>) v! as String],
         enabled: {for (final v in j['enabled']! as List<Object?>) v! as String},
@@ -66,7 +66,7 @@ class HudView {
   final int companionDays;
   final int todayInteractions;
   final int intimacy;
-  final int satiety;
+  final int? satiety; // null: no 饱食度 (a character)
   final int health;
   final List<String> buttons; // shown, in order
   final Set<String> enabled; // which of [buttons] this pet has

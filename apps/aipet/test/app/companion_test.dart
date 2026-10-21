@@ -197,12 +197,26 @@ void main() {
     expect(v.enabled, kSeven.toSet());
   });
 
-  petTest("a character's action says one of its lines in the chosen voice, the first voice by default", (t) async {
+  petTest('a character has no 饱食度 and does not get hungry', (t) async {
+    await boot(character: true);
+    expect(c.view!.satiety, isNull);
+    expect(stats.hungers, isFalse);
+    final before = stats.current!.satiety;
+    now = now.add(const Duration(hours: 3));
+    stats.tick();
+    expect(stats.current!.satiety, before);
+    expect(c.view!.status, '状态很好');
+  });
+
+  petTest("a character starts silent; once a voice is chosen her actions say its lines", (t) async {
     await boot(character: true);
     expect([for (final v in c.availableVoices) v.id], ['xiaoya', 'vivi']);
-    expect(c.currentVoice, 'xiaoya');
+    expect(c.currentVoice, isNull);
     await c.userAction('act_coy');
     expect(player.plays.last, 'builtin-xiaoya/act_coy.mp4|once');
+    expect(voice.log.where((l) => l.endsWith('.wav')), isEmpty, reason: 'nothing chosen yet: 静音');
+    c.chooseVoice('xiaoya');
+    await c.userAction('act_coy');
     expect(voice.log.last, 'xiaoya/act_coy-1.wav'); // LowRandom picks the first line
     c.chooseVoice('vivi');
     expect(c.currentVoice, 'vivi');

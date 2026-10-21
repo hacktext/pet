@@ -4,14 +4,27 @@ import '../../domain/library_state.dart';
 import '../../domain/pet.dart';
 import 'theme.dart';
 
+/// Height of the voice line a speaking character's card adds.
+const double kVoiceLineHeight = 30;
+
 /// One pet in the plaza / 我的 grid, in one of the five states of spec 5:
-/// its photo, name, tags and one button.
+/// its photo, name, tags and one button; a character that speaks also gets a
+/// voice line (静音 until a voice is chosen).
 class PetCard extends StatelessWidget {
-  const PetCard({super.key, required this.pet, required this.status, required this.onAdopt});
+  const PetCard(
+      {super.key, required this.pet, required this.status, required this.onAdopt, this.voice, this.onVoice});
 
   final Pet pet;
   final CardStatus status;
   final VoidCallback onAdopt;
+
+  /// The voice it speaks in; null for 静音.
+  final String? voice;
+
+  /// A voice picked on the card, null for 静音; null hides the line.
+  final ValueChanged<String?>? onVoice;
+
+  bool get _speaks => pet.voices.isNotEmpty && onVoice != null;
 
   @override
   Widget build(BuildContext context) {
@@ -40,6 +53,7 @@ class PetCard extends StatelessWidget {
                   style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppColors.text)),
               const SizedBox(height: 6),
               SizedBox(height: 24, child: _tags()),
+              if (_speaks) SizedBox(height: kVoiceLineHeight, child: _voiceLine()),
               const SizedBox(height: 10),
               SizedBox(width: double.infinity, height: 40, child: _button()),
               const SizedBox(height: 4),
@@ -84,6 +98,33 @@ class PetCard extends StatelessWidget {
             child: Text(t, style: const TextStyle(fontSize: 12, color: AppColors.textMuted, height: 1.3)),
           ),
       ]),
+    );
+  }
+
+  static const _off = '';
+
+  Widget _voiceLine() {
+    final name = [for (final v in pet.voices) if (v.id == voice) v.name].firstOrNull;
+    return Align(
+      alignment: Alignment.bottomLeft,
+      child: PopupMenuButton<String>(
+        key: Key('voice-${pet.id}'),
+        tooltip: '声音',
+        position: PopupMenuPosition.under,
+        onSelected: (v) => onVoice!(v == _off ? null : v),
+        itemBuilder: (_) => [
+          CheckedPopupMenuItem(value: _off, checked: name == null, child: const Text('静音')),
+          for (final v in pet.voices) CheckedPopupMenuItem(value: v.id, checked: v.id == voice, child: Text(v.name)),
+        ],
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(name == null ? Icons.volume_off_outlined : Icons.volume_up_outlined,
+              size: 16, color: name == null ? AppColors.textMuted : AppColors.orange),
+          const SizedBox(width: 4),
+          Text('声音：${name ?? '静音'}',
+              style: TextStyle(fontSize: 12, color: name == null ? AppColors.textMuted : AppColors.text)),
+          const Icon(Icons.arrow_drop_down, size: 18, color: AppColors.textMuted),
+        ]),
+      ),
     );
   }
 

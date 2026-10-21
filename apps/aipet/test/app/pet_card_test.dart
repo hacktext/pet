@@ -91,13 +91,14 @@ void main() {
   });
 
   test('palette matches the spec', () {
-    // The 2026-10-19 library redesign: warm off-white, ink-black actions.
-    expect(AppColors.page, const Color(0xFFF7F5F2));
-    expect(AppColors.card, const Color(0xFFFFFFFF));
-    expect(AppColors.accent, const Color(0xFF333333));
-    expect(AppColors.accentSoft, const Color(0xFFEFEBE6));
-    expect(AppColors.text, const Color(0xFF333333));
-    expect(AppColors.textMuted, const Color(0xFF8A847E));
+    // 2026-10-20: cream and coffee, apricot for the lead action.
+    expect(AppColors.page, const Color(0xFFFFF8F0));
+    expect(AppColors.card, const Color(0xFFFFFCF8));
+    expect(AppColors.accent, const Color(0xFF7D4B32));
+    expect(AppColors.orangeGradient.colors, const [Color(0xFFF3B07C), Color(0xFFE8894F)]);
+    expect(AppColors.accentSoft, const Color(0xFFF8E8D9));
+    expect(AppColors.text, const Color(0xFF5A3423));
+    expect(AppColors.textMuted, const Color(0xFFA2826F));
     expect(buildAppTheme().scaffoldBackgroundColor, AppColors.page);
   });
 

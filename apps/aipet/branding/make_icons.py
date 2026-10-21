@@ -1,5 +1,5 @@
-"""Every icon of 桌遇 / DeskMeet, from branding/logo.png (the 400 px tile on
-its left, the wordmark on its right). Run after the logo changes:
+"""Every icon of 桌遇 / DeskMeet, from branding/logo.png (a square tile on its
+left, the wordmark on its right). Run after the logo changes:
 
     tools/petgen/.venv/Scripts/python apps/aipet/branding/make_icons.py
 
@@ -8,6 +8,10 @@ Writes (paths from apps/aipet/):
   assets/tray.ico, assets/tray.png         the tray (Windows) / menu bar (macOS)
   macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_*.png
   assets/ui/logo-tile.png                  the library's sidebar and sign-in page
+
+The tile is used as drawn -- its own ground colour, gradients and corner --
+less the hairline border around it, which each platform's icon puts back
+(Windows, faintly) or leaves out (macOS).
 """
 from __future__ import annotations
 
@@ -17,44 +21,56 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 APP = Path(__file__).resolve().parents[1]
-TILE = 400  # the logo's tile is its left 400 x 400 px
 
 
-def mark() -> Image.Image:
-    """The mark alone: black at the logo's darkness, so on white it is the logo
-    exactly. Taken from inside the tile's border, cropped to its own box."""
-    a = np.asarray(Image.open(APP / "branding" / "logo.png").convert("RGB"))[:TILE, :TILE].astype(float)
-    grey = a.mean(axis=2)
-    alpha = np.clip(255 - grey, 0, 255)
-    alpha[:20, :] = alpha[-20:, :] = alpha[:, :20] = alpha[:, -20:] = 0  # the border line
-    alpha[alpha < 6] = 0  # paper noise
-    ys, xs = np.nonzero(alpha)
-    rgba = np.zeros((*alpha.shape, 4), np.uint8)
-    rgba[..., 3] = alpha.astype(np.uint8)
-    return Image.fromarray(rgba, "RGBA").crop((xs.min(), ys.min(), xs.max() + 1, ys.max() + 1))
+def _tile_box(logo: Image.Image) -> tuple[int, int]:
+    """Side of the tile and its corner radius, measured: the tile is the
+    opaque square at the left, the wordmark starts after a transparent gap."""
+    alpha = np.asarray(logo)[..., 3] > 0
+    cols = alpha.any(axis=0)
+    gap = int(np.argmax(~cols[1:])) + 1  # first transparent column after the tile
+    side = gap
+    top_row = np.nonzero(alpha[0, :side])[0]
+    radius = int(top_row.min()) if len(top_row) else 0
+    return side, radius
 
 
-MARK = mark()
+def _art() -> tuple[Image.Image, float, tuple[int, int, int]]:
+    """The tile's pixels with the border painted over in its ground colour;
+    with its corner radius as a fraction of its side, and that colour."""
+    logo = Image.open(APP / "branding" / "logo.png").convert("RGBA")
+    side, radius = _tile_box(logo)
+    tile = logo.crop((0, 0, side, side))
+    a = np.asarray(tile).astype(int)
+    ground = tuple(int(v) for v in np.median(a[side // 2, 3:12, :3], axis=0))  # just inside the left edge
+    inset = 3  # the border is a 1-2 px ring
+    inner = Image.new("L", (side, side), 0)
+    ImageDraw.Draw(inner).rounded_rectangle((inset, inset, side - 1 - inset, side - 1 - inset),
+                                            max(0, radius - inset), fill=255)
+    out = Image.new("RGBA", (side, side), (*ground, 255))
+    out.paste(tile, (0, 0), inner)
+    return out, radius / side, ground
 
 
-def tile(size: int, *, inset: float = 0.0, border: bool = True) -> Image.Image:
-    """A white rounded square carrying the mark, like the logo's own tile;
-    `inset` leaves that fraction transparent on every side (macOS icons)."""
+ART, RADIUS, GROUND = _art()
+
+
+def tile(size: int, *, inset: float = 0.0, border: bool = True, radius: float | None = None) -> Image.Image:
+    """The tile at [size] px; `inset` leaves that fraction transparent on
+    every side (macOS icons); `radius` overrides the logo's own corner. A faint
+    border keeps a cream tile visible on a white Windows desktop or menu."""
     s = 4  # draw big, shrink once: smooth corners at 16 px too
     big = size * s
     pad = round(big * inset)
     side = big - 2 * pad
-    img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    radius = round(side * 0.225)
+    shape = Image.new("L", (big, big), 0)
     box = (pad, pad, pad + side - 1, pad + side - 1)
-    d.rounded_rectangle(box, radius, fill=(255, 255, 255, 255),
-                        outline=(222, 222, 222, 255) if border else None, width=max(1, big // 128) if border else 0)
-    # The mark fills 72 % of the logo's tile; at tiny sizes a little more reads better.
-    share = 0.72 if size >= 48 else 0.80
-    k = side * share / max(MARK.size)  # may enlarge: the logo's mark is under 300 px
-    m = MARK.resize((round(MARK.width * k), round(MARK.height * k)), Image.LANCZOS)
-    img.alpha_composite(m, (pad + (side - m.width) // 2, pad + (side - m.height) // 2))
+    r = round(side * (RADIUS if radius is None else radius))
+    ImageDraw.Draw(shape).rounded_rectangle(box, r, fill=255)
+    img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    img.paste(ART.resize((side, side), Image.LANCZOS), (pad, pad), shape.crop(box).resize((side, side)))
+    if border:
+        ImageDraw.Draw(img).rounded_rectangle(box, r, outline=(214, 196, 182, 255), width=max(1, big // 128))
     return img.resize((size, size), Image.LANCZOS)
 
 
@@ -67,10 +83,11 @@ def main() -> None:
     tile(44, border=False).save(APP / "assets/tray.png")
     mac = APP / "macos/Runner/Assets.xcassets/AppIcon.appiconset"
     for n in (16, 32, 64, 128, 256, 512, 1024):
-        # Apple's grid: the tile is 824 of 1024, no border (macOS draws none).
-        tile(n, inset=100 / 1024, border=False).save(mac / f"app_icon_{n}.png")
+        # Apple's grid: the tile is 824 of 1024 with Apple's own corner (about
+        # 22 %; the logo's is tighter and looks square in the Dock), no border.
+        tile(n, inset=100 / 1024, border=False, radius=0.2237).save(mac / f"app_icon_{n}.png")
     tile(256, border=False).save(APP / "assets/ui/logo-tile.png")
-    print("icons written")
+    print(f"icons written (tile {ART.width} px, corner {RADIUS:.3f}, ground #{'%02X%02X%02X' % GROUND})")
 
 
 if __name__ == "__main__":

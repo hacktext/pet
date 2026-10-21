@@ -4,6 +4,7 @@
 #include <windows.h>
 
 #include "frame_source/frame_source.h"
+#include "frame_source/hit_mask.h"
 #include "pet_matte/pet_matte.h"
 #include "prepare_queue/prepare_queue.h"
 
@@ -76,6 +77,13 @@ struct Clip {
   bool stopping = false;
   flutter::TextureRegistrar* registrar = nullptr;
 
+  // The last drawn frame's alpha, every kMaskStep-th pixel: "opaqueAt" asks
+  // it whether the pet is under the cursor (clicks elsewhere pass through
+  // the window). Written on the render thread, read on the platform thread.
+  std::mutex maskMtx;
+  frame_source::HitMask mask;
+  uint32_t maskFrame = UINT32_MAX;
+
   // Belt-and-braces guard, NOT the teardown path. Every Clip is now owned
   // by AlphaVideoPlugin::clips_, and both the "dispose" handler and
   // ~AlphaVideoPlugin() (see alpha_video_plugin.cpp's TeardownClip) already
@@ -106,7 +114,8 @@ struct Clip {
 
 namespace {
 
-constexpr int64_t kFallbackFrameMicros = 41666;  // 24fps，仅在 durationTicks 为 0 时使用
+constexpr int64_t kFallbackFrameMicros = 41666;
+constexpr uint32_t kMaskStep = 4;  // 960 px -> a 240 x 240 mask  // 24fps，仅在 durationTicks 为 0 时使用
 
 // 独立于 Flutter 引擎线程的推帧线程：按 FrameSource 索引里记录的每帧时长
 // (durationTicks，100ns 单位) 等待，然后调用 MarkTextureFrameAvailable，
@@ -336,8 +345,16 @@ void AlphaVideoPlugin::HandleMethodCall(
       clip->texture = std::make_unique<flutter::TextureVariant>(
           flutter::PixelBufferTexture(
               [raw](size_t, size_t) -> const FlutterDesktopPixelBuffer* {
-                const uint8_t* px = raw->source->FrameRgba(raw->currentFrame);
+                const uint32_t frame = raw->currentFrame;
+                const uint8_t* px = raw->source->FrameRgba(frame);
                 if (!px) return nullptr;
+                {
+                  std::lock_guard<std::mutex> lk(raw->maskMtx);
+                  if (raw->maskFrame != frame) {
+                    raw->mask.Capture(px, raw->source->width(), raw->source->height(), kMaskStep);
+                    raw->maskFrame = frame;
+                  }
+                }
                 raw->buffer.buffer = px;
                 raw->buffer.width = raw->source->width();
                 raw->buffer.height = raw->source->height();
@@ -409,6 +426,23 @@ void AlphaVideoPlugin::HandleMethodCall(
       // Atomic load; no mtx needed (see the comment on Clip::currentFrame).
       result->Success(flutter::EncodableValue(
           static_cast<int32_t>(it->second->currentFrame.load())));
+      return;
+    }
+
+    if (call.method_name() == "opaqueAt") {
+      const auto& args = std::get<flutter::EncodableMap>(*call.arguments());
+      const int64_t id = std::get<int64_t>(args.at(flutter::EncodableValue("textureId")));
+      const double u = std::get<double>(args.at(flutter::EncodableValue("u")));
+      const double v = std::get<double>(args.at(flutter::EncodableValue("v")));
+      const double radius = std::get<double>(args.at(flutter::EncodableValue("radius")));
+      auto it = clips_.find(id);
+      // A clip already gone (switching) has no pet to hit: not an error.
+      bool opaque = false;
+      if (it != clips_.end()) {
+        std::lock_guard<std::mutex> lk(it->second->maskMtx);
+        opaque = it->second->mask.OpaqueAt(u, v, radius);
+      }
+      result->Success(flutter::EncodableValue(opaque));
       return;
     }
 

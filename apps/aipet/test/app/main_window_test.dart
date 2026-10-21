@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:aipet/app/main_window/custom_flow/custom_deps.dart';
@@ -89,6 +90,42 @@ void main() {
         petState = petState.adopted(id);
         await petSide.pushState(petState);
       };
+
+  testWidgets("a character's card shows 静音 until a voice is chosen on it, which the pet window keeps", (tester) async {
+    // 小雅 with two voices; the pet window's side answers voice requests.
+    final meta = File('${tmp.path}/builtin/builtin-xiaoya/pet.json');
+    final j = jsonDecode(meta.readAsStringSync()) as Map<String, Object?>;
+    j['voices'] = [
+      {'id': 'xiaoya', 'name': '温柔小雅'},
+      {'id': 'vivi', 'name': '元气 Vivi'},
+    ];
+    meta.writeAsStringSync(jsonEncode(j));
+    final kept = <String, String>{};
+    PetWindowBridge(petEnd,
+        state: () => petState,
+        onAdopt: (id) => adoptImpl(id),
+        onMainWindowClosing: () async {},
+        onQuit: () async {},
+        voices: _KeptVoices(kept)).start();
+    await open(tester);
+    await tester.tap(find.text('人物'));
+    await tester.pump();
+    expect(find.text('声音：静音'), findsOneWidget);
+    expect(find.textContaining('声音：'), findsOneWidget, reason: 'only the speaking character has the line');
+    await tester.tap(find.byKey(const Key('voice-builtin-xiaoya')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('温柔小雅').last);
+    await tester.pumpAndSettle();
+    expect(kept, {'builtin-xiaoya': 'xiaoya'});
+    expect(find.text('声音：温柔小雅'), findsOneWidget);
+    // Back to 静音.
+    await tester.tap(find.byKey(const Key('voice-builtin-xiaoya')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('静音').last);
+    await tester.pumpAndSettle();
+    expect(kept, {'builtin-xiaoya': 'off'});
+    expect(find.text('声音：静音'), findsOneWidget);
+  });
 
   testWidgets('plaza: banner, categories and one adoptable card per pet', (tester) async {
     await open(tester);
@@ -649,4 +686,16 @@ void main() {
     expect(model.readyPet, ready);
     expect(shown, 1);
   });
+}
+
+class _KeptVoices implements VoiceHandler {
+  _KeptVoices(this.map);
+
+  final Map<String, String> map;
+
+  @override
+  VoiceChoices get choices => Map.of(map);
+
+  @override
+  void choose(String petId, String? voice) => map[petId] = voice ?? 'off';
 }

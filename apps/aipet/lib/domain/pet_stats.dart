@@ -119,8 +119,9 @@ PetStats _rollDay(PetStats s, DateTime now) =>
 
 /// Time passes: satiety drains and health follows it, a minute at a time
 /// (satiety crosses the 20 / 50 thresholds on the way). A clock that went
-/// back changes nothing but the timestamp.
-PetStats advanceStats(PetStats s, DateTime now) {
+/// back changes nothing but the timestamp. A character cannot be fed, so
+/// with [hungers] false satiety stands still and health only recovers.
+PetStats advanceStats(PetStats s, DateTime now, {bool hungers = true}) {
   if (!now.isAfter(s.updatedAt)) return _rollDay(s.copyWith(updatedAt: now), now);
   var from = s.updatedAt;
   if (now.difference(from) > kMaxCatchUp) from = now.subtract(kMaxCatchUp);
@@ -130,8 +131,10 @@ PetStats advanceStats(PetStats s, DateTime now) {
   const minute = 1 / 60;
   while (hours > 0) {
     final dt = hours < minute ? hours : minute;
-    satiety = _clamp(satiety - kSatietyPerHour * dt);
-    if (satiety < kHungryBelow) {
+    if (hungers) satiety = _clamp(satiety - kSatietyPerHour * dt);
+    if (!hungers) {
+      health = _clamp(health + kRecoverHealthPerHour * dt);
+    } else if (satiety < kHungryBelow) {
       health = _clamp(health - kHungryHealthPerHour * dt);
     } else if (satiety >= kFedFrom) {
       health = _clamp(health + kRecoverHealthPerHour * dt);
@@ -142,8 +145,8 @@ PetStats advanceStats(PetStats s, DateTime now) {
 }
 
 /// The user played with the pet; [fed] for the feed action.
-PetStats recordInteraction(PetStats s, DateTime now, {bool fed = false}) {
-  final a = advanceStats(s, now);
+PetStats recordInteraction(PetStats s, DateTime now, {bool fed = false, bool hungers = true}) {
+  final a = advanceStats(s, now, hungers: hungers);
   return a.copyWith(
     intimacy: _clamp(a.intimacy + 1),
     todayInteractions: a.todayInteractions + 1,
@@ -153,9 +156,11 @@ PetStats recordInteraction(PetStats s, DateTime now, {bool fed = false}) {
 
 /// Judged on the rounded values, because those are the ones the panel prints
 /// beside this line: a pet at 49.6 shows 饱食度 50% and must not be called
-/// hungry next to it.
-String statusText(PetStats s) {
+/// hungry next to it. Without [hungers] (a character) hunger is never the
+/// reason.
+String statusText(PetStats s, {bool hungers = true}) {
   if (s.health.round() < 60) return '不太舒服';
+  if (!hungers) return '状态很好';
   if (s.satiety.round() < kHungryBelow) return '饿坏了';
   if (s.satiety.round() < kFedFrom) return '有点饿了';
   return '状态很好';

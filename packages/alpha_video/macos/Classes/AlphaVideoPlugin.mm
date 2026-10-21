@@ -4,6 +4,7 @@
 #import <CoreVideo/CoreVideo.h>
 
 #include "frame_source/frame_source.h"
+#include "frame_source/hit_mask.h"
 #include "pet_matte/pet_matte.h"
 #include "prepare_queue/prepare_queue.h"
 
@@ -21,6 +22,7 @@
 namespace {
 
 constexpr int64_t kFallbackFrameMicros = 41666;  // 24fps，仅在 durationTicks 为 0 时使用
+constexpr uint32_t kMaskStep = 4;  // 960 px -> a 240 x 240 mask, as on Windows
 
 prepare_queue::Outcome RunPetMattePrepare(const native_path::Path& src, const native_path::Path& dst,
                                           uint32_t edge) {
@@ -46,6 +48,8 @@ FlutterError* BadArgs(NSString* message) {
 - (void)playLooping:(BOOL)loop;
 - (void)pause;
 - (uint32_t)currentFrame;
+// Whether the last drawn frame is opaque near (u, v); see HitMask.
+- (BOOL)opaqueAtU:(double)u v:(double)v radius:(double)radius;
 // Stops and joins the ticker; after it returns the ticker never marks the
 // texture again, so the id may be unregistered.
 - (void)stop;
@@ -62,6 +66,9 @@ FlutterError* BadArgs(NSString* message) {
   bool _stopping;
   CVPixelBufferPoolRef _pool;
   std::mutex _poolMtx;  // copyPixelBuffer runs on the raster thread, dealloc anywhere
+  std::mutex _maskMtx;  // the raster thread writes the mask, the platform thread reads it
+  frame_source::HitMask _mask;
+  uint32_t _maskFrame;
 }
 
 - (instancetype)initWithSource:(std::unique_ptr<frame_source::FrameSource>)source {
@@ -72,6 +79,7 @@ FlutterError* BadArgs(NSString* message) {
     _loop = true;
     _stopping = false;
     _pool = nullptr;
+    _maskFrame = UINT32_MAX;
   }
   return self;
 }
@@ -87,6 +95,11 @@ FlutterError* BadArgs(NSString* message) {
 
 - (uint32_t)currentFrame {
   return _currentFrame.load();
+}
+
+- (BOOL)opaqueAtU:(double)u v:(double)v radius:(double)radius {
+  std::lock_guard<std::mutex> lk(_maskMtx);
+  return _mask.OpaqueAt(u, v, radius) ? YES : NO;
 }
 
 // Same loop as StartTicker on Windows: advance the index, mark the texture,
@@ -155,10 +168,18 @@ FlutterError* BadArgs(NSString* message) {
 // only ever called here (never from the ticker), exactly as on Windows.
 - (CVPixelBufferRef _Nullable)copyPixelBuffer {
   std::lock_guard<std::mutex> lk(_poolMtx);
-  const uint8_t* rgba = _source->FrameRgba(_currentFrame.load());
+  const uint32_t frame = _currentFrame.load();
+  const uint8_t* rgba = _source->FrameRgba(frame);
   if (!rgba) return nullptr;
   const size_t w = _source->width();
   const size_t h = _source->height();
+  {
+    std::lock_guard<std::mutex> mk(_maskMtx);
+    if (_maskFrame != frame) {
+      _mask.Capture(rgba, static_cast<uint32_t>(w), static_cast<uint32_t>(h), kMaskStep);
+      _maskFrame = frame;
+    }
+  }
 
   if (!_pool) {
     NSDictionary* attrs = @{
@@ -328,6 +349,14 @@ FlutterError* BadArgs(NSString* message) {
       AlphaVideoClip* clip = [self clipFor:args result:result];
       if (!clip) return;
       result(@(static_cast<int32_t>(clip.currentFrame)));
+      return;
+    }
+
+    if ([call.method isEqualToString:@"opaqueAt"]) {
+      // A clip already gone (switching) has no pet to hit: not an error.
+      AlphaVideoClip* clip = _clips[args[@"textureId"]];
+      const double u = [args[@"u"] doubleValue], v = [args[@"v"] doubleValue], r = [args[@"radius"] doubleValue];
+      result(@(clip != nil && [clip opaqueAtU:u v:v radius:r]));
       return;
     }
 

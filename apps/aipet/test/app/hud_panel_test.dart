@@ -52,6 +52,23 @@ void main() {
     expect(got, ['dance', 'talk']);
   });
 
+  testWidgets('no satiety (a character): 亲密度 and 健康度 only', (t) async {
+    final c = character(['stand', 'act_coy']);
+    await pump(
+        t,
+        HudView(
+            name: c.name, cover: c.cover, status: c.status, companionDays: 1, todayInteractions: 0, intimacy: 50,
+            satiety: null, health: 100, buttons: c.buttons, enabled: c.enabled));
+    expect(find.text('亲密度'), findsOneWidget);
+    expect(find.text('健康度'), findsOneWidget);
+    expect(find.text('饱食度'), findsNothing);
+    final back = HudView.fromJson(HudView(
+            name: c.name, cover: c.cover, status: c.status, companionDays: 1, todayInteractions: 0, intimacy: 50,
+            satiety: null, health: 100, buttons: c.buttons, enabled: c.enabled)
+        .toJson());
+    expect(back.satiety, isNull);
+  });
+
   testWidgets("an animal's seven actions sit in a grid four wide, all of them tappable", (t) async {
     await pump(
         t,

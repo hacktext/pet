@@ -80,8 +80,10 @@ class HudPanel extends StatelessWidget {
           Row(children: [
             _stat('亲密度', view.intimacy, const Color(0xFFF06292)),
             const SizedBox(width: 8),
-            _stat('饱食度', view.satiety, const Color(0xFFFFA726)),
-            const SizedBox(width: 8),
+            if (view.satiety case final satiety?) ...[
+              _stat('饱食度', satiety, const Color(0xFFFFA726)),
+              const SizedBox(width: 8),
+            ],
             _stat('健康度', view.health, const Color(0xFF66BB6A)),
           ]),
           const SizedBox(height: 10),

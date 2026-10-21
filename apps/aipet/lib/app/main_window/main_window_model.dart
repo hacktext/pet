@@ -8,6 +8,7 @@ import '../../domain/library_state.dart';
 import '../../domain/pet.dart';
 import '../../services/custom_service.dart';
 import '../../services/pet_library.dart';
+import '../../services/voice_store.dart';
 import '../../services/window_bridge.dart';
 import 'custom_flow/custom_deps.dart';
 
@@ -37,6 +38,8 @@ class MainWindowModel extends ChangeNotifier {
   StreamSubscription<LibraryState>? _sub;
   StreamSubscription<AccountView>? _accountSub;
   StreamSubscription<List<ReadyPet>>? _readySub;
+  StreamSubscription<VoiceChoices>? _voiceSub;
+  VoiceChoices _voices = const {};
   ReadyPet? _ready;
   final _announced = <String>{}; // a pet is announced once; resends are not news
   bool _disposed = false;
@@ -86,11 +89,46 @@ class MainWindowModel extends ChangeNotifier {
 
   CardStatus statusOf(Pet p) => cardStatusFor(petId: p.id, complete: p.isComplete, state: _state);
 
+  /// The voice [p] speaks in, null for 静音 -- which is also every
+  /// character's start, as in the pet window.
+  String? voiceOf(Pet p) {
+    final chosen = _voices[p.id];
+    return p.voices.any((v) => v.id == chosen) ? chosen : null;
+  }
+
+  /// From a character card: [voice] for [p], null for 静音. Shown at once;
+  /// the pet window, which keeps voice.json, confirms with the full list.
+  Future<void> chooseVoice(Pet p, String? voice) async {
+    _voices = {..._voices, p.id: voice ?? kVoiceOff};
+    notifyListeners();
+    final confirmed = await _bridge.chooseVoice(p.id, voice);
+    if (_disposed) return;
+    if (confirmed == null) {
+      _say('设置失败，请重试');
+      unawaited(_loadVoices());
+      return;
+    }
+    _voices = confirmed;
+    notifyListeners();
+  }
+
+  Future<void> _loadVoices() async {
+    final v = await _bridge.getVoices();
+    if (_disposed || v == null) return;
+    _voices = v;
+    notifyListeners();
+  }
+
   Future<void> start() async {
     _pets = _library.scan();
     _bridge.start();
     // Before any await: the stream is broadcast and drops what nobody hears.
     _readySub = _bridge.readyPets.listen(_petsArrived);
+    _voiceSub = _bridge.voices.listen((v) {
+      if (_disposed) return;
+      _voices = v;
+      notifyListeners();
+    });
     var pushed = false;
     _sub = _bridge.states.listen((s) {
       pushed = true;
@@ -114,6 +152,7 @@ class MainWindowModel extends ChangeNotifier {
     });
     final a = await _bridge.getAccount();
     if (a != null && !accountPushed) _account = a;
+    await _loadVoices();
     // What arrived while this window was closed (may overlap a live push).
     final waiting = await _bridge.takeReady();
     if (_disposed) return;
@@ -208,6 +247,7 @@ class MainWindowModel extends ChangeNotifier {
     if (_visible == visible) return;
     _visible = visible;
     _updateCustomPoll();
+    if (visible) unawaited(_loadVoices()); // a voice may have changed from the pet's menu meanwhile
   }
 
   void _updateCustomPoll() {
@@ -369,6 +409,7 @@ class MainWindowModel extends ChangeNotifier {
     _sub?.cancel();
     _accountSub?.cancel();
     _readySub?.cancel();
+    _voiceSub?.cancel();
     _stopCodeWait();
     _bridge.dispose();
     super.dispose();

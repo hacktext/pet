@@ -1,23 +1,29 @@
 import 'package:flutter/material.dart';
 
-/// Warm off-white with ink-black actions (library redesign, 2026-10-19).
+/// Cream and coffee with an apricot lead (palette of 2026-10-20's mockup).
 abstract final class AppColors {
-  static const page = Color(0xFFF7F5F2);
-  static const sidebar = Color(0xFFF2EFEB);
-  static const card = Color(0xFFFFFFFF);
+  static const page = Color(0xFFFFF8F0);
+  static const sidebar = Color(0xFFF8F0E5);
+  static const card = Color(0xFFFFFCF8);
 
-  /// Buttons, the chosen tab and chip: a soft black, #333333.
-  static const accent = Color(0xFF333333);
+  /// Buttons on cards and the custom flow, the chosen half of 宠物 | 人物.
+  static const accent = Color(0xFF7D4B32);
+
+  /// The lead action -- the chosen nav item and category, 立即定制 -- runs
+  /// [orangeLight] to [orange].
+  static const orange = Color(0xFFE8894F);
+  static const orangeLight = Color(0xFFF3B07C);
+  static const orangeGradient = LinearGradient(colors: [orangeLight, orange]);
 
   /// Unchosen pills, tags, image placeholders.
-  static const accentSoft = Color(0xFFEFEBE6);
-  static const line = Color(0xFFE8E3DD);
-  static const text = Color(0xFF333333);
-  static const textMuted = Color(0xFF8A847E);
+  static const accentSoft = Color(0xFFF8E8D9);
+  static const line = Color(0xFFF0E0CF);
+  static const text = Color(0xFF5A3423);
+  static const textMuted = Color(0xFFA2826F);
 
   /// The banner's badge and hand-written line.
-  static const warm = Color(0xFFB0835A);
-  static const warmSoft = Color(0xFFF6EBDD);
+  static const warm = Color(0xFF8A5A3E);
+  static const warmSoft = Color(0xFFFBEBDB);
 }
 
 ThemeData buildAppTheme() {
@@ -54,6 +60,41 @@ ThemeData buildAppTheme() {
     textButtonTheme: TextButtonThemeData(style: TextButton.styleFrom(foregroundColor: AppColors.text)),
     progressIndicatorTheme: const ProgressIndicatorThemeData(color: AppColors.accent),
   );
+}
+
+/// The page's lead action (立即定制): white on the apricot gradient, in a
+/// pill. The theme's FilledButton stays coffee for everything else.
+class LeadButton extends StatelessWidget {
+  const LeadButton({super.key, required this.onPressed, required this.child});
+
+  final VoidCallback? onPressed;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Material(
+        type: MaterialType.transparency,
+        child: Ink(
+          decoration: const ShapeDecoration(
+            gradient: AppColors.orangeGradient,
+            shape: StadiumBorder(),
+            shadows: [BoxShadow(color: Color(0x40E8894F), blurRadius: 14, offset: Offset(0, 6))],
+          ),
+          child: InkWell(
+            customBorder: const StadiumBorder(),
+            onTap: onPressed,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 28),
+              child: Center(
+                widthFactor: 1,
+                child: DefaultTextStyle.merge(
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                  child: IconTheme.merge(data: const IconThemeData(color: Colors.white), child: child),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
 }
 
 /// The library window is wide; a pushed page (sign-in, the custom flow) keeps

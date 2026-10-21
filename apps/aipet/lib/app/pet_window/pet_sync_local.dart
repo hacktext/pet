@@ -8,11 +8,14 @@ import 'stats_keeper.dart';
 /// What sync reads and writes in the pet window: the controller's settings,
 /// the stats keeper and the voice choices.
 class PetSyncLocal implements SyncLocal {
-  PetSyncLocal({required this._pets, required this._stats, required this._voices});
+  PetSyncLocal({required this._pets, required this._stats, required this._voices, this.onVoices});
 
   final PetWindowController _pets;
   final StatsKeeper _stats;
   final VoiceStore _voices;
+
+  /// After sync replaced the voice choices (the library's cards follow).
+  final void Function(Map<String, String> choices)? onVoices;
 
   @override
   LibraryState get settings =>
@@ -31,7 +34,10 @@ class PetSyncLocal implements SyncLocal {
   void applyStats(Map<String, PetStats> newer) => _stats.applySynced(newer);
 
   @override
-  void applyVoices(Map<String, String> choices) => _voices.replaceAll(choices);
+  void applyVoices(Map<String, String> choices) {
+    _voices.replaceAll(choices);
+    onVoices?.call(_voices.all);
+  }
 
   /// Calls [changed] whenever who is adopted or on the desktop changes from
   /// what it is now -- not for actions, errors or a pet being prepared, which

@@ -27,6 +27,12 @@ abstract final class BridgeMethods {
   // the library a pet arrived, the library may ask what arrived while it was
   // closed, and may ask the pet window to look for deliveries now.
   static const petsReady = 'petsReady';
+
+  // A character's voice, from its library card: the pet window -- the only
+  // writer of voice.json -- keeps the choices and pushes them on any change.
+  static const getVoices = 'getVoices';
+  static const chooseVoice = 'chooseVoice';
+  static const voicesChanged = 'voicesChanged';
   static const takeReady = 'takeReady';
   static const refreshCustom = 'refreshCustom';
 }
@@ -61,6 +67,18 @@ class ReadyPet {
 
   @override
   String toString() => 'ReadyPet($petId, $name)';
+}
+
+/// voice.json as the library sees it: {petId: voiceId | "off"}; a pet with
+/// no entry is silent.
+typedef VoiceChoices = Map<String, String>;
+
+/// What the pet window does for the voice line on character cards.
+abstract class VoiceHandler {
+  VoiceChoices get choices;
+
+  /// [voice] null for 静音.
+  void choose(String petId, String? voice);
 }
 
 /// What the pet window does for the account card; AccountKeeper in production.
@@ -120,9 +138,13 @@ class PetWindowBridge {
     required this.onQuit,
     this.account,
     this.onRefreshCustom,
+    this.voices,
   });
 
   final BridgeTransport _transport;
+
+  /// Null: no character speaks, the library shows them all silent.
+  final VoiceHandler? voices;
   final LibraryState Function() state;
 
   /// The library asked to look for delivered custom pets now; null ignores it.
@@ -169,6 +191,12 @@ class PetWindowBridge {
         return (account?.view ?? AccountView.signedOut).toJson();
       case BridgeMethods.sendSms || BridgeMethods.login || BridgeMethods.logout || BridgeMethods.syncNow:
         return (await _accountRequest(method, args)).toJson();
+      case BridgeMethods.getVoices:
+        return voices?.choices ?? const <String, String>{};
+      case BridgeMethods.chooseVoice:
+        final m = args! as Map<Object?, Object?>;
+        voices?.choose(m['petId']! as String, m['voice'] as String?);
+        return voices?.choices ?? const <String, String>{};
       case BridgeMethods.takeReady:
         final out = [for (final p in _ready) p.toJson()];
         _ready.clear();
@@ -212,6 +240,13 @@ class PetWindowBridge {
   Future<void> pushAccount(AccountView v) async {
     try {
       await _transport.invoke(BridgeMethods.accountChanged, v.toJson()).timeout(const Duration(seconds: 3));
+    } catch (_) {}
+  }
+
+  /// Best effort, like [pushState].
+  Future<void> pushVoices(VoiceChoices choices) async {
+    try {
+      await _transport.invoke(BridgeMethods.voicesChanged, choices).timeout(const Duration(seconds: 3));
     } catch (_) {}
   }
 
@@ -259,8 +294,10 @@ class MainWindowBridge {
   final _states = StreamController<LibraryState>.broadcast();
   final _accounts = StreamController<AccountView>.broadcast();
   final _readies = StreamController<List<ReadyPet>>.broadcast();
+  final _voices = StreamController<VoiceChoices>.broadcast();
 
   Stream<LibraryState> get states => _states.stream;
+  Stream<VoiceChoices> get voices => _voices.stream;
   Stream<AccountView> get accounts => _accounts.stream;
   Stream<List<ReadyPet>> get readyPets => _readies.stream;
 
@@ -270,6 +307,9 @@ class MainWindowBridge {
         }
         if (method == BridgeMethods.accountChanged && !_accounts.isClosed) {
           _accounts.add(AccountView.fromJson(args! as Map<Object?, Object?>));
+        }
+        if (method == BridgeMethods.voicesChanged && !_voices.isClosed) {
+          _voices.add(_choicesFrom(args));
         }
         if (method == BridgeMethods.petsReady && !_readies.isClosed) {
           final pets = ReadyPet.listFrom(args);
@@ -290,6 +330,30 @@ class MainWindowBridge {
 
   /// Ask the pet window to look for delivered custom pets now. Fire and forget.
   void refreshCustom() => _transport.invoke(BridgeMethods.refreshCustom).ignore();
+
+  /// Every character's voice; null when the pet window does not answer.
+  Future<VoiceChoices?> getVoices() async {
+    try {
+      return _choicesFrom(await _transport.invoke(BridgeMethods.getVoices).timeout(ackTimeout));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// [voice] null for 静音. The choices after it; null when nobody answered.
+  Future<VoiceChoices?> chooseVoice(String petId, String? voice) async {
+    try {
+      return _choicesFrom(
+          await _transport.invoke(BridgeMethods.chooseVoice, {'petId': petId, 'voice': voice}).timeout(ackTimeout));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static VoiceChoices _choicesFrom(Object? v) => {
+        for (final e in ((v as Map<Object?, Object?>?) ?? const {}).entries)
+          if (e.key is String && e.value is String) e.key! as String: e.value! as String,
+      };
 
   /// Null when the pet window does not answer.
   Future<AccountView?> getAccount() async {
@@ -366,5 +430,6 @@ class MainWindowBridge {
     await _states.close();
     await _accounts.close();
     await _readies.close();
+    await _voices.close();
   }
 }

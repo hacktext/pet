@@ -8,7 +8,7 @@
 ; 改名桌遇时故意没动：AppId、aipet.exe、数据目录、开机启动项名 Aipet——动了老用户升级就接不上。
 
 #define AppName "桌遇"
-#define AppVersion "1.0.3"
+#define AppVersion "1.0.4"
 #define AppExe "aipet.exe"
 #define Release "..\build\windows\x64\runner\Release"
 #define VcRedist "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Redist\MSVC\14.50.35710\x64\Microsoft.VC145.CRT"

@@ -18,6 +18,10 @@ class StatsKeeper extends ChangeNotifier {
   final void Function()? onSaved;
   late final Map<String, PetStats> _all;
   String? _petId;
+  bool _hungers = true;
+
+  /// Whether the current pet gets hungry; a character does not.
+  bool get hungers => _hungers;
 
   PetStats? get current => _petId == null ? null : _all[_petId];
 
@@ -27,10 +31,12 @@ class StatsKeeper extends ChangeNotifier {
   DateTime get now => _now();
 
   /// Switches to [petId] -- a pet seen for the first time starts fresh -- and
-  /// catches up the time since its stats were last saved.
-  void select(String? petId) {
+  /// catches up the time since its stats were last saved; [hungers] false for
+  /// a character, whose satiety then stands still.
+  void select(String? petId, {bool hungers = true}) {
     _petId = petId;
-    if (petId != null) _put(petId, advanceStats(_all[petId] ?? PetStats.fresh(_now()), _now()));
+    _hungers = hungers;
+    if (petId != null) _put(petId, advanceStats(_all[petId] ?? PetStats.fresh(_now()), _now(), hungers: hungers));
     notifyListeners();
   }
 
@@ -39,7 +45,7 @@ class StatsKeeper extends ChangeNotifier {
   void tick() {
     final id = _petId;
     if (id == null) return;
-    _put(id, advanceStats(_all[id]!, _now()), saveUnchanged: false);
+    _put(id, advanceStats(_all[id]!, _now(), hungers: _hungers), saveUnchanged: false);
     notifyListeners();
   }
 
@@ -47,7 +53,7 @@ class StatsKeeper extends ChangeNotifier {
   void interact(String action) {
     final id = _petId;
     if (id == null) return;
-    _put(id, recordInteraction(_all[id]!, _now(), fed: action == 'feed'));
+    _put(id, recordInteraction(_all[id]!, _now(), fed: action == 'feed', hungers: _hungers));
     notifyListeners();
   }
 
@@ -57,7 +63,7 @@ class StatsKeeper extends ChangeNotifier {
     if (newer.isEmpty) return;
     _all.addAll(newer);
     final id = _petId;
-    if (id != null && newer.containsKey(id)) _all[id] = advanceStats(_all[id]!, _now());
+    if (id != null && newer.containsKey(id)) _all[id] = advanceStats(_all[id]!, _now(), hungers: _hungers);
     _save();
     notifyListeners();
   }

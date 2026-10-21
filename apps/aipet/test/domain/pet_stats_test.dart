@@ -29,6 +29,18 @@ void main() {
     expect(s.updatedAt, t0.add(const Duration(hours: 12)));
   });
 
+  test('a character (hungers: false) keeps its satiety, recovers health, and is never called hungry', () {
+    // An old character that drained to 0 / 40 before characters stopped hungering.
+    final s = advanceStats(at(t0, satiety: 0, health: 40), t0.add(const Duration(hours: 4)), hungers: false);
+    expect(s.satiety, 0);
+    expect(s.health, closeTo(60, 1e-6)); // +5/h
+    expect(statusText(at(t0, satiety: 0, health: 90), hungers: false), '状态很好');
+    expect(statusText(at(t0, satiety: 0, health: 50), hungers: false), '不太舒服');
+    expect(statusText(at(t0, satiety: 0, health: 90)), '饿坏了');
+    final played = recordInteraction(at(t0, satiety: 30), t0.add(const Duration(hours: 2)), hungers: false);
+    expect(played.satiety, 30);
+  });
+
   test('a well-fed pet recovers health', () {
     // satiety 100 -> 75 in 6 h (never below 50), health +5/h: 50 -> 80
     final s = advanceStats(at(t0, satiety: 100, health: 50), t0.add(const Duration(hours: 6)));

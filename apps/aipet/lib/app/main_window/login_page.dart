@@ -195,8 +195,8 @@ class _GradientButton extends StatelessWidget {
         child: DecoratedBox(
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(18),
-            color: AppColors.accent,
-            boxShadow: const [BoxShadow(color: Color(0x33333333), blurRadius: 14, offset: Offset(0, 6))],
+            gradient: AppColors.orangeGradient,
+            boxShadow: const [BoxShadow(color: Color(0x40E8894F), blurRadius: 14, offset: Offset(0, 6))],
           ),
           child: Material(
             color: Colors.transparent,

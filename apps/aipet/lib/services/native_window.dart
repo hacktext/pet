@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:developer' as developer;
-import 'dart:ffi';
+import 'dart:ffi' hide Size;
 import 'dart:io';
 
 import 'package:ffi/ffi.dart';
@@ -33,7 +33,18 @@ abstract class NativeWindow {
 
   /// Shows the window at [topLeft], topmost, without activating it.
   void showAt(Offset topLeft);
+
+  /// Where the cursor is relative to the window's top-left, and the window's
+  /// size, both logical pixels (the cursor may lie outside); null if unknown.
+  Future<WindowCursor?> cursor();
+
+  /// With [on], clicks and hovers pass through the window to whatever is
+  /// behind it, as if it were not there.
+  void setClickThrough(bool on);
 }
+
+/// [NativeWindow.cursor]'s answer.
+typedef WindowCursor = ({Offset cursor, Size size});
 
 /// user32's SetWindowPos with SWP_NOACTIVATE, in physical pixels.
 class Win32Window implements NativeWindow {
@@ -81,6 +92,33 @@ class Win32Window implements NativeWindow {
     _setWindowPos(_hwnd, _hwndTopmost, (topLeft.dx * s).round(), (topLeft.dy * s).round(), 0, 0,
         _swpNoSize | _swpNoActivate | _swpShowWindow);
   }
+
+  @override
+  Future<WindowCursor?> cursor() async {
+    final p = calloc<_Point>();
+    final r = calloc<_Rect>();
+    try {
+      if (_getCursorPos(p) == 0 || _getWindowRect(_hwnd, r) == 0) return null;
+      final s = physicalScale();
+      return (
+        cursor: Offset((p.ref.x - r.ref.left) / s, (p.ref.y - r.ref.top) / s),
+        size: Size((r.ref.right - r.ref.left) / s, (r.ref.bottom - r.ref.top) / s),
+      );
+    } finally {
+      calloc.free(p);
+      calloc.free(r);
+    }
+  }
+
+  /// WS_EX_TRANSPARENT only lets the mouse through a layered window, so both
+  /// go on and off together -- what window_manager's setIgnoreMouseEvents
+  /// does, which Flutter's transparent windows are known to survive.
+  @override
+  void setClickThrough(bool on) {
+    final ex = _getWindowLongPtr(_hwnd, _gwlExStyle);
+    final want = on ? ex | _wsExTransparent | _wsExLayered : ex & ~(_wsExTransparent | _wsExLayered);
+    if (want != ex) _setWindowLongPtr(_hwnd, _gwlExStyle, want);
+  }
 }
 
 /// The macOS runner's channel (MainFlutterWindow.swift registers it on every
@@ -106,15 +144,34 @@ class MacWindow implements NativeWindow {
   @override
   void showAt(Offset topLeft) => _send('showAt', {'x': topLeft.dx, 'y': topLeft.dy});
 
+  @override
+  Future<WindowCursor?> cursor() async {
+    try {
+      final m = await _channel.invokeMapMethod<String, Object?>('cursor', {'title': title});
+      if (m == null) return null;
+      double n(String k) => (m[k]! as num).toDouble();
+      return (cursor: Offset(n('x'), n('y')), size: Size(n('width'), n('height')));
+    } catch (e) {
+      _logOnce('cursor', e);
+      return null;
+    }
+  }
+
+  @override
+  void setClickThrough(bool on) => _send('setIgnoresMouse', {'ignore': on});
+
   // Fire and forget, like SetWindowPos: a walk sends ~30 a second and must
   // not wait on each. A failure is logged once, not 30 times a second.
   void _send(String method, Map<String, Object> args) {
     unawaited(_channel.invokeMethod<void>(method, {'title': title, ...args}).catchError((Object e) {
-      if (!_logged) {
-        _logged = true;
-        developer.log('$method "$title" failed: $e', name: 'aipet.native_window');
-      }
+      _logOnce(method, e);
     }));
+  }
+
+  void _logOnce(String method, Object e) {
+    if (_logged) return;
+    _logged = true;
+    developer.log('$method "$title" failed: $e', name: 'aipet.native_window');
   }
 }
 
@@ -129,6 +186,40 @@ final _getCurrentProcessId = _kernel32.lookupFunction<Uint32 Function(), int Fun
 final _setWindowPos = _user32.lookupFunction<Int32 Function(IntPtr, IntPtr, Int32, Int32, Int32, Int32, Uint32),
     int Function(int, int, int, int, int, int, int)>('SetWindowPos');
 
+final _getCursorPos =
+    _user32.lookupFunction<Int32 Function(Pointer<_Point>), int Function(Pointer<_Point>)>('GetCursorPos');
+final _getWindowRect = _user32
+    .lookupFunction<Int32 Function(IntPtr, Pointer<_Rect>), int Function(int, Pointer<_Rect>)>('GetWindowRect');
+final _getWindowLongPtr =
+    _user32.lookupFunction<IntPtr Function(IntPtr, Int32), int Function(int, int)>('GetWindowLongPtrW');
+final _setWindowLongPtr = _user32
+    .lookupFunction<IntPtr Function(IntPtr, Int32, IntPtr), int Function(int, int, int)>('SetWindowLongPtrW');
+
+final class _Point extends Struct {
+  @Int32()
+  external int x;
+
+  @Int32()
+  external int y;
+}
+
+final class _Rect extends Struct {
+  @Int32()
+  external int left;
+
+  @Int32()
+  external int top;
+
+  @Int32()
+  external int right;
+
+  @Int32()
+  external int bottom;
+}
+
+const _gwlExStyle = -20;
+const _wsExTransparent = 0x00000020;
+const _wsExLayered = 0x00080000;
 const _hwndTopmost = -1;
 const _swpNoSize = 0x0001;
 const _swpNoZOrder = 0x0004;

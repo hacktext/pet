@@ -268,4 +268,50 @@ void main() {
     expect(ReadyPet.listFrom(null), isEmpty);
     expect(ReadyPet.listFrom({'pets': ['x', {'petId': 1}]}), isEmpty);
   });
+
+  test('voices: the library reads, chooses and hears about changes; no handler is all silent', () async {
+    expect(await main.getVoices(), isEmpty); // this pet window has no VoiceHandler
+
+    final (pe, me) = FakeTransport.pair();
+    final handler = _Voices();
+    PetWindowBridge(pe,
+            state: () => state,
+            onAdopt: (_) async {},
+            onMainWindowClosing: () async {},
+            onQuit: () async {},
+            voices: handler)
+        .start();
+    final lib = MainWindowBridge(me, ackTimeout: const Duration(milliseconds: 50))..start();
+    addTearDown(lib.dispose);
+    final pushed = <VoiceChoices>[];
+    lib.voices.listen(pushed.add);
+
+    handler.map['g'] = 'vivi';
+    expect(await lib.getVoices(), {'g': 'vivi'});
+    expect(await lib.chooseVoice('g', 'xiaoya'), {'g': 'xiaoya'});
+    expect(await lib.chooseVoice('g', null), {'g': 'off'});
+    expect(handler.calls, [('g', 'xiaoya'), ('g', null)]);
+
+    final petSide = PetWindowBridge(pe,
+        state: () => state, onAdopt: (_) async {}, onMainWindowClosing: () async {}, onQuit: () async {});
+    await petSide.pushVoices({'g': 'vivi', 'b': 'off'});
+    await Future<void>.delayed(Duration.zero);
+    expect(pushed, [
+      {'g': 'vivi', 'b': 'off'},
+    ]);
+  });
+}
+
+class _Voices implements VoiceHandler {
+  final map = <String, String>{};
+  final calls = <(String, String?)>[];
+
+  @override
+  VoiceChoices get choices => Map.of(map);
+
+  @override
+  void choose(String petId, String? voice) {
+    calls.add((petId, voice));
+    map[petId] = voice ?? 'off';
+  }
 }

@@ -138,18 +138,24 @@ class _NavItem extends StatelessWidget {
   Widget build(BuildContext context) {
     final fg = selected ? Colors.white : AppColors.text;
     return Material(
-      color: selected ? AppColors.accent : Colors.transparent,
-      borderRadius: BorderRadius.circular(14),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(14),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-          child: Row(children: [
-            Icon(icon, color: fg, size: 24),
-            const SizedBox(width: 16),
-            Text(label, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: fg)),
-          ]),
+      type: MaterialType.transparency,
+      child: Ink(
+        decoration: BoxDecoration(
+          gradient: selected ? AppColors.orangeGradient : null,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: selected ? const [BoxShadow(color: Color(0x33E8894F), blurRadius: 12, offset: Offset(0, 4))] : null,
+        ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+            child: Row(children: [
+              Icon(icon, color: fg, size: 24),
+              const SizedBox(width: 16),
+              Text(label, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: fg)),
+            ]),
+          ),
         ),
       ),
     );
@@ -182,7 +188,7 @@ class _Invite extends StatelessWidget {
               Container(
                 width: 36,
                 height: 36,
-                decoration: const BoxDecoration(color: AppColors.accent, shape: BoxShape.circle),
+                decoration: const BoxDecoration(gradient: AppColors.orangeGradient, shape: BoxShape.circle),
                 child: const Icon(Icons.arrow_forward, color: Colors.white, size: 18),
               ),
             ]),
@@ -342,11 +348,20 @@ class _PetGrid extends StatelessWidget {
               crossAxisCount: cols,
               mainAxisSpacing: _gap,
               crossAxisSpacing: _gap,
-              // photo (card width less padding, 1.15 : 1) + name, tags, button
-              mainAxisExtent: (cardWidth - 16) / 1.15 + 138,
+              // photo (card width less padding, 1.15 : 1) + name, tags, button,
+              // and the voice line when a card here has one
+              mainAxisExtent:
+                  (cardWidth - 16) / 1.15 + 138 + (pets.any((p) => p.voices.isNotEmpty) ? kVoiceLineHeight : 0),
             ),
             delegate: SliverChildListDelegate([
-              for (final p in pets) PetCard(pet: p, status: model.statusOf(p), onAdopt: () => model.adopt(p.id)),
+              for (final p in pets)
+                PetCard(
+                  pet: p,
+                  status: model.statusOf(p),
+                  onAdopt: () => model.adopt(p.id),
+                  voice: model.voiceOf(p),
+                  onVoice: (v) => model.chooseVoice(p, v),
+                ),
             ]),
           );
         }),
@@ -396,21 +411,27 @@ class _CategoryPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Material(
-        color: selected ? AppColors.accent : AppColors.card,
-        shape: StadiumBorder(side: BorderSide(color: selected ? AppColors.accent : AppColors.line)),
-        child: InkWell(
-          customBorder: const StadiumBorder(),
-          onTap: onTap,
-          child: Container(
-            constraints: const BoxConstraints(minWidth: 112),
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 11),
-            child: Text(label,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
-                  color: selected ? Colors.white : AppColors.text,
-                )),
+        type: MaterialType.transparency,
+        child: Ink(
+          decoration: ShapeDecoration(
+            color: selected ? null : AppColors.accentSoft,
+            gradient: selected ? AppColors.orangeGradient : null,
+            shape: const StadiumBorder(),
+          ),
+          child: InkWell(
+            customBorder: const StadiumBorder(),
+            onTap: onTap,
+            child: Container(
+              constraints: const BoxConstraints(minWidth: 112),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 11),
+              child: Text(label,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: selected ? Colors.white : AppColors.text,
+                  )),
+            ),
           ),
         ),
       );
@@ -442,7 +463,7 @@ class _Banner extends StatelessWidget {
           const DecoratedBox(
             decoration: BoxDecoration(
               gradient: LinearGradient(
-                colors: [Color(0xE6FFFFFF), Color(0x99FFFFFF), Color(0x00FFFFFF)],
+                colors: [Color(0xE6FFF8F0), Color(0x99FFF8F0), Color(0x00FFF8F0)],
                 stops: [0, 0.38, 0.62],
               ),
             ),
@@ -480,13 +501,12 @@ class _Banner extends StatelessWidget {
                   style: const TextStyle(
                       fontSize: 40, fontWeight: FontWeight.w900, color: AppColors.text, height: 1.15, letterSpacing: 2)),
               const SizedBox(height: 10),
-              Text(subtitle, style: const TextStyle(fontSize: 16, color: Color(0xFF4A4541))),
+              Text(subtitle, style: const TextStyle(fontSize: 16, color: Color(0xFF7A5544))),
               const Spacer(),
               SizedBox(
                 height: 48,
-                child: FilledButton(
+                child: LeadButton(
                   onPressed: onCustom,
-                  style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 28)),
                   child: const Row(mainAxisSize: MainAxisSize.min, children: [
                     Text('立即定制', style: TextStyle(fontSize: 17)),
                     SizedBox(width: 10),
@@ -760,7 +780,7 @@ class _SignInEntry extends StatelessWidget {
               ),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                decoration: BoxDecoration(color: AppColors.accent, borderRadius: BorderRadius.circular(20)),
+                decoration: BoxDecoration(gradient: AppColors.orangeGradient, borderRadius: BorderRadius.circular(20)),
                 child: const Text('去登录', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
               ),
             ]),

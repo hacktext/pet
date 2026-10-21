@@ -23,6 +23,7 @@ import '../../services/custom_downloader.dart';
 import '../../services/file_download.dart';
 import '../../services/hud_bridge.dart';
 import '../../services/matte_cache.dart';
+import '../../services/native_window.dart';
 import '../../services/needs_store.dart';
 import '../../services/pet_library.dart';
 import '../../services/pet_size_store.dart';
@@ -36,6 +37,7 @@ import '../../services/window_bridge.dart';
 import '../hud_window/hud_window_entry.dart';
 import 'account_keeper.dart';
 import 'app_exit.dart';
+import 'click_through.dart';
 import 'clip_player.dart';
 import 'close_policy.dart';
 import 'companion.dart';
@@ -147,9 +149,11 @@ Future<void> runPetWindow() async {
     onVoiceChosen: (id, voice) {
       telemetry.track('voice_change', petId: id, props: {'voice': voice});
       sync.voiceChanged();
+      unawaited(bridge.pushVoices(voices.all)); // the library's cards follow
     },
   );
-  final syncLocal = PetSyncLocal(pets: controller, stats: stats, voices: voices);
+  final syncLocal = PetSyncLocal(
+      pets: controller, stats: stats, voices: voices, onVoices: (c) => unawaited(bridge.pushVoices(c)));
   sync = SyncService(
     appData,
     api: api,
@@ -211,6 +215,7 @@ Future<void> runPetWindow() async {
     onQuit: quit,
     account: account,
     onRefreshCustom: downloads.run,
+    voices: _Voices(voices, companion),
   )..start();
 
   runApp(PetWindowApp(
@@ -254,6 +259,21 @@ String _deviceName() {
   } catch (_) {
     return _platformName();
   }
+}
+
+/// The library's voice line: voice.json read here, choices made through the
+/// companion (which saves, reports and syncs them).
+class _Voices implements VoiceHandler {
+  _Voices(this._store, this._companion);
+
+  final VoiceStore _store;
+  final Companion _companion;
+
+  @override
+  VoiceChoices get choices => _store.all;
+
+  @override
+  void choose(String petId, String? voice) => _companion.chooseVoiceFor(petId, voice);
 }
 
 class PetWindowApp extends StatefulWidget {
@@ -302,6 +322,18 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
   /// make room for the menu; null when the window is the pet.
   Offset? _inset;
 
+  /// Only the pet's own pixels take the mouse; the rest of the square lets
+  /// it through. Also what tells the companion the pointer is on the pet.
+  NativeWindow? _native;
+  late final ClickThrough _clickThrough = ClickThrough(
+    window: () => _native ??= NativeWindow.find(kPetTitle), // retried until the window exists
+    opaqueAt: (u, v) async => await widget.player.controller.value?.opaqueAt(u, v, radius: kHitSlop) ?? false,
+    mirrored: () => widget.walker.mirrored,
+    active: () => _visible == true && !_hidden,
+    onEnter: widget.companion.petEnter,
+    onExit: widget.companion.petExit,
+  );
+
   @override
   void initState() {
     super.initState();
@@ -317,6 +349,7 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
     SchedulerBinding.instance.addPostFrameCallback((_) => _syncVisibility());
     unawaited(_setUpTray());
     unawaited(_registerHotKey());
+    _clickThrough.start();
   }
 
   /// Ctrl+Alt+H on Windows, Control+Option+H on macOS (Command+Option+H is
@@ -348,6 +381,7 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
 
   @override
   void dispose() {
+    _clickThrough.stop();
     widget.controller.removeListener(_syncVisibility);
     trayManager.removeListener(this);
     windowManager.removeListener(this);
@@ -402,8 +436,19 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
 
   Future<void> _showMenu(BuildContext ctx, Offset at) async {
     final c = widget.controller;
-    final pet = await _growForMenu();
-    if (!ctx.mounted) return;
+    // The menu is drawn inside this window: all of it must take the mouse.
+    _clickThrough.hold();
+    final Rect? pet;
+    try {
+      pet = await _growForMenu();
+    } catch (_) {
+      _clickThrough.release();
+      rethrow;
+    }
+    if (!ctx.mounted) {
+      _clickThrough.release();
+      return;
+    }
     final PetMenuPick? pick;
     try {
       pick = await showPetMenu(
@@ -419,6 +464,7 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
       // Back to the pet's own rectangle before anything picked runs: a walk
       // or a resize starts from the window's bounds.
       if (pet != null) _place(pet, inset: null);
+      _clickThrough.release();
     }
     switch (pick) {
       case null:
@@ -496,12 +542,12 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
           backgroundColor: Colors.transparent,
           // Builder: showMenu needs a context below MaterialApp (Navigator, Overlay).
           body: Builder(
-            builder: (ctx) => MouseRegion(
-              onEnter: (_) => widget.companion.petEnter(),
-              onExit: (_) => widget.companion.petExit(),
-              child: GestureDetector(
+            // Hover comes from _clickThrough, not a MouseRegion: a window that
+            // lets the mouse through gets no reliable exit events.
+            builder: (ctx) => GestureDetector(
                 onPanStart: (_) async {
                   widget.companion.dragStarted();
+                  _clickThrough.hold(); // the cursor may slip off an arm mid-drag
                   try {
                     // Windows follows the cursor ourselves, not startDragging(): see PetDragger.
                     await widget.dragger.drag();
@@ -510,6 +556,7 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
                     // nowhere as an uncaught async error; the drag still ends.
                     developer.log('drag failed: $e', name: 'aipet.pet_window');
                   } finally {
+                    _clickThrough.release();
                     widget.companion.dragEnded();
                   }
                 },
@@ -555,7 +602,6 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
                   ),
                 ]),
               ),
-            ),
           ),
         ),
       );

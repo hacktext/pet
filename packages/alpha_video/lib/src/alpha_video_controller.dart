@@ -24,6 +24,13 @@ class AlphaVideoController {
 
   Future<void> pause() => channel.invokeMethod('pause', {'textureId': textureId});
 
+  /// Whether the frame last drawn is opaque within [radius] (a fraction of
+  /// the frame's width) of ([u], [v]), both 0..1 from the top-left. False
+  /// before the first frame is drawn.
+  Future<bool> opaqueAt(double u, double v, {double radius = 0}) async =>
+      await channel.invokeMethod<bool>('opaqueAt', {'textureId': textureId, 'u': u, 'v': v, 'radius': radius}) ??
+      false;
+
   Future<int> currentFrame() async =>
       await channel.invokeMethod<int>('currentFrame', {'textureId': textureId}) ?? 0;
 }

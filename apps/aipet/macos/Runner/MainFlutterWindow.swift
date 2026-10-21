@@ -50,6 +50,26 @@ enum NativeWindowChannel {
   static func register(with messenger: FlutterBinaryMessenger) {
     let channel = FlutterMethodChannel(name: "aipet/native_window", binaryMessenger: messenger)
     channel.setMethodCallHandler { call, result in
+      // Click-through (lib/app/pet_window/click_through.dart): where the
+      // cursor is over the window, and whether the window lets the mouse by.
+      if call.method == "cursor" || call.method == "setIgnoresMouse" {
+        guard let args = call.arguments as? [String: Any], let title = args["title"] as? String,
+          let window = NSApp.windows.first(where: { $0.title == title })
+        else {
+          result(FlutterError(code: "no_window", message: "no window with that title", details: nil))
+          return
+        }
+        if call.method == "setIgnoresMouse" {
+          window.ignoresMouseEvents = (args["ignore"] as? Bool) ?? false
+          result(nil)
+          return
+        }
+        // AppKit's y runs up from the screen's bottom; the window's own top-left is the origin here.
+        let mouse = NSEvent.mouseLocation
+        let f = window.frame
+        result(["x": mouse.x - f.minX, "y": f.maxY - mouse.y, "width": f.width, "height": f.height])
+        return
+      }
       guard let args = call.arguments as? [String: Any],
         let title = args["title"] as? String,
         let x = (args["x"] as? NSNumber)?.doubleValue,
