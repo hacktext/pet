@@ -76,7 +76,7 @@ class Companion {
         pointerOver: _pointerOverPetOrPanel);
     hud = PetHudBridge(
       hudTransport,
-      onAction: (k) => unawaited(userAction(k)),
+      onAction: (k) => k == kHudVoiceToggle ? toggleVoice() : unawaited(userAction(k)),
       onClose: presenter.close,
       onHover: (inside) => inside ? presenter.hudEnter() : presenter.hudExit(),
       // Panel calls are best-effort, local IPC: 500 ms is far longer than a
@@ -166,6 +166,7 @@ class Companion {
       health: s.health.round(),
       buttons: buttons,
       enabled: {for (final b in buttons) if (pet.actions.contains(b)) b},
+      voiceOn: pet.voices.isEmpty ? null : currentVoice != null,
     );
   }
 
@@ -207,6 +208,25 @@ class Companion {
     return pet.voices.any((v) => v.id == chosen) ? chosen : null;
   }
 
+  /// The voice each pet last spoke in before it was set to 静音 here, so the
+  /// panel's switch turns the same one back on (this run only; otherwise
+  /// the pet's first voice).
+  final _lastVoice = <String, String>{};
+
+  /// The panel's 声音 switch: 静音 if the current pet speaks, else back on.
+  void toggleVoice() {
+    final pet = pets.currentPet;
+    if (_disposed || pet == null || pet.voices.isEmpty) return;
+    final on = currentVoice;
+    if (on != null) {
+      _lastVoice[pet.id] = on;
+      chooseVoiceFor(pet.id, null);
+    } else {
+      final last = _lastVoice[pet.id];
+      chooseVoiceFor(pet.id, pet.voices.any((v) => v.id == last) ? last : pet.voices.first.id);
+    }
+  }
+
   /// From the right-click menu: a voice id, or null for 静音.
   void chooseVoice(String? voice) {
     final pet = pets.currentPet;
@@ -221,6 +241,7 @@ class Companion {
     voices.choose(petId, want);
     if (before != want) onVoiceChosen?.call(petId, want);
     if (voice == null && pets.currentPet?.id == petId) voicePlayer.stop();
+    _pushView(); // the panel's 声音 switch follows, wherever the choice came from
   }
 
   /// One of the lines for [action] in the current voice; an action with none

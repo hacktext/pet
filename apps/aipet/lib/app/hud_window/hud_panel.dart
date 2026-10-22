@@ -55,10 +55,15 @@ class HudPanel extends StatelessWidget {
             const SizedBox(width: 10),
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(view.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: _ink)),
+                Row(children: [
+                  Flexible(
+                    child: Text(view.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: _ink)),
+                  ),
+                  if (view.voiceOn case final on?) _voiceSwitch(on),
+                ]),
                 Text(view.status, style: const TextStyle(fontSize: 12, color: _rose)),
               ]),
             ),
@@ -107,6 +112,28 @@ class HudPanel extends StatelessWidget {
               ),
             ),
         ]),
+      );
+
+  /// 声音 on / off beside the name: a speaker icon and a word, one tap flips it.
+  Widget _voiceSwitch(bool on) => Padding(
+        padding: const EdgeInsets.only(left: 6),
+        child: Material(
+          color: on ? const Color(0xFFFDE3D2) : _card,
+          borderRadius: BorderRadius.circular(10),
+          child: InkWell(
+            key: const Key('hud-voice'),
+            borderRadius: BorderRadius.circular(10),
+            onTap: () => onAction(kHudVoiceToggle),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(on ? Icons.volume_up : Icons.volume_off, size: 14, color: on ? const Color(0xFFE8894F) : _rose),
+                const SizedBox(width: 2),
+                Text(on ? '声音开' : '已静音', style: TextStyle(fontSize: 11, color: on ? _ink : _rose)),
+              ]),
+            ),
+          ),
+        ),
       );
 
   Widget _avatar() => ClipOval(

@@ -197,6 +197,24 @@ void main() {
     expect(v.enabled, kSeven.toSet());
   });
 
+  petTest("the panel's 声音 switch turns a character's voice off and the same one back on", (t) async {
+    await boot(character: true);
+    expect(c.view!.voiceOn, isFalse); // a character starts silent
+    c.toggleVoice();
+    expect(c.currentVoice, 'xiaoya'); // her first voice
+    expect(c.view!.voiceOn, isTrue);
+    c.chooseVoice('vivi');
+    c.toggleVoice();
+    expect(c.currentVoice, isNull);
+    c.toggleVoice();
+    expect(c.currentVoice, 'vivi'); // the one she spoke in before 静音
+  });
+
+  petTest('an animal has no 声音 switch', (t) async {
+    await boot();
+    expect(c.view!.voiceOn, isNull);
+  });
+
   petTest('a character has no 饱食度 and does not get hungry', (t) async {
     await boot(character: true);
     expect(c.view!.satiety, isNull);

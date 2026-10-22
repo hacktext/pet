@@ -33,6 +33,10 @@ List<String> hudButtonsFor(Species species, List<String> actions) => species.isC
     : List.unmodifiable([...kHudButtons, ...actions.where((a) => !kHudButtons.contains(a))]);
 
 /// What the panel shows; numbers already rounded.
+/// The panel's 声音 switch beside a speaking character's name: not an
+/// action, so it is neither counted nor played.
+const kHudVoiceToggle = 'voiceToggle';
+
 class HudView {
   const HudView({
     required this.name,
@@ -45,6 +49,7 @@ class HudView {
     required this.health,
     required this.buttons,
     required this.enabled,
+    this.voiceOn,
   });
 
   factory HudView.fromJson(Map<Object?, Object?> j) => HudView(
@@ -58,6 +63,7 @@ class HudView {
         health: j['health']! as int,
         buttons: [for (final v in j['buttons']! as List<Object?>) v! as String],
         enabled: {for (final v in j['enabled']! as List<Object?>) v! as String},
+        voiceOn: j['voiceOn'] as bool?,
       );
 
   final String name;
@@ -70,6 +76,7 @@ class HudView {
   final int health;
   final List<String> buttons; // shown, in order
   final Set<String> enabled; // which of [buttons] this pet has
+  final bool? voiceOn; // null: the pet does not speak (no 声音 switch)
 
   Map<String, Object?> toJson() => {
         'name': name,
@@ -82,6 +89,7 @@ class HudView {
         'health': health,
         'buttons': buttons,
         'enabled': [for (final b in buttons) if (enabled.contains(b)) b],
+        'voiceOn': voiceOn,
       };
 
   @override
@@ -96,11 +104,12 @@ class HudView {
       other.satiety == satiety &&
       other.health == health &&
       listEquals(other.buttons, buttons) &&
-      setEquals(other.enabled, enabled);
+      setEquals(other.enabled, enabled) &&
+      other.voiceOn == voiceOn;
 
   @override
   int get hashCode => Object.hash(name, cover, status, companionDays, todayInteractions, intimacy, satiety, health,
-      Object.hashAll(buttons), Object.hashAllUnordered(enabled));
+      Object.hashAll(buttons), Object.hashAllUnordered(enabled), voiceOn);
 }
 
 List<double> _rectToList(Rect r) => [r.left, r.top, r.width, r.height];

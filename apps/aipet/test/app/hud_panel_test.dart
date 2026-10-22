@@ -52,6 +52,23 @@ void main() {
     expect(got, ['dance', 'talk']);
   });
 
+  testWidgets('a speaking character has a 声音 switch beside her name; an animal has none', (t) async {
+    final c = character(['stand', 'act_coy']);
+    HudView v(bool? on) => HudView(
+        name: c.name, cover: c.cover, status: c.status, companionDays: 1, todayInteractions: 0, intimacy: 50,
+        satiety: null, health: 100, buttons: c.buttons, enabled: c.enabled, voiceOn: on);
+    await pump(t, v(false));
+    expect(find.text('已静音'), findsOneWidget);
+    await t.tap(find.byKey(const Key('hud-voice')));
+    expect(got, [kHudVoiceToggle]);
+    await pump(t, v(true));
+    expect(find.text('声音开'), findsOneWidget);
+    expect(HudView.fromJson(v(true).toJson()).voiceOn, isTrue);
+    expect(HudView.fromJson(v(null).toJson()).voiceOn, isNull);
+    await pump(t);
+    expect(find.byKey(const Key('hud-voice')), findsNothing);
+  });
+
   testWidgets('no satiety (a character): 亲密度 and 健康度 only', (t) async {
     final c = character(['stand', 'act_coy']);
     await pump(

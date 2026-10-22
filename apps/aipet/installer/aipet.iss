@@ -72,3 +72,21 @@ Name: "{userdesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "立即启动 {#AppName}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+// 全新安装（不是覆盖升级）时在程序旁边放一个 first-run 标记：第一次启动只弹宠物库，
+// 宠物等用户在库里选好或关掉库才出现，哪怕 %APPDATA% 里留着上次的宠物。程序读到就删掉。
+var
+  WasInstalled: Boolean;
+
+function InitializeSetup(): Boolean;
+begin
+  WasInstalled := RegKeyExists(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{C8CB70F7-CA24-4B4C-84B8-B03A1360E83C}_is1');
+  Result := True;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if (CurStep = ssPostInstall) and not WasInstalled then
+    SaveStringToFile(ExpandConstant('{app}\first-run'), '', False);
+end;

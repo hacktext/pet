@@ -23,6 +23,7 @@ import '../../services/character_service.dart';
 import '../../services/device_identity.dart';
 import '../../services/custom_downloader.dart';
 import '../../services/file_download.dart';
+import '../../services/first_run.dart';
 import '../../services/hud_bridge.dart';
 import '../../services/matte_cache.dart';
 import '../../services/native_window.dart';
@@ -235,6 +236,10 @@ Future<void> runPetWindow() async {
     destroy: windowManager.destroy, // ends the process, sub-window engine included
   ).quit;
 
+  // A fresh install (installer's mark): the library first, the pet only once
+  // the user picks one there or closes it.
+  final holdForLibrary = ValueNotifier<bool>(Platform.isWindows && takeFirstRunMark(File(Platform.resolvedExecutable).parent));
+
   final closePolicy = ClosePolicy(
     state: () => controller.state,
     hasPet: () => controller.currentPet != null,
@@ -245,8 +250,17 @@ Future<void> runPetWindow() async {
   bridge = PetWindowBridge(
     WindowChannelTransport(),
     state: () => controller.state,
-    onAdopt: controller.adopt,
-    onMainWindowClosing: closePolicy.libraryClosing,
+    onAdopt: (id) async {
+      try {
+        await controller.adopt(id);
+      } finally {
+        holdForLibrary.value = false; // picked: on the desktop once it is ready
+      }
+    },
+    onMainWindowClosing: () {
+      holdForLibrary.value = false; // closed without picking: the pet it already had
+      return closePolicy.libraryClosing();
+    },
     onQuit: quit,
     account: account,
     onRefreshCustom: downloads.run,
@@ -266,6 +280,7 @@ Future<void> runPetWindow() async {
     sizes: sizes,
     initialSize: size,
     autostart: autostart,
+    holdForLibrary: holdForLibrary,
   ));
   // The panel engine, created once and kept hidden; without it the pet
   // window works as before (spec 2026-09-19 E 4). The two engines are
@@ -281,7 +296,7 @@ Future<void> runPetWindow() async {
   account.start();
   unawaited(paid.refresh()); // signed in: what the account owns now, without waiting for the sync
   unawaited(downloads.run()); // after boot: a pet installed now is scanned on top of boot's list
-  if (controller.currentPet == null) await launcher.open();
+  if (controller.currentPet == null || holdForLibrary.value) await launcher.open();
 }
 
 /// For device/hello, e.g. `Windows "Windows 11 Pro" 10.0 (Build 26200)` or
@@ -328,6 +343,7 @@ class PetWindowApp extends StatefulWidget {
     required this.sizes,
     required this.initialSize,
     required this.autostart,
+    required this.holdForLibrary,
   });
 
   final PetWindowController controller;
@@ -341,6 +357,10 @@ class PetWindowApp extends StatefulWidget {
   final PetSizeStore sizes;
   final PetSize initialSize;
   final Autostart autostart;
+
+  /// True on a fresh install's first launch until the user picks a pet in
+  /// the library or closes it: the pet stays off the desktop meanwhile.
+  final ValueListenable<bool> holdForLibrary;
 
   @override
   State<PetWindowApp> createState() => _PetWindowAppState();
@@ -378,6 +398,7 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
     trayManager.addListener(this);
     windowManager.addListener(this);
     widget.controller.addListener(_syncVisibility);
+    widget.holdForLibrary.addListener(_syncVisibility);
     // runApp() defers mounting this State to a later event-loop turn, but
     // controller.boot() runs synchronously up to its first notifyListeners()
     // -- for a fresh, no-pet run that call fires before this listener is
@@ -421,6 +442,7 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
   void dispose() {
     _clickThrough.stop();
     widget.controller.removeListener(_syncVisibility);
+    widget.holdForLibrary.removeListener(_syncVisibility);
     trayManager.removeListener(this);
     windowManager.removeListener(this);
     super.dispose();
@@ -445,7 +467,7 @@ class _PetWindowAppState extends State<PetWindowApp> with TrayListener, WindowLi
     final switched = _shownPetId != null && id != null && id != _shownPetId;
     _shownPetId = id ?? _shownPetId;
     if (_hidden && switched) return _setHidden(false);
-    final want = widget.controller.currentPet != null && !_hidden;
+    final want = widget.controller.currentPet != null && !_hidden && !widget.holdForLibrary.value;
     if (want == _visible) return;
     _visible = want;
     unawaited(want ? windowManager.show() : windowManager.hide());

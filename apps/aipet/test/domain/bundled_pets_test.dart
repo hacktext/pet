@@ -8,7 +8,8 @@ import 'package:flutter_test/flutter_test.dart';
 /// the build without a word, and the pet shows as 素材缺失.
 void main() {
   final root = Directory('assets/pets');
-  final pubspec = File('pubspec.yaml').readAsStringSync();
+  // git may check the file out with CRLF on Windows.
+  final pubspec = File('pubspec.yaml').readAsStringSync().replaceAll('\r\n', '\n');
   final folders = root.listSync().whereType<Directory>().toList()..sort((a, b) => a.path.compareTo(b.path));
   String name(FileSystemEntity e) => e.uri.pathSegments.where((s) => s.isNotEmpty).last;
 
