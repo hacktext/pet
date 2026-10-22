@@ -36,8 +36,21 @@ APP="$APP_DIR/build/macos/Build/Products/Release/aipet.app"
 ARCHS="$(lipo -archs "$APP/Contents/MacOS/aipet")"
 [ "$ARCHS" = "arm64" ] || { echo "expected an arm64-only binary, got: $ARCHS" >&2; exit 1; }
 
+# Apple's timestamp service drops the odd request, and --deep asks it once per
+# nested framework; one miss fails the whole signature. Uploads to the notary
+# service time out now and then too. So each of these gets a few tries.
+retry() {
+  local n
+  for n in 1 2 3 4 5; do
+    "$@" && return 0
+    echo "attempt $n failed; retrying in 10s" >&2
+    sleep 10
+  done
+  return 1
+}
+
 if [ -n "${AIPET_SIGN_IDENTITY:-}" ]; then
-  codesign --force --deep --options runtime --timestamp \
+  retry codesign --force --deep --options runtime --timestamp \
     --entitlements "$APP_DIR/macos/Runner/Release.entitlements" \
     --sign "$AIPET_SIGN_IDENTITY" "$APP"
 fi
@@ -48,9 +61,9 @@ codesign --verify --deep --strict "$APP"
 if [ -n "${AIPET_SIGN_IDENTITY:-}" ] && [ -n "${AIPET_NOTARY_PROFILE:-}" ]; then
   ZIP="$(mktemp -d)/aipet.zip"
   ditto -c -k --keepParent "$APP" "$ZIP"
-  xcrun notarytool submit "$ZIP" --keychain-profile "$AIPET_NOTARY_PROFILE" --wait
+  retry xcrun notarytool submit "$ZIP" --keychain-profile "$AIPET_NOTARY_PROFILE" --wait
   rm -f "$ZIP"
-  xcrun stapler staple "$APP"
+  retry xcrun stapler staple "$APP"
 fi
 
 # dmg: the app plus an Applications link to drag it onto.
@@ -63,10 +76,10 @@ rm -f "$DMG"
 hdiutil create -volname "桌遇" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
 
 if [ -n "${AIPET_SIGN_IDENTITY:-}" ]; then
-  codesign --sign "$AIPET_SIGN_IDENTITY" --timestamp "$DMG"
+  retry codesign --force --sign "$AIPET_SIGN_IDENTITY" --timestamp "$DMG"
   if [ -n "${AIPET_NOTARY_PROFILE:-}" ]; then
-    xcrun notarytool submit "$DMG" --keychain-profile "$AIPET_NOTARY_PROFILE" --wait
-    xcrun stapler staple "$DMG"
+    retry xcrun notarytool submit "$DMG" --keychain-profile "$AIPET_NOTARY_PROFILE" --wait
+    retry xcrun stapler staple "$DMG"
   fi
 fi
 
